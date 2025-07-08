@@ -23,7 +23,7 @@ async function setupDiscordSdk() {
 let canvas = null;
 let ctx = null;
 let lastTime = 0;
-let money = 1000;
+let money = 2500;
 let isGameOver = false;
 let isPaused = false;
 let gameSpeed = 1;
@@ -34,6 +34,8 @@ let plots = [];
 let pipeNetworks = [];
 let trucks = [];
 let temporaryEffects = [];
+let lastBoughtHighlightTimer = 0;
+let lastBoughtPlotId = null;
 
 // Konstanty hry
 const PLOT_COUNT = 8;
@@ -51,6 +53,7 @@ const PRICE_UPDATE_INTERVAL = 5000; // 5 sekund reálného času
 const SILO_CAPACITY_BONUS = 500;
 const DERRICK_BASE_CAPACITY = 50;
 const OIL_PER_SECOND = 5;
+const DEV = true;
 
 // Stav UI a ovládání
 let mousePos = { x: 0, y: 0 };
@@ -168,6 +171,9 @@ function initializeGame() {
     gameCanvasContainer.innerHTML = ''; // Vyčistí "Načítání..."
     gameCanvasContainer.appendChild(canvas);
 
+    // Ujisti se, že canvas vždy odkazuje na DOM element
+    canvas = document.getElementById('turmoil-game');
+
     ctx = canvas.getContext('2d');
 
     // Nastavení rozměrů a generování herních prvků
@@ -221,10 +227,20 @@ function generatePlotsAndPockets() {
         const y = groundLevel + 100 + Math.random() * (canvas.height - groundLevel - 200);
         const height = 40 + Math.random() * 80;
         const richness = 5000 + Math.random() * 10000;
+        let vertices = [];
+        // between 3 and 6 vertices
+        const numberOfVertices = 3 + Math.floor(Math.random() * 4);
+
+        for (let j = 0; j < numberOfVertices; j++) {
+            const angle = (j / numberOfVertices) * Math.PI * 2;
+            const offsetX = Math.cos(angle) * (pocketWidth / 2);
+            const offsetY = Math.sin(angle) * (height / 2);
+            vertices.push({ x: x + pocketWidth / 2 + offsetX, y: y + height / 2 + offsetY });
+        }
         oilPockets.push({
             x, y, width: pocketWidth, height, oil: richness, tapped: false,
             // Pro zjednodušení kolize použijeme obdélníkový hitbox
-            vertices: [{x, y}, {x: x+pocketWidth, y}, {x: x+pocketWidth, y: y+height}, {x, y: y+height}]
+            vertices: vertices
         });
     }
 }
@@ -383,7 +399,7 @@ function updateUI() {
     // Rychlost hry
     const speedBtn = document.getElementById('speed-btn');
     if (speedBtn) {
-       speedBtn.querySelector('img').style.filter = `hue-rotate(${gameSpeed > 1 ? '120deg' : '0deg'})`;
+       speedBtn.style.filter = `hue-rotate(${gameSpeed > 1 ? '120deg' : '0deg'})`;
     }
 }
 
@@ -429,6 +445,7 @@ function drawPlots(groundLevel) {
 
     updatePlotSignHitboxes(groundLevel);
     let hoveredAny = false;
+    let hoveredBuildable = false;
     plots.forEach(plot => {
         if (plot.owner === null) {
             const signWidth = 70, signHeight = 20, postHeight = 15;
@@ -450,17 +467,29 @@ function drawPlots(groundLevel) {
             ctx.textBaseline = 'middle';
             ctx.fillText(`$${plot.price}`, plot.x + plotWidth / 2, signY + signHeight / 2);
         } else if (plot.id === lastBoughtPlotId && lastBoughtHighlightTimer > 0) {
-            // Zvýraznění právě koupeného pozemku
+            // Zvýraznění právě koupeného pozemku - pouze žlutý pruh, NE vrt!
             ctx.save();
             ctx.strokeStyle = '#FFD700';
             ctx.lineWidth = 5;
             ctx.strokeRect(plot.x, groundLevel, plotWidth, 10);
             ctx.restore();
         }
+        // Nově: pokud je aktivní build mód vrtu a myš je nad vlastněným pozemkem bez vrtu
+        if (currentBuildMode === 'vrt' && plot.owner === 'player' && !plot.hasVrt) {
+            const px = plot.x;
+            const py = groundLevel;
+            if (mousePos.x >= px && mousePos.x <= px + plotWidth && mousePos.y >= 0 && mousePos.y <= py) {
+                hoveredBuildable = true;
+            }
+        }
     });
-    // Nastav kurzor podle toho, jestli je myš nad tabulkou
+    // Nastav kurzor podle toho, jestli je myš nad tabulkou nebo nad stavitelným pozemkem
     if (canvas) {
-        canvas.style.cursor = hoveredAny ? 'pointer' : 'default';
+        if (hoveredAny || hoveredBuildable) {
+            canvas.style.cursor = 'pointer';
+        } else {
+            canvas.style.cursor = 'default';
+        }
     }
 }
 
@@ -468,15 +497,42 @@ function drawOilPockets(groundLevel) {
     oilPockets.forEach(pocket => {
         // Zobrazit obrys jen pokud je aktivní scanner
         if (scannerEffect.active) {
+            ctx.beginPath();
             ctx.strokeStyle = `rgba(0, 255, 0, ${scannerEffect.duration / scannerEffect.totalDuration})`;
             ctx.lineWidth = 2;
-            ctx.strokeRect(pocket.x, pocket.y, pocket.width, pocket.height);
+
+            for (let i = 1; i < pocket.vertices.length; i++) {
+                // draw line between current and previous vertex
+                ctx.moveTo(pocket.vertices[i - 1].x, pocket.vertices[i - 1].y);
+                ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
+                ctx.stroke();
+            }
+
+            // Draw line from last vertex to first
+            ctx.moveTo(pocket.vertices[pocket.vertices.length - 1].x, pocket.vertices[pocket.vertices.length - 1].y);
+            ctx.lineTo(pocket.vertices[0].x, pocket.vertices[0].y);
+            ctx.stroke();
+
+
+
+
+            // ctx.strokeRect(pocket.x, pocket.y, pocket.width, pocket.height);
         }
         
         // Zobrazit plné ložisko jen pokud bylo zasaženo
-        if (pocket.tapped) {
+        if (DEV || pocket.tapped) {
+            ctx.beginPath();
             ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-            ctx.fillRect(pocket.x, pocket.y, pocket.width, pocket.height);
+            ctx.moveTo(pocket.vertices[0].x, pocket.vertices[0].y);
+
+            for (let i = 1; i < pocket.vertices.length; i++) {
+                // draw line between current and previous vertex
+                ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
+            }
+            ctx.lineTo(pocket.vertices[0].x, pocket.vertices[0].y); // Close the path
+
+            ctx.fill();
+            ctx.closePath();
         }
     });
 }
@@ -978,8 +1034,12 @@ function addEventListeners() {
     });
 }
 
+// Přidám proměnnou pro blokaci rychlého dvojkliku
+let isBuyingPlot = false;
+
 function handleCanvasClick(event) {
     if (isGameOver) return;
+    if (isBuyingPlot) return;
     const clickPos = { x: mousePos.x, y: mousePos.y };
     const groundLevel = Math.floor(canvas.height / 3);
     
@@ -1007,9 +1067,12 @@ function handleCanvasClick(event) {
                 lastBoughtPlotId = plot.id;
                 lastBoughtHighlightTimer = 30; // Počet snímků zvýraznění
                 updatePlotSignHitboxes(groundLevel); // Okamžitě aktualizuj hitboxy
-                currentBuildMode = 'vrt'; // Aktivuj build mode pro vrt
-                selectedBuildPlotId = plot.id; // Povolit stavbu vrtu jen na tomto pozemku
                 draw(); // Okamžitě překresli po koupi
+                updateUI(); // Nově: okamžitě aktualizuj peníze v UI
+                return;
+            } else if (plot && !plot.owner && money < plot.price) {
+                plotBlinkTimers[plot.id] = 15; // 15 snímků blikání
+                draw();
                 return;
             }
         }
@@ -1018,12 +1081,7 @@ function handleCanvasClick(event) {
     // Interakce se světem
     const clickedPlot = getPlotAtX(clickPos.x);
     if (currentBuildMode) {
-        // Povolit stavbu vrtu jen na právě koupeném pozemku
-        if (currentBuildMode === 'vrt' && clickedPlot && clickedPlot.id === selectedBuildPlotId) {
-            handleBuildModeClick(clickPos, clickedPlot, groundLevel);
-            selectedBuildPlotId = null; // Po stavbě zrušit omezení
-        }
-        // Jinak ignorovat kliknutí
+        handleBuildModeClick(clickPos, clickedPlot, groundLevel);
     } else if (selectedDerrickPlotId !== null) {
         handlePipePlacementClick(clickPos, groundLevel);
     } else {
