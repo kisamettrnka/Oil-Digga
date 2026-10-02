@@ -1104,8 +1104,17 @@ function drawCompanyBuildings(groundLevel) {
 
     // Popisek: číslo mezi šipkami je počet aut přidělených firmě (nejdřív plní tyto sloty)
     ctx.font = '11px sans-serif';
-    ctx.fillText('přiděleno', companyControls.leftUp.x + arrowSize / 2, companyControls.leftUp.y - 6);
-    ctx.fillText('přiděleno', companyControls.rightUp.x + arrowSize / 2, companyControls.rightUp.y - 6);
+    const hoveredCompany = getCompanyZoneAt(mousePos);
+    ctx.fillText(hoveredCompany === 'left' ? 'kolečko ±' : 'přiděleno', companyControls.leftUp.x + arrowSize / 2, companyControls.leftUp.y - 6);
+    ctx.fillText(hoveredCompany === 'right' ? 'kolečko ±' : 'přiděleno', companyControls.rightUp.x + arrowSize / 2, companyControls.rightUp.y - 6);
+
+    // Zvýraznění budovy, nad kterou kolečko funguje
+    if (hoveredCompany) {
+        ctx.strokeStyle = '#FFD700';
+        ctx.lineWidth = 3;
+        const bx = hoveredCompany === 'left' ? 0 : rightBaseX;
+        ctx.strokeRect(bx + 1.5, groundLevel - bHeight + 1.5, bWidth - 3, bHeight - 3);
+    }
 }
 
 // Malý čárový graf cen. Osa Y se přizpůsobí, minimální rozsah 0,30 $, ať drobné změny nevypadají dramaticky.
@@ -1408,7 +1417,7 @@ function drawSoundButton() {
 }
 
 function drawEffectsAndPreviews(groundLevel) {
-    let newCursor = plotsHoverPointer ? 'pointer' : 'default';
+    let newCursor = plotsHoverPointer ? 'pointer' : (getCompanyZoneAt(mousePos) ? 'ns-resize' : 'default');
 
     // Náhled stavby
     if (currentBuildMode === 'vrt') {
@@ -1916,6 +1925,59 @@ function addEventListeners() {
     window.addEventListener('keydown', (event) => {
         if (event.key === 'm' || event.key === 'M') toggleSound();
     });
+
+    // Kolečko myši nad firmou přidává (nahoru) a ubírá (dolů) přidělená auta
+    canvas.addEventListener('wheel', handleCompanyWheel, { passive: false });
+}
+
+const WHEEL_THRESHOLD = 90;    // jedno cvaknutí kolečka (~100) = jedno auto; trackpad se sčítá
+const WHEEL_COOLDOWN_MS = 110; // setrvačnost trackpadu nesmí přidělit půlku flotily naráz
+let wheelAccumulator = 0;
+let lastWheelStep = 0;
+
+function handleCompanyWheel(event) {
+    const pos = getCanvasPosition(event);
+    const company = pos.inBounds ? getCompanyZoneAt(pos) : null;
+    if (!company) {
+        wheelAccumulator = 0;
+        return;
+    }
+    event.preventDefault(); // stránka se nesmí hýbat
+    if (isGameOver) return;
+
+    const unit = event.deltaMode === 1 ? 33 : (event.deltaMode === 2 ? 100 : 1); // řádky/stránky na pixely
+    const delta = event.deltaY * unit;
+    if (delta === 0) return;
+
+    // Cvaknutí kolečka myši (velká delta) = vždy jedno auto, i při rychlém protočení.
+    // Drobné delty trackpadu se sčítají a mají cooldown, ať setrvačnost nepřidělí půlku flotily.
+    if (Math.abs(delta) >= WHEEL_THRESHOLD) {
+        wheelAccumulator = 0;
+        // Jedna událost může nést víc cvaknutí (zrychlené kolečko): ~100 na cvaknutí
+        const notches = Math.max(1, Math.round(Math.abs(delta) / 100));
+        for (let i = 0; i < notches; i++) assignTruck(company, delta < 0 ? 1 : -1); // nahoru = přidat auto
+        return;
+    }
+
+    wheelAccumulator = Math.max(-WHEEL_THRESHOLD * 2, Math.min(WHEEL_THRESHOLD * 2, wheelAccumulator + delta));
+    const now = performance.now();
+    if (Math.abs(wheelAccumulator) >= WHEEL_THRESHOLD && now - lastWheelStep >= WHEEL_COOLDOWN_MS) {
+        assignTruck(company, wheelAccumulator < 0 ? 1 : -1);
+        wheelAccumulator = 0;
+        lastWheelStep = now;
+    }
+}
+
+// Zóna firmy pro kolečko: budova a sloupec se šipkami nad ní (od horní lišty po zem)
+const COMPANY_ZONE_WIDTH = 100;
+const COMPANY_ZONE_TOP = 30;
+
+function getCompanyZoneAt(point) {
+    const groundLevel = Math.floor(canvas.height / 3);
+    if (point.y < COMPANY_ZONE_TOP || point.y > groundLevel) return null;
+    if (point.x <= COMPANY_ZONE_WIDTH) return 'left';
+    if (point.x >= canvas.width - COMPANY_ZONE_WIDTH) return 'right';
+    return null;
 }
 
 function getRestartButtonRect() {
