@@ -24,7 +24,8 @@ async function setupDiscordSdk() {
 let canvas = null;
 let ctx = null;
 let lastTime = 0;
-let money = 3000;
+const START_MONEY = 3000;
+let money = START_MONEY;
 let isGameOver = false;
 let gameOverReason = '';
 let isPaused = false;
@@ -60,6 +61,10 @@ const MAX_SILOS_PER_PLOT = 4;
 const DAILY_LAND_TAX = 15;
 const MIN_LOAD_AMOUNT = 25;
 const MAX_TRUCKS = 8;
+const MAX_FRAME_MS = 100; // Strop reálného času jednoho snímku (po návratu na kartu apod.)
+const CONTROL_HIT_PAD = 8; // Zvětšení klikací plochy šipek na plátně
+const DOWSER_MEDIUM_OIL = 8500;
+const DOWSER_LARGE_OIL = 11500;
 const DEV = false;
 
 // Stav UI a ovládání
@@ -193,11 +198,10 @@ function initializeGame() {
     // Připojení posluchačů událostí
     addEventListeners();
 
-    // Herní smyčka se nespouští hned, čeká se na koupi pozemku
-    // lastTime = performance.now();
-    // gameLoop(lastTime);
+    // Kreslicí smyčka běží hned (hover, kurzor, blikání), herní čas teče až po koupi pozemku
+    lastTime = performance.now();
+    requestAnimationFrame(gameLoop);
     console.log("Hra čeká na koupi pozemku.");
-    document.fonts.load(PLOT_SIGN_FONT).finally(() => draw());
 }
 
 function startGameLoop() {
@@ -205,8 +209,51 @@ function startGameLoop() {
         isGameStarted = true;
         lastTime = performance.now();
         updateUI(); // Aktualizace kalendáře a UI hned po startu hry
-        gameLoop(lastTime);
     }
+}
+
+// Vrátí všechen herní stav do výchozího a vygeneruje nový svět
+function restartGame() {
+    money = START_MONEY;
+    isGameOver = false;
+    gameOverReason = '';
+    isPaused = false;
+    gameSpeed = 1;
+    totalRevenue = 0;
+    totalOilSold = 0;
+
+    pipeNetworks = [];
+    trucks = [];
+    temporaryEffects = [];
+    lastBoughtHighlightTimer = 0;
+    lastBoughtPlotId = null;
+
+    currentBuildMode = null;
+    selectedDerrickPlotId = null;
+
+    leftIncPrice = 1.00;
+    rightIncPrice = 1.00;
+    leftPriceTrend = 0;
+    rightPriceTrend = 0;
+    trucksOwned = 0;
+    plotBlinkTimers = {};
+    trucksAssignedLeft = 0;
+    trucksAssignedRight = 0;
+    priceUpdateTimer = 0;
+    nextNetworkId = 0;
+
+    day = 1;
+    month = 1;
+    dayTimer = 0;
+
+    moleState = { active: false, startPoint: null };
+    scannerEffect.active = false;
+    scannerEffect.duration = 0;
+
+    isGameStarted = false;
+    generatePlotsAndPockets();
+    lastTime = performance.now();
+    updateUI();
 }
 
 function generatePlotsAndPockets() {
@@ -252,7 +299,8 @@ function generatePlotsAndPockets() {
             x, y, width: pocketWidth, height,
             oil: richness,
             maxOil: richness,
-            tapped: false,
+            tapped: false,   // napojeno vrtem (jedno ložisko = jeden vrt)
+            revealed: false, // odhaleno krtkem, stále vrtatelné
             vertices: vertices
         });
     }
@@ -262,15 +310,15 @@ function generatePlotsAndPockets() {
 // --- Herní smyčka a kreslení ---
 
 function gameLoop(timestamp) {
-    if (!isGameStarted) return;
     if (isGameOver) {
         drawGameOver();
         requestAnimationFrame(gameLoop);
         return;
     }
 
-    if (!isPaused) {
-        const dt = (timestamp - lastTime) * gameSpeed;
+    if (isGameStarted && !isPaused) {
+        // Strop snímku: po návratu na kartu nebo při lagu nesmí přijít obří dt
+        const dt = Math.min(timestamp - lastTime, MAX_FRAME_MS) * gameSpeed;
         lastTime = timestamp;
         if (dt > 0) update(dt);
     } else {
@@ -298,11 +346,16 @@ function update(dt) {
             }
         }
         if (day > daysInMonth[month]) {
-            day = 1;
-            month++;
-            if (month > 12) {
-                isGameOver = true;
-                gameOverReason = 'year_end';
+            if (month === 12) {
+                // Konec roku: kalendář zůstane na posledním dni, nikdy nejde na měsíc 13
+                day = daysInMonth[month];
+                if (!isGameOver) {
+                    isGameOver = true;
+                    gameOverReason = 'year_end';
+                }
+            } else {
+                day = 1;
+                month++;
             }
         }
     }
@@ -348,11 +401,6 @@ function update(dt) {
         scannerEffect.duration -= dt;
         if (scannerEffect.duration <= 0) scannerEffect.active = false;
     }
-
-    Object.keys(plotBlinkTimers).forEach(key => {
-        plotBlinkTimers[key]--;
-        if (plotBlinkTimers[key] <= 0) delete plotBlinkTimers[key];
-    });
 }
 
 function draw() {
@@ -397,7 +445,11 @@ function draw() {
     // Pauza overlay
     if (isPaused) drawPauseScreen();
 
-    // V draw na konci dekrementuji timer zvýraznění
+    // Snímkové časovače (blikání cedule, zvýraznění koupě) tikají v draw, takže fungují i před startem hry
+    Object.keys(plotBlinkTimers).forEach(key => {
+        plotBlinkTimers[key]--;
+        if (plotBlinkTimers[key] <= 0) delete plotBlinkTimers[key];
+    });
     if (lastBoughtHighlightTimer > 0) {
         lastBoughtHighlightTimer--;
         if (lastBoughtHighlightTimer === 0) lastBoughtPlotId = null;
@@ -468,6 +520,7 @@ function drawSkyAndGround(groundLevel) {
 
 // Přidám globální pole pro hitboxy cedulí
 let plotSignHitboxes = [];
+let plotsHoverPointer = false; // myš je nad cedulí nebo stavitelným pozemkem
 
 const PLOT_SIGN_PAD = 10;
 const PLOT_SIGN_FONT = 'bold 18px "Rye", Georgia, serif';
@@ -711,14 +764,8 @@ function drawPlots(groundLevel) {
             }
         }
     });
-    // Nastav kurzor podle toho, jestli je myš nad tabulkou nebo nad stavitelným pozemkem
-    if (canvas) {
-        if (hoveredAny || hoveredBuildable) {
-            canvas.style.cursor = 'pointer';
-        } else {
-            canvas.style.cursor = 'default';
-        }
-    }
+    // Kurzor nastaví až drawEffectsAndPreviews (jinak by ho přepsal)
+    plotsHoverPointer = hoveredAny || hoveredBuildable;
 }
 
 function drawOilPockets(groundLevel) {
@@ -726,31 +773,22 @@ function drawOilPockets(groundLevel) {
         // Zobrazit obrys jen pokud je aktivní scanner
         if (scannerEffect.active) {
             const alpha = scannerEffect.duration / scannerEffect.totalDuration;
-            ctx.beginPath();
-            ctx.strokeStyle = `rgba(0, 255, 0, ${alpha})`;
-            ctx.lineWidth = 2;
-
-            for (let i = 1; i < pocket.vertices.length; i++) {
-                ctx.moveTo(pocket.vertices[i - 1].x, pocket.vertices[i - 1].y);
-                ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
-                ctx.stroke();
-            }
-            ctx.moveTo(pocket.vertices[pocket.vertices.length - 1].x, pocket.vertices[pocket.vertices.length - 1].y);
-            ctx.lineTo(pocket.vertices[0].x, pocket.vertices[0].y);
-            ctx.stroke();
-
             const fillRatio = pocket.maxOil > 0 ? pocket.oil / pocket.maxOil : 0;
-            ctx.fillStyle = `rgba(0, 180, 0, ${alpha * 0.25 * fillRatio})`;
+            ctx.beginPath();
             ctx.moveTo(pocket.vertices[0].x, pocket.vertices[0].y);
             for (let i = 1; i < pocket.vertices.length; i++) {
                 ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
             }
             ctx.closePath();
+            ctx.fillStyle = `rgba(0, 180, 0, ${alpha * 0.25 * fillRatio})`;
             ctx.fill();
+            ctx.strokeStyle = `rgba(0, 255, 0, ${alpha})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
         }
 
-        // Zobrazit plné ložisko jen pokud bylo zasaženo
-        if (DEV || pocket.tapped) {
+        // Zobrazit plné ložisko jen pokud bylo zasaženo vrtem nebo odhaleno krtkem
+        if (DEV || pocket.tapped || pocket.revealed) {
             ctx.beginPath();
             const fillRatio = pocket.maxOil > 0 ? pocket.oil / pocket.maxOil : 0;
             ctx.fillStyle = `rgba(0, 0, 0, ${0.5 + fillRatio * 0.4})`;
@@ -860,7 +898,7 @@ function drawCompanyBuildings(groundLevel) {
     ctx.fillStyle = '#A9C7D9';
     ctx.fillRect(0, leftBaseY, bWidth, bHeight);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.font = 'bold 20px sans-serif';
+    ctx.font = 'bold 16px sans-serif'; // "RIGHT INC" se ve 100 px široké budově při 20 px nevejde
     ctx.textAlign = 'center';
     ctx.fillText('LEFT INC', bWidth / 2, leftBaseY + 20);
 
@@ -956,7 +994,7 @@ function drawTrucks() {
 }
 
 function drawEffectsAndPreviews(groundLevel) {
-    let newCursor = 'default';
+    let newCursor = plotsHoverPointer ? 'pointer' : 'default';
 
     // Náhled stavby
     if (currentBuildMode === 'vrt') {
@@ -1088,6 +1126,21 @@ function drawGameOver() {
     ctx.font = '24px sans-serif';
     ctx.fillStyle = '#ccc';
     ctx.fillText(`Pozemky: ${ownedPlots}  |  Vrty: ${activeRigs}  |  Kamiony: ${trucksOwned}`, canvas.width / 2, canvas.height / 2 + 110);
+
+    // Tlačítko restartu
+    const btn = getRestartButtonRect();
+    const hovered = isPointInRect(mousePos, btn);
+    ctx.fillStyle = hovered ? '#FFD700' : '#E6B422';
+    ctx.fillRect(btn.x, btn.y, btn.width, btn.height);
+    ctx.strokeStyle = '#3D2B1F';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(btn.x, btn.y, btn.width, btn.height);
+    ctx.fillStyle = '#3D2B1F';
+    ctx.font = 'bold 32px sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('HRÁT ZNOVU', btn.x + btn.width / 2, btn.y + btn.height / 2 + 2);
+    ctx.textBaseline = 'alphabetic';
+    canvas.style.cursor = hovered ? 'pointer' : 'default';
 }
 
 
@@ -1143,18 +1196,35 @@ function getTruckHomeNetwork(truck) {
     return pipeNetworks.find(n => n.id === truck.homeNetworkId) || null;
 }
 
+// Firma pro kamion: nejdřív naplní přiřazené sloty (šipky), zbytek jede k lepší ceně.
+// Počítá ostatní kamiony, takže volba je platná i pro kamion, který už nějakou firmu měl.
+function chooseCompanyFor(truck) {
+    const others = trucks.filter(t => t !== truck && t.state !== 'idle');
+    const activeLeft = others.filter(t => t.targetCompany === 'left').length;
+    const activeRight = others.filter(t => t.targetCompany === 'right').length;
+    return pickCompanyForTruck(activeLeft, activeRight);
+}
+
 function dispatchIdleTruck(truck) {
     const network = findNetworkForNewTruck();
     if (!network) return false;
 
-    const activeLeft = trucks.filter(t => t.targetCompany === 'left' && t.state !== 'idle').length;
-    const activeRight = trucks.filter(t => t.targetCompany === 'right' && t.state !== 'idle').length;
-
     truck.homeNetworkId = network.id;
-    truck.targetCompany = pickCompanyForTruck(activeLeft, activeRight);
+    truck.targetCompany = chooseCompanyFor(truck);
     truck.state = 'to_rig';
     truck.x = truck.targetCompany === 'left' ? -50 : canvas.width + 50;
     return true;
+}
+
+// Posune kamion k cíli o nejvýš `step` pixelů. Vrací true, když dorazil (bez přeskoku cíle).
+function moveTruckToward(truck, targetX, step) {
+    const distance = targetX - truck.x;
+    if (Math.abs(distance) <= step) {
+        truck.x = targetX;
+        return true;
+    }
+    truck.x += Math.sign(distance) * step;
+    return false;
 }
 
 function updateTrucks(dt) {
@@ -1176,6 +1246,7 @@ function updateTrucks(dt) {
                 }
                 truck.x = getNetworkPickupX(network);
                 if (tryLoadTruckAtRig(truck, network)) {
+                    truck.targetCompany = chooseCompanyFor(truck);
                     truck.state = 'to_company';
                 }
                 break;
@@ -1188,22 +1259,19 @@ function updateTrucks(dt) {
                 }
                 const targetX = getNetworkPickupX(network);
 
-                if (Math.abs(truck.x - targetX) < 5) {
-                    truck.x = targetX;
+                if (moveTruckToward(truck, targetX, speed)) {
                     if (tryLoadTruckAtRig(truck, network)) {
+                        truck.targetCompany = chooseCompanyFor(truck);
                         truck.state = 'to_company';
                     } else {
                         truck.state = 'waiting_at_rig';
                     }
-                } else {
-                    truck.x += Math.sign(targetX - truck.x) * speed;
                 }
                 break;
             }
             case 'to_company': {
                 const targetX = truck.targetCompany === 'left' ? 50 : canvas.width - 50;
-                if (Math.abs(truck.x - targetX) < 5) {
-                    truck.x = targetX;
+                if (moveTruckToward(truck, targetX, speed)) {
                     const price = truck.targetCompany === 'left' ? leftIncPrice : rightIncPrice;
                     const sale = truck.oil * price;
                     money += sale;
@@ -1211,8 +1279,6 @@ function updateTrucks(dt) {
                     totalOilSold += truck.oil;
                     truck.oil = 0;
                     truck.state = 'to_rig';
-                } else {
-                    truck.x += Math.sign(targetX - truck.x) * speed;
                 }
                 break;
             }
@@ -1220,17 +1286,25 @@ function updateTrucks(dt) {
     });
 }
 
-function isLineIntersectingRect(p1, p2, rect) {
-    // Kontrola, zda je některý z koncových bodů uvnitř obdélníku
-    if ((p1.x > rect.x && p1.x < rect.x + rect.width && p1.y > rect.y && p1.y < rect.y + rect.height) ||
-        (p2.x > rect.x && p2.x < rect.x + rect.width && p2.y > rect.y && p2.y < rect.y + rect.height)) {
-        return true;
+function isPointInPolygon(point, vertices) {
+    let inside = false;
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+        const a = vertices[i], b = vertices[j];
+        if ((a.y > point.y) !== (b.y > point.y) &&
+            point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) {
+            inside = !inside;
+        }
     }
-    // Kontrola průsečíků se všemi čtyřmi stranami obdélníku
-    return lineIntersectsLine(p1, p2, { x: rect.x, y: rect.y }, { x: rect.x + rect.width, y: rect.y }) ||
-        lineIntersectsLine(p1, p2, { x: rect.x + rect.width, y: rect.y }, { x: rect.x + rect.width, y: rect.y + rect.height }) ||
-        lineIntersectsLine(p1, p2, { x: rect.x + rect.width, y: rect.y + rect.height }, { x: rect.x, y: rect.y + rect.height }) ||
-        lineIntersectsLine(p1, p2, { x: rect.x, y: rect.y + rect.height }, { x: rect.x, y: rect.y });
+    return inside;
+}
+
+// Úsečka p1-p2 zasahuje polygon, když některý konec leží uvnitř nebo protíná jeho hranu
+function isSegmentIntersectingPolygon(p1, p2, vertices) {
+    if (isPointInPolygon(p1, vertices) || isPointInPolygon(p2, vertices)) return true;
+    for (let i = 0; i < vertices.length; i++) {
+        if (lineIntersectsLine(p1, p2, vertices[i], vertices[(i + 1) % vertices.length])) return true;
+    }
+    return false;
 }
 
 function lineIntersectsLine(l1p1, l1p2, l2p1, l2p2) {
@@ -1240,7 +1314,8 @@ function lineIntersectsLine(l1p1, l1p2, l2p1, l2p2) {
     let r = q / d;
     q = (l1p1.y - l2p1.y) * (l1p2.x - l1p1.x) - (l1p1.x - l2p1.x) * (l1p2.y - l1p1.y);
     let s = q / d;
-    return r > 0 && r < 1 && s > 0 && s < 1;
+    // Včetně krajů: trubka procházející přesně vrcholem polygonu (např. kosočtverec) se počítá jako zásah
+    return r >= 0 && r <= 1 && s >= 0 && s <= 1;
 }
 
 function assignTruck(company, change) {
@@ -1357,10 +1432,28 @@ function addEventListeners() {
     });
 }
 
-function handleCanvasClick(event) {
-    if (isGameOver) return;
+function getRestartButtonRect() {
+    return { x: canvas.width / 2 - 140, y: canvas.height / 2 + 150, width: 280, height: 64 };
+}
 
+// Klikací plocha ovládacích prvků je o CONTROL_HIT_PAD větší než jejich kresba
+function isPointNearRect(point, rect, pad = CONTROL_HIT_PAD) {
+    return isPointInRect(point, {
+        x: rect.x - pad,
+        y: rect.y - pad,
+        width: rect.width + pad * 2,
+        height: rect.height + pad * 2
+    });
+}
+
+function handleCanvasClick(event) {
     const clickPos = getCanvasPosition(event);
+
+    if (isGameOver) {
+        if (clickPos.inBounds && isPointInRect(clickPos, getRestartButtonRect())) restartGame();
+        return;
+    }
+
     if (!clickPos.inBounds) return;
     mousePos.x = clickPos.x;
     mousePos.y = clickPos.y;
@@ -1368,10 +1461,10 @@ function handleCanvasClick(event) {
 
     updatePlotSignHitboxes(groundLevel);
 
-    if (isPointInRect(clickPos, companyControls.leftUp)) { assignTruck('left', 1); return; }
-    if (isPointInRect(clickPos, companyControls.leftDown)) { assignTruck('left', -1); return; }
-    if (isPointInRect(clickPos, companyControls.rightUp)) { assignTruck('right', 1); return; }
-    if (isPointInRect(clickPos, companyControls.rightDown)) { assignTruck('right', -1); return; }
+    if (isPointNearRect(clickPos, companyControls.leftUp)) { assignTruck('left', 1); return; }
+    if (isPointNearRect(clickPos, companyControls.leftDown)) { assignTruck('left', -1); return; }
+    if (isPointNearRect(clickPos, companyControls.rightUp)) { assignTruck('right', 1); return; }
+    if (isPointNearRect(clickPos, companyControls.rightDown)) { assignTruck('right', -1); return; }
 
     // Nákup pozemku — cedule i celý sloupec nad zemí (mimo aktivní režim krtka)
     if (currentBuildMode !== 'mole') {
@@ -1512,7 +1605,8 @@ function showDowserHint(plot) {
         direction = -1;
     }
 
-    const richness = bestPocket.maxOil > 8000 ? 'velké' : (bestPocket.maxOil > 5000 ? 'střední' : 'malé');
+    // maxOil je 5000–15000, prahy dělí rozsah zhruba na třetiny
+    const richness = bestPocket.maxOil > DOWSER_LARGE_OIL ? 'velké' : (bestPocket.maxOil > DOWSER_MEDIUM_OIL ? 'střední' : 'malé');
     temporaryEffects.push({
         type: 'dowser',
         x: plotCenterX,
@@ -1550,7 +1644,7 @@ function handleMoleClick(x, y) {
 
         oilPockets.forEach(pocket => {
             if (checkPipeCollision({ start, end }, pocket)) {
-                pocket.tapped = true;
+                pocket.revealed = true; // jen odhalí, ložisko zůstává vrtatelné
             }
         });
 
@@ -1563,11 +1657,8 @@ function checkPipeCollision(pipeSegment, specificPocket) {
     for (const pocket of pocketsToCheck) {
         if (pocket.tapped && !specificPocket) continue;
 
-        const start = pipeSegment.start;
-        const end = pipeSegment.end;
-        const pocketRect = { x: pocket.x, y: pocket.y, width: pocket.width, height: pocket.height };
-
-        if (isLineIntersectingRect(start, end, pocketRect)) {
+        // Kolize proti skutečnému polygonu, ne proti obdélníku kolem něj
+        if (isSegmentIntersectingPolygon(pipeSegment.start, pipeSegment.end, pocket.vertices)) {
             return pocket;
         }
     }
