@@ -23,10 +23,13 @@ async function setupDiscordSdk() {
 let canvas = null;
 let ctx = null;
 let lastTime = 0;
-let money = 2500;
+let money = 3000;
 let isGameOver = false;
+let gameOverReason = '';
 let isPaused = false;
 let gameSpeed = 1;
+let totalRevenue = 0;
+let totalOilSold = 0;
 
 // Herní svět
 let oilPockets = [];
@@ -39,7 +42,6 @@ let lastBoughtPlotId = null;
 
 // Konstanty hry
 const PLOT_COUNT = 8;
-const PLOT_COST = 2000;
 const VRT_COST = 350;
 const SILO_COST = 250;
 const TRUCK_COST = 150;
@@ -47,13 +49,17 @@ const DOWSER_COST = 100;
 const SCANNER_COST = 500;
 const MOLE_COST = 300;
 const PIPE_COST_PER_PIXEL = 2;
-const TRUCK_SPEED = 150; // Pixely za sekundu
+const TRUCK_SPEED = 150;
 const TRUCK_CAPACITY = 100;
-const PRICE_UPDATE_INTERVAL = 5000; // 5 sekund reálného času
+const PRICE_UPDATE_INTERVAL = 5000;
 const SILO_CAPACITY_BONUS = 500;
 const DERRICK_BASE_CAPACITY = 50;
-const OIL_PER_SECOND = 5;
-const DEV = true;
+const OIL_PER_SECOND = 8;
+const MAX_SILOS_PER_PLOT = 4;
+const DAILY_LAND_TAX = 15;
+const MIN_LOAD_AMOUNT = 25;
+const MAX_TRUCKS = 8;
+const DEV = false;
 
 // Stav UI a ovládání
 let mousePos = { x: 0, y: 0 };
@@ -64,10 +70,14 @@ let plotWidth;
 // Ceny a kamiony
 let leftIncPrice = 1.00;
 let rightIncPrice = 1.00;
+let leftPriceTrend = 0;
+let rightPriceTrend = 0;
 let trucksOwned = 0;
+let plotBlinkTimers = {};
 let trucksAssignedLeft = 0;
 let trucksAssignedRight = 0;
 let priceUpdateTimer = 0;
+let nextNetworkId = 0;
 
 // Hitboxy pro ovládací prvky na plátně
 let companyControls = {
@@ -186,7 +196,7 @@ function initializeGame() {
     // lastTime = performance.now();
     // gameLoop(lastTime);
     console.log("Hra čeká na koupi pozemku.");
-    draw(); // Hned vykresli pole a tabulky
+    document.fonts.load(PLOT_SIGN_FONT).finally(() => draw());
 }
 
 function startGameLoop() {
@@ -238,8 +248,10 @@ function generatePlotsAndPockets() {
             vertices.push({ x: x + pocketWidth / 2 + offsetX, y: y + height / 2 + offsetY });
         }
         oilPockets.push({
-            x, y, width: pocketWidth, height, oil: richness, tapped: false,
-            // Pro zjednodušení kolize použijeme obdélníkový hitbox
+            x, y, width: pocketWidth, height,
+            oil: richness,
+            maxOil: richness,
+            tapped: false,
             vertices: vertices
         });
     }
@@ -249,66 +261,97 @@ function generatePlotsAndPockets() {
 // --- Herní smyčka a kreslení ---
 
 function gameLoop(timestamp) {
-    if (!isGameStarted) return; // Pokud hra neběží, nic nedělej
+    if (!isGameStarted) return;
     if (isGameOver) {
         drawGameOver();
+        requestAnimationFrame(gameLoop);
         return;
     }
-    const dt = (timestamp - lastTime) * gameSpeed;
-    lastTime = timestamp;
-    update(dt);
+
+    if (!isPaused) {
+        const dt = (timestamp - lastTime) * gameSpeed;
+        lastTime = timestamp;
+        if (dt > 0) update(dt);
+    } else {
+        lastTime = timestamp;
+    }
+
     draw();
     requestAnimationFrame(gameLoop);
 }
 
 function update(dt) {
-    if (!isGameStarted) return;
-    if (dt <= 0) return;
+    if (!isGameStarted || dt <= 0) return;
+
     // Herní čas
     dayTimer += dt;
     if (dayTimer >= MS_PER_DAY) {
         dayTimer -= MS_PER_DAY;
         day++;
+        const ownedPlots = plots.filter(p => p.owner === 'player').length;
+        if (ownedPlots > 0) {
+            money -= ownedPlots * DAILY_LAND_TAX;
+            if (money < 0) {
+                isGameOver = true;
+                gameOverReason = 'bankrupt';
+            }
+        }
         if (day > daysInMonth[month]) {
             day = 1;
             month++;
             if (month > 12) {
-                isGameOver = true; // Konec hry po roce
+                isGameOver = true;
+                gameOverReason = 'year_end';
             }
         }
     }
 
-    // Aktualizace cen
+    // Aktualizace cen s trendem
     priceUpdateTimer += dt;
     if (priceUpdateTimer > PRICE_UPDATE_INTERVAL) {
         priceUpdateTimer = 0;
-        leftIncPrice = Math.max(0.20, Math.min(2.50, leftIncPrice + (Math.random() - 0.48) * 0.15));
-        rightIncPrice = Math.max(0.20, Math.min(2.50, rightIncPrice + (Math.random() - 0.48) * 0.15));
+        const leftDelta = (Math.random() - 0.45 + leftPriceTrend * 0.15) * 0.12;
+        const rightDelta = (Math.random() - 0.45 + rightPriceTrend * 0.15) * 0.12;
+        leftIncPrice = Math.max(0.25, Math.min(2.80, leftIncPrice + leftDelta));
+        rightIncPrice = Math.max(0.25, Math.min(2.80, rightIncPrice + rightDelta));
+        leftPriceTrend = Math.max(-1, Math.min(1, leftPriceTrend + (Math.random() - 0.5) * 0.4));
+        rightPriceTrend = Math.max(-1, Math.min(1, rightPriceTrend + (Math.random() - 0.5) * 0.4));
     }
-    
-    // Těžba ropy
+
+    // Těžba ropy — čerpá ze zapojeného ložiska
     pipeNetworks.forEach(network => {
-        if (network.isPumping && network.oilStored < network.oilCapacity) {
-            network.oilStored += OIL_PER_SECOND * (dt / 1000);
+        if (!network.isPumping || network.oilStored >= network.oilCapacity) return;
+        const pocket = network.connectedPocket;
+        if (!pocket || pocket.oil <= 0) {
+            network.isPumping = false;
+            return;
+        }
+        const room = network.oilCapacity - network.oilStored;
+        const extracted = Math.min(OIL_PER_SECOND * (dt / 1000), pocket.oil, room);
+        network.oilStored += extracted;
+        pocket.oil -= extracted;
+        if (pocket.oil <= 0) {
+            pocket.oil = 0;
+            network.isPumping = false;
         }
     });
 
-    // Aktualizace kamionů
     updateTrucks(dt);
 
-    // Aktualizace dočasných efektů
     temporaryEffects = temporaryEffects.filter(effect => {
         effect.duration -= dt;
         return effect.duration > 0;
     });
 
-    // Efekt scanneru
     if (scannerEffect.active) {
         scannerEffect.duration -= dt;
-        if (scannerEffect.duration <= 0) {
-            scannerEffect.active = false;
-        }
+        if (scannerEffect.duration <= 0) scannerEffect.active = false;
     }
+
+    Object.keys(plotBlinkTimers).forEach(key => {
+        plotBlinkTimers[key]--;
+        if (plotBlinkTimers[key] <= 0) delete plotBlinkTimers[key];
+    });
 }
 
 function draw() {
@@ -327,7 +370,7 @@ function draw() {
         const centerX = plot.x + plotWidth / 2;
         if (plot.hasVrt) {
             const network = pipeNetworks.find(n => n.derrickId === plot.id);
-            drawDerrick(centerX, plot.y, plot.id, network ? network.isPumping : false);
+            drawDerrick(centerX, plot.y, plot.id, network ? network.isPumping : false, network);
         }
         // Kreslení sil
         for (let i = 0; i < plot.siloCount; i++) {
@@ -375,15 +418,20 @@ function updateUI() {
         { el: document.getElementById('truck-btn'), cost: TRUCK_COST, isTruck: true },
         { el: document.getElementById('mole-btn'), cost: MOLE_COST, mode: 'mole' },
         { el: document.getElementById('scanner-btn'), cost: SCANNER_COST, isScanner: true },
-        { el: document.getElementById('dowser-btn'), cost: DOWSER_COST }
+        { el: document.getElementById('dowser-btn'), cost: DOWSER_COST, needsOwnedPlot: true },
     ];
 
     buttons.forEach(item => {
         if (!item.el) return;
         
         let isDisabled = money < item.cost;
-        if (item.isTruck) isDisabled = isDisabled || trucksOwned >= 10;
+        if (item.isTruck) isDisabled = isDisabled || trucksOwned >= MAX_TRUCKS;
+        if (item.mode === 'silo') {
+            const canBuildSilo = plots.some(p => p.owner === 'player' && p.hasVrt && p.siloCount < MAX_SILOS_PER_PLOT);
+            isDisabled = isDisabled || !canBuildSilo;
+        }
         if (item.isScanner) isDisabled = isDisabled || scannerEffect.active;
+        if (item.needsOwnedPlot) isDisabled = isDisabled || !plots.some(p => p.owner === 'player');
         item.el.disabled = isDisabled;
 
         if(item.isTruck) {
@@ -399,7 +447,9 @@ function updateUI() {
     // Rychlost hry
     const speedBtn = document.getElementById('speed-btn');
     if (speedBtn) {
-       speedBtn.style.filter = `hue-rotate(${gameSpeed > 1 ? '120deg' : '0deg'})`;
+        const speedLabels = { 1: '►', 2: '►►', 4: '►►►' };
+        speedBtn.textContent = speedLabels[gameSpeed] || '►';
+        speedBtn.style.filter = gameSpeed > 1 ? 'hue-rotate(120deg)' : 'none';
     }
 }
 
@@ -418,16 +468,170 @@ function drawSkyAndGround(groundLevel) {
 // Přidám globální pole pro hitboxy cedulí
 let plotSignHitboxes = [];
 
+const PLOT_SIGN_PAD = 10;
+const PLOT_SIGN_FONT = 'bold 18px "Rye", Georgia, serif';
+
+function getPlotSignRect(plot, groundLevel) {
+    const signWidth = 92;
+    const signHeight = 32;
+    const postHeight = 15;
+    const signX = Math.round(plot.x + (plotWidth / 2) - (signWidth / 2));
+    const signY = Math.round(groundLevel - postHeight - signHeight);
+    return { plotId: plot.id, x: signX, y: signY, width: signWidth, height: signHeight };
+}
+
+function getPlotSignHitbox(sign) {
+    return {
+        x: sign.x - PLOT_SIGN_PAD,
+        y: sign.y - PLOT_SIGN_PAD,
+        width: sign.width + PLOT_SIGN_PAD * 2,
+        height: sign.height + PLOT_SIGN_PAD * 2
+    };
+}
+
+function isPlotSurfaceHovered(plot, groundLevel) {
+    return mousePos.y <= groundLevel &&
+        mousePos.x >= plot.x && mousePos.x < plot.x + plotWidth;
+}
+
+function isPlotSignHovered(sign) {
+    return isPointInRect(mousePos, getPlotSignHitbox(sign));
+}
+
+function drawPlotPurchaseHighlight(plot, groundLevel, canAfford) {
+    ctx.save();
+    ctx.fillStyle = canAfford
+        ? 'rgba(255, 215, 0, 0.22)'
+        : 'rgba(255, 0, 0, 0.14)';
+    ctx.fillRect(plot.x, 0, plotWidth, groundLevel);
+    ctx.restore();
+}
+
+function getPlotToPurchase(clickPos, groundLevel) {
+    updatePlotSignHitboxes(groundLevel);
+    for (const sign of plotSignHitboxes) {
+        if (isPointInRect(clickPos, sign)) {
+            const plot = plots.find(p => p.id === sign.plotId);
+            if (plot && !plot.owner) return plot;
+        }
+    }
+    return getPurchasablePlotAt(clickPos, groundLevel);
+}
+
 function updatePlotSignHitboxes(groundLevel) {
     plotSignHitboxes = [];
     plots.forEach(plot => {
         if (plot.owner === null) {
-            const signWidth = 70, signHeight = 20, postHeight = 15;
-            const signX = Math.round(plot.x + (plotWidth / 2) - (signWidth / 2));
-            const signY = Math.round(groundLevel - postHeight - signHeight);
-            plotSignHitboxes.push({ plotId: plot.id, x: signX, y: signY, width: signWidth, height: signHeight });
+            const rect = getPlotSignRect(plot, groundLevel);
+            plotSignHitboxes.push({
+                plotId: rect.plotId,
+                x: rect.x - PLOT_SIGN_PAD,
+                y: rect.y - PLOT_SIGN_PAD,
+                width: rect.width + PLOT_SIGN_PAD * 2,
+                height: rect.height + PLOT_SIGN_PAD * 2
+            });
         }
     });
+}
+
+function getCanvasViewport() {
+    const rect = canvas.getBoundingClientRect();
+    const canvasAspect = canvas.width / canvas.height;
+    const rectAspect = rect.width / rect.height;
+
+    let renderWidth, renderHeight, offsetX, offsetY;
+
+    if (rectAspect > canvasAspect) {
+        renderHeight = rect.height;
+        renderWidth = renderHeight * canvasAspect;
+        offsetX = (rect.width - renderWidth) / 2;
+        offsetY = 0;
+    } else {
+        renderWidth = rect.width;
+        renderHeight = renderWidth / canvasAspect;
+        offsetX = 0;
+        offsetY = (rect.height - renderHeight) / 2;
+    }
+
+    return { rect, renderWidth, renderHeight, offsetX, offsetY };
+}
+
+function getCanvasPosition(event) {
+    const { rect, renderWidth, renderHeight, offsetX, offsetY } = getCanvasViewport();
+    const clientX = event.clientX ?? event.touches?.[0]?.clientX ?? 0;
+    const clientY = event.clientY ?? event.touches?.[0]?.clientY ?? 0;
+
+    const rawX = (clientX - rect.left - offsetX) * (canvas.width / renderWidth);
+    const rawY = (clientY - rect.top - offsetY) * (canvas.height / renderHeight);
+
+    return {
+        x: Math.max(0, Math.min(canvas.width, rawX)),
+        y: Math.max(0, Math.min(canvas.height, rawY)),
+        inBounds: rawX >= 0 && rawX <= canvas.width && rawY >= 0 && rawY <= canvas.height
+    };
+}
+
+function isPointInRect(point, rect) {
+    return point.x >= rect.x && point.x <= rect.x + rect.width &&
+           point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+function getPlotAtX(x) {
+    if (x < 0 || x > canvas.width) return null;
+    for (const plot of plots) {
+        if (x >= plot.x && x < plot.x + plotWidth) {
+            return plot;
+        }
+    }
+    return null;
+}
+
+function getPlotAtPosition(x, y, groundLevel) {
+    if (y > groundLevel) return null;
+    return getPlotAtX(x);
+}
+
+function getOwnedPlotForTool(x) {
+    const atCursor = getPlotAtX(x);
+    if (atCursor && atCursor.owner === 'player') return atCursor;
+    return plots.find(p => p.owner === 'player') || null;
+}
+
+function createPipeNetwork(derrickId, startPlot) {
+    const groundLevel = Math.floor(canvas.height / 3);
+    return {
+        id: nextNetworkId++,
+        derrickId,
+        path: [{ x: startPlot.x + plotWidth / 2, y: groundLevel }],
+        isPumping: false,
+        oilStored: 0,
+        oilCapacity: DERRICK_BASE_CAPACITY + startPlot.siloCount * SILO_CAPACITY_BONUS,
+        connectedPocket: null
+    };
+}
+
+function getPurchasablePlotAt(clickPos, groundLevel) {
+    if (clickPos.y > groundLevel) return null;
+    return plots.find(p => p.owner === null &&
+        clickPos.x >= p.x && clickPos.x < p.x + plotWidth) || null;
+}
+
+function tryPurchasePlot(plot, groundLevel) {
+    if (!plot || plot.owner) return 'none';
+
+    if (money >= plot.price) {
+        money -= plot.price;
+        plot.owner = 'player';
+        startGameLoop();
+        lastBoughtPlotId = plot.id;
+        lastBoughtHighlightTimer = 30;
+        updatePlotSignHitboxes(groundLevel);
+        updateUI();
+        return 'bought';
+    }
+
+    plotBlinkTimers[plot.id] = 20;
+    return 'too_expensive';
 }
 
 function drawPlots(groundLevel) {
@@ -448,24 +652,47 @@ function drawPlots(groundLevel) {
     let hoveredBuildable = false;
     plots.forEach(plot => {
         if (plot.owner === null) {
-            const signWidth = 70, signHeight = 20, postHeight = 15;
-            const signX = Math.round(plot.x + (plotWidth / 2) - (signWidth / 2));
-            const signY = Math.round(groundLevel - postHeight - signHeight);
-            ctx.fillStyle = '#8B4513';
-            ctx.fillRect(Math.round(plot.x + (plotWidth / 2) - 2.5), groundLevel - postHeight, 5, postHeight);
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(signX, signY, signWidth, signHeight);
-            // Zvýraznění tabulky při najetí myší
-            const isHovered = mousePos.x >= signX && mousePos.x <= signX + signWidth && mousePos.y >= signY && mousePos.y <= signY + signHeight;
+            const sign = getPlotSignRect(plot, groundLevel);
+            const signX = sign.x;
+            const signY = sign.y;
+            const signWidth = sign.width;
+            const signHeight = sign.height;
+            const postHeight = 15;
+            const canAfford = money >= plot.price;
+            const plotHovered = isPlotSurfaceHovered(plot, groundLevel);
+            const signHovered = isPlotSignHovered(sign);
+            const isHovered = plotHovered || signHovered;
             if (isHovered) hoveredAny = true;
-            ctx.strokeStyle = isHovered ? '#FFD700' : 'black';
-            ctx.lineWidth = isHovered ? 3 : 1;
-            ctx.strokeRect(signX, signY, signWidth, signHeight);
-            ctx.fillStyle = 'black';
-            ctx.font = '14px sans-serif';
+
+            if (isHovered) {
+                drawPlotPurchaseHighlight(plot, groundLevel, canAfford);
+            }
+
+            ctx.fillStyle = '#6B3A1F';
+            ctx.fillRect(Math.round(plot.x + (plotWidth / 2) - 3), groundLevel - postHeight, 6, postHeight);
+
+            ctx.save();
+            if (isHovered) {
+                ctx.shadowColor = canAfford ? 'rgba(255, 215, 0, 0.6)' : 'rgba(255, 80, 80, 0.5)';
+                ctx.shadowBlur = 10;
+            }
+            ctx.fillStyle = '#FDF5E6';
+            ctx.fillRect(signX, signY, signWidth, signHeight);
+            ctx.strokeStyle = isHovered ? (canAfford ? '#FFD700' : '#E74C3C') : '#3D2B1F';
+            ctx.lineWidth = isHovered ? 3 : 2;
+            ctx.strokeRect(signX + 0.5, signY + 0.5, signWidth - 1, signHeight - 1);
+            ctx.restore();
+
+            ctx.font = PLOT_SIGN_FONT;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(`$${plot.price}`, plot.x + plotWidth / 2, signY + signHeight / 2);
+            ctx.fillStyle = canAfford ? '#2E5C1F' : '#8B2500';
+            ctx.fillText(`$${plot.price}`, plot.x + plotWidth / 2, signY + signHeight / 2 + 1);
+
+            if (plotBlinkTimers[plot.id] && plotBlinkTimers[plot.id] % 4 < 2) {
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.35)';
+                ctx.fillRect(signX, signY, signWidth, signHeight);
+            }
         } else if (plot.id === lastBoughtPlotId && lastBoughtHighlightTimer > 0) {
             // Zvýraznění právě koupeného pozemku - pouze žlutý pruh, NE vrt!
             ctx.save();
@@ -497,47 +724,48 @@ function drawOilPockets(groundLevel) {
     oilPockets.forEach(pocket => {
         // Zobrazit obrys jen pokud je aktivní scanner
         if (scannerEffect.active) {
+            const alpha = scannerEffect.duration / scannerEffect.totalDuration;
             ctx.beginPath();
-            ctx.strokeStyle = `rgba(0, 255, 0, ${scannerEffect.duration / scannerEffect.totalDuration})`;
+            ctx.strokeStyle = `rgba(0, 255, 0, ${alpha})`;
             ctx.lineWidth = 2;
 
             for (let i = 1; i < pocket.vertices.length; i++) {
-                // draw line between current and previous vertex
                 ctx.moveTo(pocket.vertices[i - 1].x, pocket.vertices[i - 1].y);
                 ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
                 ctx.stroke();
             }
-
-            // Draw line from last vertex to first
             ctx.moveTo(pocket.vertices[pocket.vertices.length - 1].x, pocket.vertices[pocket.vertices.length - 1].y);
             ctx.lineTo(pocket.vertices[0].x, pocket.vertices[0].y);
             ctx.stroke();
 
-
-
-
-            // ctx.strokeRect(pocket.x, pocket.y, pocket.width, pocket.height);
+            const fillRatio = pocket.maxOil > 0 ? pocket.oil / pocket.maxOil : 0;
+            ctx.fillStyle = `rgba(0, 180, 0, ${alpha * 0.25 * fillRatio})`;
+            ctx.moveTo(pocket.vertices[0].x, pocket.vertices[0].y);
+            for (let i = 1; i < pocket.vertices.length; i++) {
+                ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
+            }
+            ctx.closePath();
+            ctx.fill();
         }
         
         // Zobrazit plné ložisko jen pokud bylo zasaženo
         if (DEV || pocket.tapped) {
             ctx.beginPath();
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            const fillRatio = pocket.maxOil > 0 ? pocket.oil / pocket.maxOil : 0;
+            ctx.fillStyle = `rgba(0, 0, 0, ${0.5 + fillRatio * 0.4})`;
             ctx.moveTo(pocket.vertices[0].x, pocket.vertices[0].y);
 
             for (let i = 1; i < pocket.vertices.length; i++) {
-                // draw line between current and previous vertex
                 ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
             }
-            ctx.lineTo(pocket.vertices[0].x, pocket.vertices[0].y); // Close the path
-
+            ctx.lineTo(pocket.vertices[0].x, pocket.vertices[0].y);
             ctx.fill();
             ctx.closePath();
         }
     });
 }
 
-function drawDerrick(x, y, plotId, isPumping) {
+function drawDerrick(x, y, plotId, isPumping, network) {
     const derrickWidth = 80, derrickHeight = 100;
     ctx.save();
     ctx.translate(x, y);
@@ -548,13 +776,11 @@ function drawDerrick(x, y, plotId, isPumping) {
     if (derrickImage && derrickImage.complete && derrickImage.naturalWidth > 0) {
         ctx.drawImage(derrickImage, -derrickWidth / 2, -derrickHeight, derrickWidth, derrickHeight);
     } else {
-        // fallback: hnědý obdélník
         ctx.fillStyle = '#8B4513';
         ctx.fillRect(-derrickWidth / 2, -derrickHeight, derrickWidth, derrickHeight);
         ctx.fillStyle = '#FFD700';
         ctx.fillRect(-10, -derrickHeight, 20, derrickHeight / 2);
     }
-    // Pohyblivá část
     if (isPumping) {
         const pumpAngle = Math.sin(Date.now() / 300) * 0.2;
         ctx.save();
@@ -563,6 +789,23 @@ function drawDerrick(x, y, plotId, isPumping) {
         ctx.fillStyle = "#696969";
         ctx.fillRect(-5, -5, 30, 10);
         ctx.restore();
+    }
+
+    if (network && network.oilCapacity > 0) {
+        const fillRatio = Math.min(1, network.oilStored / network.oilCapacity);
+        const barW = 50, barH = 8;
+        const barX = -barW / 2, barY = 8;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(barX, barY, barW, barH);
+        ctx.fillStyle = fillRatio > 0.8 ? '#e74c3c' : '#2ecc71';
+        ctx.fillRect(barX, barY, barW * fillRatio, barH);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(barX, barY, barW, barH);
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${Math.floor(network.oilStored)}/${network.oilCapacity}`, 0, barY + barH + 10);
     }
     ctx.restore();
 }
@@ -585,9 +828,11 @@ function drawSilo(x, y) {
 function drawPipeNetworks() {
     pipeNetworks.forEach(network => {
         if (network.path.length < 2) return;
-        
-        ctx.strokeStyle = '#333333';
-        ctx.lineWidth = 6;
+
+        const isMole = network.isMoleTunnel;
+        ctx.strokeStyle = isMole ? '#5D3A1A' : '#333333';
+        ctx.lineWidth = isMole ? 4 : 6;
+        ctx.setLineDash(isMole ? [8, 6] : []);
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.beginPath();
@@ -596,11 +841,12 @@ function drawPipeNetworks() {
             ctx.lineTo(network.path[i].x, network.path[i].y);
         }
         ctx.stroke();
+        ctx.setLineDash([]);
 
         if (network.isPumping) {
-             ctx.strokeStyle = '#000000';
-             ctx.lineWidth = 4;
-             ctx.stroke();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = isMole ? 2 : 4;
+            ctx.stroke();
         }
     });
 }
@@ -630,6 +876,12 @@ function drawCompanyBuildings(groundLevel) {
     ctx.textAlign = 'center';
     ctx.fillText(`$${leftIncPrice.toFixed(2)}`, bWidth/2, leftBaseY - 15);
     ctx.fillText(`$${rightIncPrice.toFixed(2)}`, rightBaseX + bWidth/2, leftBaseY - 15);
+
+    ctx.font = '16px sans-serif';
+    ctx.fillStyle = leftPriceTrend >= 0 ? '#2ecc71' : '#e74c3c';
+    ctx.fillText(leftPriceTrend >= 0 ? '▲' : '▼', bWidth/2, leftBaseY - 35);
+    ctx.fillStyle = rightPriceTrend >= 0 ? '#2ecc71' : '#e74c3c';
+    ctx.fillText(rightPriceTrend >= 0 ? '▲' : '▼', rightBaseX + bWidth/2, leftBaseY - 35);
 
     // Výpočet pro centrování šipek a čísla
     const arrowSize = 25;
@@ -730,6 +982,32 @@ function drawEffectsAndPreviews(groundLevel) {
         }
     } else if (selectedDerrickPlotId !== null) {
         newCursor = 'crosshair';
+        const network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
+        const startPlot = plots.find(p => p.id === selectedDerrickPlotId);
+        if (startPlot) {
+            const lastPoint = network?.path[network.path.length - 1] || {
+                x: startPlot.x + plotWidth / 2,
+                y: groundLevel
+            };
+            if (mousePos.y > groundLevel) {
+                const distance = Math.hypot(mousePos.x - lastPoint.x, mousePos.y - lastPoint.y);
+                const cost = Math.ceil(distance * PIPE_COST_PER_PIXEL);
+                ctx.save();
+                ctx.strokeStyle = money >= cost ? 'rgba(80, 80, 80, 0.7)' : 'rgba(255, 80, 80, 0.7)';
+                ctx.lineWidth = 4;
+                ctx.setLineDash([8, 6]);
+                ctx.beginPath();
+                ctx.moveTo(lastPoint.x, lastPoint.y);
+                ctx.lineTo(mousePos.x, mousePos.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = money >= cost ? '#ffffff' : '#ff6666';
+                ctx.font = 'bold 14px sans-serif';
+                ctx.textAlign = 'left';
+                ctx.fillText(`$${cost}`, mousePos.x + 8, mousePos.y - 8);
+                ctx.restore();
+            }
+        }
     } else if (currentBuildMode === 'mole' && moleState.startPoint) {
         ctx.strokeStyle = 'rgba(139, 69, 19, 0.7)';
         ctx.lineWidth = 6;
@@ -748,12 +1026,28 @@ function drawEffectsAndPreviews(groundLevel) {
     
     // Kreslení dočasných efektů (šipky, atd.)
     temporaryEffects.forEach(effect => {
-        if (effect.type === 'arrow') {
-            ctx.fillStyle = `rgba(255, 215, 0, ${effect.duration / 5000})`;
+        if (effect.type === 'arrow' || effect.type === 'dowser') {
+            const alpha = effect.duration / (effect.totalDuration || 8000);
+            ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
             ctx.font = '40px sans-serif';
             ctx.textAlign = 'center';
             const arrowChar = effect.direction === 0 ? '▼' : (effect.direction > 0 ? '▶' : '◀');
             ctx.fillText(arrowChar, effect.x, effect.y);
+            if (effect.label) {
+                ctx.font = '14px sans-serif';
+                ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.fillText(effect.label, effect.x, effect.y + 22);
+            }
+            if (effect.type === 'dowser' && effect.targetX != null) {
+                ctx.strokeStyle = `rgba(255, 215, 0, ${alpha * 0.5})`;
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 8]);
+                ctx.beginPath();
+                ctx.moveTo(effect.x, effect.y + 10);
+                ctx.lineTo(effect.targetX, effect.targetY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
         } else if (effect.type === 'moleMarker') {
             ctx.fillStyle = `rgba(139, 69, 19, ${effect.duration / 15000})`;
             ctx.beginPath();
@@ -773,80 +1067,132 @@ function drawPauseScreen() {
 }
 
 function drawGameOver() {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    draw();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.fillStyle = 'white';
-    ctx.font = '80px sans-serif';
+    ctx.font = 'bold 72px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('KONEC HRY', canvas.width / 2, canvas.height / 2 - 50);
+    const title = gameOverReason === 'bankrupt' ? 'BANKROT!' : 'KONEC ROKU';
+    ctx.fillText(title, canvas.width / 2, canvas.height / 2 - 120);
 
-    ctx.font = '40px sans-serif';
-    ctx.fillText(`Finální skóre: $${Math.floor(money)}`, canvas.width / 2, canvas.height / 2 + 50);
+    ctx.font = '32px sans-serif';
+    ctx.fillText(`Finální kapitál: $${Math.floor(money)}`, canvas.width / 2, canvas.height / 2 - 40);
+    ctx.fillText(`Celkové tržby: $${Math.floor(totalRevenue)}`, canvas.width / 2, canvas.height / 2 + 10);
+    ctx.fillText(`Prodáno ropy: ${Math.floor(totalOilSold)} barelů`, canvas.width / 2, canvas.height / 2 + 55);
+
+    const ownedPlots = plots.filter(p => p.owner === 'player').length;
+    const activeRigs = plots.filter(p => p.hasVrt).length;
+    ctx.font = '24px sans-serif';
+    ctx.fillStyle = '#ccc';
+    ctx.fillText(`Pozemky: ${ownedPlots}  |  Vrty: ${activeRigs}  |  Kamiony: ${trucksOwned}`, canvas.width / 2, canvas.height / 2 + 110);
 }
 
 
 // --- Herní logika a mechaniky ---
 
+function getNetworkPickupX(network) {
+    if (network.derrickId >= 0) {
+        const plot = plots.find(p => p.id === network.derrickId);
+        if (plot) return plot.x + plotWidth / 2;
+    }
+    if (network.path.length > 0) {
+        const mid = network.path[Math.floor(network.path.length / 2)];
+        return mid.x;
+    }
+    return canvas.width / 2;
+}
+
+function pickBestCompany() {
+    if (leftIncPrice > rightIncPrice + 0.05) return 'left';
+    if (rightIncPrice > leftIncPrice + 0.05) return 'right';
+    if (trucksAssignedLeft > trucksAssignedRight) return 'left';
+    if (trucksAssignedRight > trucksAssignedLeft) return 'right';
+    return Math.random() < 0.5 ? 'left' : 'right';
+}
+
+function pickCompanyForTruck(activeLeft, activeRight) {
+    if (activeLeft < trucksAssignedLeft) return 'left';
+    if (activeRight < trucksAssignedRight) return 'right';
+    return pickBestCompany();
+}
+
+function findNetworkForNewTruck() {
+    const active = pipeNetworks.filter(n => n.derrickId >= 0 && n.isPumping);
+    if (active.length === 0) return null;
+
+    return active.sort((a, b) => {
+        const trucksA = trucks.filter(t => t.homeNetworkId === a.id && t.state !== 'idle').length;
+        const trucksB = trucks.filter(t => t.homeNetworkId === b.id && t.state !== 'idle').length;
+        if (trucksA !== trucksB) return trucksA - trucksB;
+        return b.oilStored - a.oilStored;
+    })[0];
+}
+
+function tryLoadTruckAtRig(truck, network) {
+    const loadAmount = Math.min(TRUCK_CAPACITY, Math.floor(network.oilStored));
+    if (loadAmount < MIN_LOAD_AMOUNT) return false;
+    network.oilStored -= loadAmount;
+    truck.oil = loadAmount;
+    return true;
+}
+
+function getTruckHomeNetwork(truck) {
+    return pipeNetworks.find(n => n.id === truck.homeNetworkId) || null;
+}
+
+function dispatchIdleTruck(truck) {
+    const network = findNetworkForNewTruck();
+    if (!network) return false;
+
+    const activeLeft = trucks.filter(t => t.targetCompany === 'left' && t.state !== 'idle').length;
+    const activeRight = trucks.filter(t => t.targetCompany === 'right' && t.state !== 'idle').length;
+
+    truck.homeNetworkId = network.id;
+    truck.targetCompany = pickCompanyForTruck(activeLeft, activeRight);
+    truck.state = 'to_rig';
+    truck.x = truck.targetCompany === 'left' ? -50 : canvas.width + 50;
+    return true;
+}
+
 function updateTrucks(dt) {
-    const groundLevel = Math.floor(canvas.height / 3);
     const speed = TRUCK_SPEED * (dt / 1000);
 
-    // Najdi sítě s ropou, ke kterým ještě nejede kamion
-    const dispatchedDerrickIds = trucks.filter(t => t.state === 'to_rig').map(t => t.targetPlotId);
-    const networksWithOil = pipeNetworks.filter(
-        n => n.isPumping && n.oilStored >= TRUCK_CAPACITY && !dispatchedDerrickIds.includes(n.derrickId)
-    );
+    trucks.filter(t => t.state === 'idle').forEach(truck => dispatchIdleTruck(truck));
 
-    // Přiřaď volné kamiony k sítím s ropou
-    if (networksWithOil.length > 0) {
-        const idleTrucks = trucks.filter(w => w.state === 'idle');
-        
-        // Rozdělíme idle kamiony podle toho, kam mají jet
-        let assignedLeftCount = trucks.filter(t => t.targetCompany === 'left' && t.state !== 'idle').length;
-        let assignedRightCount = trucks.filter(t => t.targetCompany === 'right' && t.state !== 'idle').length;
-        
-        for (const truck of idleTrucks) {
-            if (networksWithOil.length === 0) break;
-            
-            const targetNetwork = networksWithOil.pop();
-            
-            // Logika přiřazení (jednoduchá, lze vylepšit)
-            if (assignedLeftCount < trucksAssignedLeft) {
-                truck.targetCompany = 'left';
-                assignedLeftCount++;
-            } else if (assignedRightCount < trucksAssignedRight) {
-                truck.targetCompany = 'right';
-                assignedRightCount++;
-            } else { // Pokud není specifikováno, vyber náhodně nebo nejbližší
-                truck.targetCompany = (Math.random() < 0.5) ? 'left' : 'right';
-            }
-
-            truck.state = 'to_rig';
-            truck.targetPlotId = targetNetwork.derrickId;
-            truck.x = truck.targetCompany === 'left' ? -50 : canvas.width + 50; // Start z "garáže"
-        }
-    }
-
-    // Pohyb a logika kamionů
     trucks.forEach(truck => {
         if (truck.state === 'idle') return;
 
+        const network = getTruckHomeNetwork(truck);
+
         switch (truck.state) {
+            case 'waiting_at_rig': {
+                if (!network || !network.isPumping) {
+                    truck.state = 'idle';
+                    truck.homeNetworkId = null;
+                    break;
+                }
+                truck.x = getNetworkPickupX(network);
+                if (tryLoadTruckAtRig(truck, network)) {
+                    truck.state = 'to_company';
+                }
+                break;
+            }
             case 'to_rig': {
-                const targetPlot = plots.find(p => p.id === truck.targetPlotId);
-                if (!targetPlot) { truck.state = 'to_garage'; break; }
-                const targetX = targetPlot.x + plotWidth / 2;
-                
-                if (Math.abs(truck.x - targetX) < 5) { // Cíl dosažen
+                if (!network || !network.isPumping) {
+                    truck.state = 'idle';
+                    truck.homeNetworkId = null;
+                    break;
+                }
+                const targetX = getNetworkPickupX(network);
+
+                if (Math.abs(truck.x - targetX) < 5) {
                     truck.x = targetX;
-                    const network = pipeNetworks.find(n => n.derrickId === truck.targetPlotId);
-                    if (network && network.oilStored >= TRUCK_CAPACITY) {
-                        network.oilStored -= TRUCK_CAPACITY;
-                        truck.oil = TRUCK_CAPACITY;
+                    if (tryLoadTruckAtRig(truck, network)) {
                         truck.state = 'to_company';
-                    } else { // Ropa tam už není
-                        truck.state = 'to_garage';
+                    } else {
+                        truck.state = 'waiting_at_rig';
                     }
                 } else {
                     truck.x += Math.sign(targetX - truck.x) * speed;
@@ -855,44 +1201,22 @@ function updateTrucks(dt) {
             }
             case 'to_company': {
                 const targetX = truck.targetCompany === 'left' ? 50 : canvas.width - 50;
-                 if (Math.abs(truck.x - targetX) < 5) {
+                if (Math.abs(truck.x - targetX) < 5) {
                     truck.x = targetX;
                     const price = truck.targetCompany === 'left' ? leftIncPrice : rightIncPrice;
-                    money += truck.oil * price;
+                    const sale = truck.oil * price;
+                    money += sale;
+                    totalRevenue += sale;
+                    totalOilSold += truck.oil;
                     truck.oil = 0;
-                    truck.state = 'to_garage';
+                    truck.state = 'to_rig';
                 } else {
                     truck.x += Math.sign(targetX - truck.x) * speed;
                 }
                 break;
             }
-            case 'to_garage': {
-                const garageX = truck.targetCompany === 'left' ? -truckImage.width : canvas.width + truckImage.width;
-                if ( (truck.targetCompany === 'left' && truck.x <= garageX) || (truck.targetCompany === 'right' && truck.x >= garageX) ) {
-                    truck.state = 'idle';
-                } else {
-                    truck.x += Math.sign(garageX - truck.x) * speed;
-                }
-                break;
-            }
         }
     });
-}
-
-function checkPipeCollision(pipeSegment) {
-    for (const pocket of oilPockets) {
-        if (pocket.tapped) continue;
-        
-        // Jednoduchá kolize úsečky a obdélníku
-        const start = pipeSegment.start;
-        const end = pipeSegment.end;
-        const pocketRect = { x: pocket.x, y: pocket.y, width: pocket.width, height: pocket.height };
-
-        if (isLineIntersectingRect(start, end, pocketRect)) {
-            return pocket;
-        }
-    }
-    return null;
 }
 
 function isLineIntersectingRect(p1, p2, rect) {
@@ -930,10 +1254,10 @@ function assignTruck(company, change) {
     }
 }
 
-function cancelBuildMode() {
+function cancelBuildMode(clearDerrick = true) {
     currentBuildMode = null;
-    selectedDerrickPlotId = null;
-    if(moleState.active){
+    if (clearDerrick) selectedDerrickPlotId = null;
+    if (moleState.active) {
         moleState.active = false;
         moleState.startPoint = null;
         temporaryEffects = temporaryEffects.filter(e => e.type !== 'moleMarker');
@@ -941,25 +1265,19 @@ function cancelBuildMode() {
     updateUI();
 }
 
-function getPlotAtX(x) {
-    for (const plot of plots) {
-        if (x >= plot.x && x <= plot.x + plotWidth) {
-            return plot;
-        }
-    }
-    return null;
-}
-
-
 // --- Posluchače událostí ---
 function addEventListeners() {
     // Pohyb myši
+    canvas.addEventListener('pointermove', (event) => {
+        const pos = getCanvasPosition(event);
+        mousePos.x = pos.x;
+        mousePos.y = pos.y;
+    });
+
     canvas.addEventListener('mousemove', (event) => {
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        mousePos.x = (event.clientX - rect.left) * scaleX;
-        mousePos.y = (event.clientY - rect.top) * scaleY;
+        const pos = getCanvasPosition(event);
+        mousePos.x = pos.x;
+        mousePos.y = pos.y;
     });
 
     // Kliknutí pravým tlačítkem (zrušení akce)
@@ -987,19 +1305,19 @@ function addEventListeners() {
     });
 
     document.getElementById('truck-btn').addEventListener('click', () => {
-        if (money >= TRUCK_COST && trucksOwned < 10) {
+        if (money >= TRUCK_COST && trucksOwned < MAX_TRUCKS) {
             money -= TRUCK_COST;
             trucksOwned++;
-            trucks.push({ x: -50, y: 0, state: 'idle', targetPlotId: null, targetCompany: null, oil: 0 });
+            trucks.push({ x: -50, y: 0, state: 'idle', homeNetworkId: null, targetCompany: null, oil: 0 });
             updateUI();
         }
     });
     
     document.getElementById('dowser-btn').addEventListener('click', () => {
-        if (money >= DOWSER_COST) {
+        const ownedPlot = getOwnedPlotForTool(mousePos.x);
+        if (money >= DOWSER_COST && ownedPlot) {
             money -= DOWSER_COST;
-            const plot = getPlotAtX(mousePos.x) || plots[Math.floor(plots.length / 2)];
-            showDowserHint(plot);
+            showDowserHint(ownedPlot);
             updateUI();
         }
     });
@@ -1032,54 +1350,41 @@ function addEventListeners() {
         gameSpeed = (gameSpeed === 1) ? 2 : (gameSpeed === 2) ? 4 : 1;
         updateUI();
     });
-}
 
-// Přidám proměnnou pro blokaci rychlého dvojkliku
-let isBuyingPlot = false;
+    window.addEventListener('resize', () => {
+        if (canvas && ctx) draw();
+    });
+}
 
 function handleCanvasClick(event) {
     if (isGameOver) return;
-    if (isBuyingPlot) return;
-    const clickPos = { x: mousePos.x, y: mousePos.y };
+
+    const clickPos = getCanvasPosition(event);
+    if (!clickPos.inBounds) return;
+    mousePos.x = clickPos.x;
+    mousePos.y = clickPos.y;
     const groundLevel = Math.floor(canvas.height / 3);
-    
-    // Vždy vygeneruj aktuální hitboxy tabulek
+
     updatePlotSignHitboxes(groundLevel);
-    
-    // Kontrola kliknutí na ovládání kamionů
-    function isPointInRect(point, rect) {
-        return point.x >= rect.x && point.x <= rect.x + rect.width &&
-               point.y >= rect.y && point.y <= rect.y + rect.height;
-    }
+
     if (isPointInRect(clickPos, companyControls.leftUp)) { assignTruck('left', 1); return; }
     if (isPointInRect(clickPos, companyControls.leftDown)) { assignTruck('left', -1); return; }
     if (isPointInRect(clickPos, companyControls.rightUp)) { assignTruck('right', 1); return; }
     if (isPointInRect(clickPos, companyControls.rightDown)) { assignTruck('right', -1); return; }
 
-    // Nově: kliknutí na ceduli s cenou pozemku
-    for (const sign of plotSignHitboxes) {
-        if (isPointInRect(clickPos, sign)) {
-            const plot = plots.find(p => p.id === sign.plotId);
-            if (plot && !plot.owner && money >= plot.price) {
-                money -= plot.price;
-                plot.owner = 'player';
-                startGameLoop();
-                lastBoughtPlotId = plot.id;
-                lastBoughtHighlightTimer = 30; // Počet snímků zvýraznění
-                updatePlotSignHitboxes(groundLevel); // Okamžitě aktualizuj hitboxy
-                draw(); // Okamžitě překresli po koupi
-                updateUI(); // Nově: okamžitě aktualizuj peníze v UI
-                return;
-            } else if (plot && !plot.owner && money < plot.price) {
-                plotBlinkTimers[plot.id] = 15; // 15 snímků blikání
+    // Nákup pozemku — cedule i celý sloupec nad zemí (mimo aktivní režim krtka)
+    if (currentBuildMode !== 'mole') {
+        const purchasePlot = getPlotToPurchase(clickPos, groundLevel);
+        if (purchasePlot) {
+            const result = tryPurchasePlot(purchasePlot, groundLevel);
+            if (result !== 'none') {
                 draw();
                 return;
             }
         }
     }
 
-    // Interakce se světem
-    const clickedPlot = getPlotAtX(clickPos.x);
+    const clickedPlot = getPlotAtPosition(clickPos.x, clickPos.y, groundLevel) || getPlotAtX(clickPos.x);
     if (currentBuildMode) {
         handleBuildModeClick(clickPos, clickedPlot, groundLevel);
     } else if (selectedDerrickPlotId !== null) {
@@ -1095,13 +1400,13 @@ function handleBuildModeClick(clickPos, plot, groundLevel) {
             if (plot && plot.owner === 'player' && !plot.hasVrt && money >= VRT_COST) {
                 money -= VRT_COST;
                 plot.hasVrt = true;
-                selectedDerrickPlotId = plot.id; // Po stavbě rovnou vybereme
-                cancelBuildMode();
-                draw(); // Okamžitě překresli po stavbě vrtu
+                selectedDerrickPlotId = plot.id;
+                cancelBuildMode(false);
+                draw();
             }
             break;
         case 'silo':
-            if (plot && plot.owner === 'player' && plot.hasVrt && money >= SILO_COST) {
+            if (plot && plot.owner === 'player' && plot.hasVrt && plot.siloCount < MAX_SILOS_PER_PLOT && money >= SILO_COST) {
                 money -= SILO_COST;
                 plot.siloCount++;
                 const network = pipeNetworks.find(n => n.derrickId === plot.id);
@@ -1112,8 +1417,7 @@ function handleBuildModeClick(clickPos, plot, groundLevel) {
             }
             break;
         case 'mole':
-            if (clickPos.y > groundLevel && money >= MOLE_COST) {
-                money -= MOLE_COST;
+            if (clickPos.y > groundLevel) {
                 handleMoleClick(clickPos.x, clickPos.y);
             }
             break;
@@ -1121,66 +1425,104 @@ function handleBuildModeClick(clickPos, plot, groundLevel) {
 }
 
 function handlePipePlacementClick(clickPos, groundLevel) {
-    if (clickPos.y <= groundLevel) return; // Zabráníme vrtání nad zemí
-    
+    if (clickPos.y <= groundLevel) return;
+
     let network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
-    if (network && network.isPumping) return; // Nelze měnit po zasažení ropy
+    if (network && network.isPumping) return;
 
     if (!network) {
         const startPlot = plots.find(p => p.id === selectedDerrickPlotId);
-        network = {
-            derrickId: selectedDerrickPlotId,
-            path: [{ x: startPlot.x + plotWidth / 2, y: groundLevel }],
-            isPumping: false, oilStored: 0, oilCapacity: DERRICK_BASE_CAPACITY + startPlot.siloCount * SILO_CAPACITY_BONUS
-        };
+        network = createPipeNetwork(selectedDerrickPlotId, startPlot);
         pipeNetworks.push(network);
     }
 
     const lastPoint = network.path[network.path.length - 1];
     const distance = Math.hypot(clickPos.x - lastPoint.x, clickPos.y - lastPoint.y);
-    const cost = distance * PIPE_COST_PER_PIXEL;
+    const cost = Math.ceil(distance * PIPE_COST_PER_PIXEL);
 
-    if (money >= cost) {
-        money -= cost;
-        network.path.push(clickPos);
-        const hitPocket = checkPipeCollision({ start: lastPoint, end: clickPos });
-        if (hitPocket) {
-            hitPocket.tapped = true;
-            network.isPumping = true;
-            selectedDerrickPlotId = null; // Zrušíme výběr
-        }
+    if (money < cost) return;
+
+    money -= cost;
+    network.path.push(clickPos);
+    const hitPocket = checkPipeCollision({ start: lastPoint, end: clickPos });
+    if (hitPocket) {
+        hitPocket.tapped = true;
+        network.connectedPocket = hitPocket;
+        network.isPumping = true;
+        selectedDerrickPlotId = null;
     }
 }
 
 function handleDefaultClick(plot) {
-    if (plot) {
-        if (!plot.owner && money >= PLOT_COST) {
-            money -= PLOT_COST;
-            plot.owner = 'player';
-        } else if (plot.owner === 'player' && plot.hasVrt) {
+    if (plot && plot.owner === 'player' && plot.hasVrt) {
+        const network = pipeNetworks.find(n => n.derrickId === plot.id);
+        if (!network || !network.isPumping) {
             selectedDerrickPlotId = plot.id;
+            updateUI();
         }
     }
 }
 
 function showDowserHint(plot) {
-    let closestPocket = null, minDistance = Infinity;
+    if (!plot || plot.owner !== 'player') return;
+
     const plotCenterX = plot.x + plotWidth / 2;
+    const groundLevel = Math.floor(canvas.height / 3);
+    let bestPocket = null;
+    let bestScore = Infinity;
+
     oilPockets.forEach(pocket => {
+        if (pocket.tapped) return;
         const pocketCenterX = pocket.x + pocket.width / 2;
-        const dist = Math.abs(plotCenterX - pocketCenterX);
-        if (dist < minDistance) {
-            minDistance = dist;
-            closestPocket = pocket;
+        const pocketCenterY = pocket.y + pocket.height / 2;
+        const underPlot = pocketCenterX >= plot.x && pocketCenterX < plot.x + plotWidth;
+        const dx = Math.abs(pocketCenterX - plotCenterX);
+        const dy = Math.max(0, pocketCenterY - groundLevel);
+        const score = dx + dy * 0.4 + (underPlot ? 0 : 400);
+        if (score < bestScore) {
+            bestScore = score;
+            bestPocket = pocket;
         }
     });
-    if (closestPocket) {
+
+    if (!bestPocket) {
         temporaryEffects.push({
-            type: 'arrow', x: plotCenterX, y: plot.y - 50,
-            direction: Math.sign(closestPocket.x + closestPocket.width / 2 - plotCenterX),
-            duration: 5000 
+            type: 'dowser',
+            x: plotCenterX,
+            y: groundLevel - 55,
+            direction: 0,
+            duration: 4000,
+            totalDuration: 4000,
+            label: 'nic'
         });
+        return;
     }
+
+    const pocketCenterX = bestPocket.x + bestPocket.width / 2;
+    const pocketCenterY = bestPocket.y + bestPocket.height / 2;
+    const dx = pocketCenterX - plotCenterX;
+    const dy = pocketCenterY - groundLevel;
+    let direction;
+    if (Math.abs(dx) < plotWidth * 0.35 && dy > 40) {
+        direction = 0;
+    } else if (dx > 15) {
+        direction = 1;
+    } else {
+        direction = -1;
+    }
+
+    const richness = bestPocket.maxOil > 8000 ? 'velké' : (bestPocket.maxOil > 5000 ? 'střední' : 'malé');
+    temporaryEffects.push({
+        type: 'dowser',
+        x: plotCenterX,
+        y: groundLevel - 55,
+        targetX: pocketCenterX,
+        targetY: pocketCenterY,
+        direction,
+        duration: 8000,
+        totalDuration: 8000,
+        label: richness
+    });
 }
 
 function handleMoleClick(x, y) {
@@ -1188,25 +1530,47 @@ function handleMoleClick(x, y) {
         moleState.startPoint = { x, y };
         temporaryEffects.push({ type: 'moleMarker', x, y, duration: 15000 });
     } else {
+        if (money < MOLE_COST) return;
+        money -= MOLE_COST;
+
         const start = moleState.startPoint;
-        const end = { x: x, y: start.y }; // Jen horizontální
-        
-        // Vytvoříme novou síť pro tunel
-        const newTunnelNetwork = {
-            derrickId: -1, // Speciální ID pro tunel
+        const end = { x, y: start.y };
+
+        pipeNetworks.push({
+            id: nextNetworkId++,
+            derrickId: -1,
             path: [start, end],
-            isPumping: false, oilStored: 0, oilCapacity: 0
-        };
-        pipeNetworks.push(newTunnelNetwork);
-        
-        const hitPocket = checkPipeCollision({ start, end });
-        if (hitPocket) {
-            hitPocket.tapped = true;
-            newTunnelNetwork.isPumping = true; // Tunel může "těžit"
-        }
-        
+            isPumping: false,
+            oilStored: 0,
+            oilCapacity: 0,
+            connectedPocket: null,
+            isMoleTunnel: true
+        });
+
+        oilPockets.forEach(pocket => {
+            if (checkPipeCollision({ start, end }, pocket)) {
+                pocket.tapped = true;
+            }
+        });
+
         cancelBuildMode();
     }
+}
+
+function checkPipeCollision(pipeSegment, specificPocket) {
+    const pocketsToCheck = specificPocket ? [specificPocket] : oilPockets;
+    for (const pocket of pocketsToCheck) {
+        if (pocket.tapped && !specificPocket) continue;
+
+        const start = pipeSegment.start;
+        const end = pipeSegment.end;
+        const pocketRect = { x: pocket.x, y: pocket.y, width: pocket.width, height: pocket.height };
+
+        if (isLineIntersectingRect(start, end, pocketRect)) {
+            return pocket;
+        }
+    }
+    return null;
 }
 
 // --- Spuštění při načtení stránky ---
