@@ -2,6 +2,7 @@ console.log("script.js: Skript se spustil.");
 
 // --- Discord SDK Setup ---
 // Tento kód je pro novější verzi SDK, která se inicializuje přes URL parametry.
+// Test
 let sdk = null;
 
 async function setupDiscordSdk() {
@@ -13,7 +14,7 @@ async function setupDiscordSdk() {
     try {
         const { participants } = await sdk.commands.getInstanceParticipants();
         console.log("Načteni počáteční hráči:", participants);
-    } catch(e) {
+    } catch (e) {
         console.error("Nepodařilo se načíst účastníky", e);
     }
 }
@@ -188,10 +189,10 @@ function initializeGame() {
 
     // Nastavení rozměrů a generování herních prvků
     generatePlotsAndPockets();
-    
+
     // Připojení posluchačů událostí
     addEventListeners();
-    
+
     // Herní smyčka se nespouští hned, čeká se na koupi pozemku
     // lastTime = performance.now();
     // gameLoop(lastTime);
@@ -365,7 +366,7 @@ function draw() {
     drawOilPockets(groundLevel);
     drawPipeNetworks();
     drawPlots(groundLevel);
-    
+
     plots.forEach(plot => {
         const centerX = plot.x + plotWidth / 2;
         if (plot.hasVrt) {
@@ -375,24 +376,24 @@ function draw() {
         // Kreslení sil
         for (let i = 0; i < plot.siloCount; i++) {
             // Jednoduché posunutí pro více sil, lze vylepšit
-            drawSilo(centerX + 40 + (i * 10), plot.y); 
+            drawSilo(centerX + 40 + (i * 10), plot.y);
         }
     });
-    
+
     // Budovy a UI na plátně
     drawCompanyBuildings(groundLevel);
     drawTrucks();
-    
+
     // Vrstva země nad ostatními prvky
     ctx.fillStyle = '#8B4513';
     ctx.fillRect(0, groundLevel, canvas.width, 10);
 
     // Kreslení dočasných efektů a náhledů
     drawEffectsAndPreviews(groundLevel);
-    
+
     // Aktualizace HTML UI
     updateUI();
-    
+
     // Pauza overlay
     if (isPaused) drawPauseScreen();
 
@@ -406,11 +407,11 @@ function draw() {
 function updateUI() {
     // Peníze
     document.getElementById('money-value').textContent = Math.floor(money);
-    
+
     // Kalendář
     document.getElementById('month').textContent = monthNames[month];
     document.getElementById('day').textContent = day;
-    
+
     // Tlačítka
     const buttons = [
         { el: document.getElementById('vrt-btn'), cost: VRT_COST, mode: 'vrt' },
@@ -423,7 +424,7 @@ function updateUI() {
 
     buttons.forEach(item => {
         if (!item.el) return;
-        
+
         let isDisabled = money < item.cost;
         if (item.isTruck) isDisabled = isDisabled || trucksOwned >= MAX_TRUCKS;
         if (item.mode === 'silo') {
@@ -434,11 +435,11 @@ function updateUI() {
         if (item.needsOwnedPlot) isDisabled = isDisabled || !plots.some(p => p.owner === 'player');
         item.el.disabled = isDisabled;
 
-        if(item.isTruck) {
+        if (item.isTruck) {
             const priceEl = item.el.querySelector('.price');
-            if(priceEl) priceEl.textContent = `$${item.cost} (${trucksOwned})`;
+            if (priceEl) priceEl.textContent = `$${item.cost} (${trucksOwned})`;
         }
-        
+
         if (item.mode) {
             item.el.classList.toggle('active-build-mode', currentBuildMode === item.mode);
         }
@@ -573,7 +574,7 @@ function getCanvasPosition(event) {
 
 function isPointInRect(point, rect) {
     return point.x >= rect.x && point.x <= rect.x + rect.width &&
-           point.y >= rect.y && point.y <= rect.y + rect.height;
+        point.y >= rect.y && point.y <= rect.y + rect.height;
 }
 
 function getPlotAtX(x) {
@@ -747,7 +748,7 @@ function drawOilPockets(groundLevel) {
             ctx.closePath();
             ctx.fill();
         }
-        
+
         // Zobrazit plné ložisko jen pokud bylo zasaženo
         if (DEV || pocket.tapped) {
             ctx.beginPath();
@@ -853,7 +854,7 @@ function drawPipeNetworks() {
 
 function drawCompanyBuildings(groundLevel) {
     const bWidth = 100, bHeight = 100;
-    
+
     // Levá firma
     const leftBaseY = groundLevel - bHeight;
     ctx.fillStyle = '#A9C7D9';
@@ -861,44 +862,44 @@ function drawCompanyBuildings(groundLevel) {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
     ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('LEFT INC', bWidth/2, leftBaseY + 20);
-    
+    ctx.fillText('LEFT INC', bWidth / 2, leftBaseY + 20);
+
     // Pravá firma
     const rightBaseX = canvas.width - bWidth;
     ctx.fillStyle = '#D2A679';
     ctx.fillRect(rightBaseX, groundLevel - bHeight, bWidth, bHeight);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.fillText('RIGHT INC', rightBaseX + bWidth/2, leftBaseY + 20);
+    ctx.fillText('RIGHT INC', rightBaseX + bWidth / 2, leftBaseY + 20);
 
     // Ceny
     ctx.fillStyle = '#5C4033';
     ctx.font = 'bold 20px "Courier New", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`$${leftIncPrice.toFixed(2)}`, bWidth/2, leftBaseY - 15);
-    ctx.fillText(`$${rightIncPrice.toFixed(2)}`, rightBaseX + bWidth/2, leftBaseY - 15);
+    ctx.fillText(`$${leftIncPrice.toFixed(2)}`, bWidth / 2, leftBaseY - 15);
+    ctx.fillText(`$${rightIncPrice.toFixed(2)}`, rightBaseX + bWidth / 2, leftBaseY - 15);
 
     ctx.font = '16px sans-serif';
     ctx.fillStyle = leftPriceTrend >= 0 ? '#2ecc71' : '#e74c3c';
-    ctx.fillText(leftPriceTrend >= 0 ? '▲' : '▼', bWidth/2, leftBaseY - 35);
+    ctx.fillText(leftPriceTrend >= 0 ? '▲' : '▼', bWidth / 2, leftBaseY - 35);
     ctx.fillStyle = rightPriceTrend >= 0 ? '#2ecc71' : '#e74c3c';
-    ctx.fillText(rightPriceTrend >= 0 ? '▲' : '▼', rightBaseX + bWidth/2, leftBaseY - 35);
+    ctx.fillText(rightPriceTrend >= 0 ? '▲' : '▼', rightBaseX + bWidth / 2, leftBaseY - 35);
 
     // Výpočet pro centrování šipek a čísla
     const arrowSize = 25;
     const spacing = 70; // vzdálenost mezi horní a dolní šipkou
     const centerY = groundLevel - bHeight - 60 - 50; // posun šipek přesně o 50px výše
-    
-    // Horní šipka
-    companyControls.leftUp = { x: 37, y: centerY - spacing/2, width: arrowSize, height: arrowSize };
-    // Dolní šipka
-    companyControls.leftDown = { x: 37, y: centerY + spacing/2, width: arrowSize, height: arrowSize };
-    // Číslo (nula) přesně mezi šipkami
-    companyControls.leftTrucks = { x: 37, y: centerY - arrowSize/2, width: arrowSize, height: 35 };
 
-    companyControls.rightUp = { x: canvas.width - 37 - arrowSize, y: centerY - spacing/2, width: arrowSize, height: arrowSize };
-    companyControls.rightDown = { x: canvas.width - 37 - arrowSize, y: centerY + spacing/2, width: arrowSize, height: arrowSize };
-    companyControls.rightTrucks = { x: canvas.width - 37 - arrowSize, y: centerY - arrowSize/2, width: arrowSize, height: 35 };
-    
+    // Horní šipka
+    companyControls.leftUp = { x: 37, y: centerY - spacing / 2, width: arrowSize, height: arrowSize };
+    // Dolní šipka
+    companyControls.leftDown = { x: 37, y: centerY + spacing / 2, width: arrowSize, height: arrowSize };
+    // Číslo (nula) přesně mezi šipkami
+    companyControls.leftTrucks = { x: 37, y: centerY - arrowSize / 2, width: arrowSize, height: 35 };
+
+    companyControls.rightUp = { x: canvas.width - 37 - arrowSize, y: centerY - spacing / 2, width: arrowSize, height: arrowSize };
+    companyControls.rightDown = { x: canvas.width - 37 - arrowSize, y: centerY + spacing / 2, width: arrowSize, height: arrowSize };
+    companyControls.rightTrucks = { x: canvas.width - 37 - arrowSize, y: centerY - arrowSize / 2, width: arrowSize, height: 35 };
+
     drawArrowButton(companyControls.leftUp, true);
     drawArrowButton(companyControls.leftDown, false);
     drawArrowButton(companyControls.rightUp, true);
@@ -908,8 +909,8 @@ function drawCompanyBuildings(groundLevel) {
     ctx.fillStyle = 'white';
     ctx.textAlign = 'center';
     // Y-pozice čísla bude přesně mezi šipkami
-    ctx.fillText(trucksAssignedLeft, companyControls.leftTrucks.x + arrowSize/2, centerY + 8);
-    ctx.fillText(trucksAssignedRight, companyControls.rightTrucks.x + arrowSize/2, centerY + 8);
+    ctx.fillText(trucksAssignedLeft, companyControls.leftTrucks.x + arrowSize / 2, centerY + 8);
+    ctx.fillText(trucksAssignedRight, companyControls.rightTrucks.x + arrowSize / 2, centerY + 8);
 }
 
 function drawArrowButton(rect, isUp) {
@@ -1023,7 +1024,7 @@ function drawEffectsAndPreviews(groundLevel) {
     if (canvas.style.cursor !== newCursor) {
         canvas.style.cursor = newCursor;
     }
-    
+
     // Kreslení dočasných efektů (šipky, atd.)
     temporaryEffects.forEach(effect => {
         if (effect.type === 'arrow' || effect.type === 'dowser') {
@@ -1226,10 +1227,10 @@ function isLineIntersectingRect(p1, p2, rect) {
         return true;
     }
     // Kontrola průsečíků se všemi čtyřmi stranami obdélníku
-    return lineIntersectsLine(p1, p2, {x: rect.x, y: rect.y}, {x: rect.x + rect.width, y: rect.y}) ||
-           lineIntersectsLine(p1, p2, {x: rect.x + rect.width, y: rect.y}, {x: rect.x + rect.width, y: rect.y + rect.height}) ||
-           lineIntersectsLine(p1, p2, {x: rect.x + rect.width, y: rect.y + rect.height}, {x: rect.x, y: rect.y + rect.height}) ||
-           lineIntersectsLine(p1, p2, {x: rect.x, y: rect.y + rect.height}, {x: rect.x, y: rect.y});
+    return lineIntersectsLine(p1, p2, { x: rect.x, y: rect.y }, { x: rect.x + rect.width, y: rect.y }) ||
+        lineIntersectsLine(p1, p2, { x: rect.x + rect.width, y: rect.y }, { x: rect.x + rect.width, y: rect.y + rect.height }) ||
+        lineIntersectsLine(p1, p2, { x: rect.x + rect.width, y: rect.y + rect.height }, { x: rect.x, y: rect.y + rect.height }) ||
+        lineIntersectsLine(p1, p2, { x: rect.x, y: rect.y + rect.height }, { x: rect.x, y: rect.y });
 }
 
 function lineIntersectsLine(l1p1, l1p2, l2p1, l2p2) {
@@ -1312,7 +1313,7 @@ function addEventListeners() {
             updateUI();
         }
     });
-    
+
     document.getElementById('dowser-btn').addEventListener('click', () => {
         const ownedPlot = getOwnedPlotForTool(mousePos.x);
         if (money >= DOWSER_COST && ownedPlot) {
@@ -1335,15 +1336,15 @@ function addEventListeners() {
         if (money >= MOLE_COST) {
             currentBuildMode = (currentBuildMode === 'mole') ? null : 'mole';
             if (currentBuildMode === 'mole') {
-                 moleState.active = true;
-                 moleState.startPoint = null;
+                moleState.active = true;
+                moleState.startPoint = null;
             } else {
-                 cancelBuildMode();
+                cancelBuildMode();
             }
             updateUI();
         }
     });
-    
+
     // Ovládání času
     document.getElementById('pause-btn').addEventListener('click', () => isPaused = !isPaused);
     document.getElementById('speed-btn').addEventListener('click', () => {
@@ -1576,10 +1577,10 @@ function checkPipeCollision(pipeSegment, specificPocket) {
 // --- Spuštění při načtení stránky ---
 document.addEventListener('DOMContentLoaded', () => {
     console.log("script.js: DOMContentLoaded event nastal.");
-    
+
     // Rozlišení mezi lokálním vývojem a produkcí (Discord)
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    
+
     if (isLocal) {
         console.log("Běží v lokálním režimu. SDK se neaktivuje.");
         loadImages(); // V lokálním režimu rovnou načítáme
