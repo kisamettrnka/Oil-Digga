@@ -430,11 +430,10 @@ function draw() {
 
     // Budovy a UI na plátně
     drawCompanyBuildings(groundLevel);
-    drawTrucks();
 
-    // Vrstva země nad ostatními prvky
-    ctx.fillStyle = '#8B4513';
-    ctx.fillRect(0, groundLevel, canvas.width, 10);
+    // Silnice nad zemí, po ní jezdí auta
+    drawRoad(groundLevel);
+    drawTrucks(groundLevel);
 
     // Kreslení dočasných efektů a náhledů
     drawEffectsAndPreviews(groundLevel);
@@ -813,7 +812,7 @@ function drawDerrick(x, y, plotId, isPumping, network) {
         ctx.shadowBlur = 15;
     }
     if (derrickImage && derrickImage.complete && derrickImage.naturalWidth > 0) {
-        ctx.drawImage(derrickImage, -derrickWidth / 2, -derrickHeight, derrickWidth, derrickHeight);
+        drawSprite(derrickImage, 0, 0, 100, derrickHeight);
     } else {
         ctx.fillStyle = '#8B4513';
         ctx.fillRect(-derrickWidth / 2, -derrickHeight, derrickWidth, derrickHeight);
@@ -849,10 +848,51 @@ function drawDerrick(x, y, plotId, isPumping, network) {
     ctx.restore();
 }
 
+// Ikony jsou čtverce 512×512 s průhledným okrajem. Oříznout na obsah a zachovat poměr stran,
+// jinak se do nečtvercového boxu natáhnou (zploštěná auta, protažená sila).
+const spriteBoundsCache = new WeakMap();
+
+function getSpriteBounds(img) {
+    if (spriteBoundsCache.has(img)) return spriteBoundsCache.get(img);
+    let bounds = { sx: 0, sy: 0, sw: img.naturalWidth, sh: img.naturalHeight };
+    try {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const cctx = c.getContext('2d');
+        cctx.drawImage(img, 0, 0);
+        const data = cctx.getImageData(0, 0, c.width, c.height).data;
+        let minX = c.width, minY = c.height, maxX = -1, maxY = -1;
+        for (let py = 0; py < c.height; py++) {
+            for (let px = 0; px < c.width; px++) {
+                if (data[(py * c.width + px) * 4 + 3] > 16) {
+                    if (px < minX) minX = px;
+                    if (px > maxX) maxX = px;
+                    if (py < minY) minY = py;
+                    if (py > maxY) maxY = py;
+                }
+            }
+        }
+        if (maxX >= 0) bounds = { sx: minX, sy: minY, sw: maxX - minX + 1, sh: maxY - minY + 1 };
+    } catch (e) {
+        // Canvas nelze přečíst (jiný origin): použije se celý obrázek
+    }
+    spriteBoundsCache.set(img, bounds);
+    return bounds;
+}
+
+// Vykreslí obsah ikony do boxu maxW×maxH, vystředěný na centerX, spodní hranou na bottomY
+function drawSprite(img, centerX, bottomY, maxW, maxH) {
+    const b = getSpriteBounds(img);
+    const scale = Math.min(maxW / b.sw, maxH / b.sh);
+    const w = b.sw * scale, h = b.sh * scale;
+    ctx.drawImage(img, b.sx, b.sy, b.sw, b.sh, centerX - w / 2, bottomY - h, w, h);
+}
+
 function drawSilo(x, y) {
     const siloWidth = 60, siloHeight = 80;
     if (siloImage && siloImage.complete && siloImage.naturalWidth > 0) {
-        ctx.drawImage(siloImage, x - siloWidth / 2, y - siloHeight, siloWidth, siloHeight);
+        drawSprite(siloImage, x, y, 70, 70);
     } else {
         // fallback: šedý válec
         ctx.save();
@@ -908,6 +948,19 @@ function drawCompanyBuildings(groundLevel) {
     ctx.fillRect(rightBaseX, groundLevel - bHeight, bWidth, bHeight);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
     ctx.fillText('RIGHT INC', rightBaseX + bWidth / 2, leftBaseY + 20);
+
+    // Kolik aut právě jezdí k dané firmě
+    const driving = { left: 0, right: 0 };
+    trucks.forEach(t => {
+        if (t.state !== 'idle' && driving[t.targetCompany] !== undefined) driving[t.targetCompany]++;
+    });
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillStyle = '#1F2D3A';
+    ctx.fillText(`${driving.left}`, bWidth / 2, leftBaseY + 56);
+    ctx.fillText(`${driving.right}`, rightBaseX + bWidth / 2, leftBaseY + 56);
+    ctx.font = '12px sans-serif';
+    ctx.fillText('aut jezdí', bWidth / 2, leftBaseY + 74);
+    ctx.fillText('aut jezdí', rightBaseX + bWidth / 2, leftBaseY + 74);
 
     // Ceny
     ctx.fillStyle = '#5C4033';
@@ -977,19 +1030,123 @@ function drawArrowButton(rect, isUp) {
     ctx.restore();
 }
 
-function drawTrucks() {
-    trucks.forEach(truck => {
-        if (truck.state === 'idle') return;
-        const truckY = Math.floor(canvas.height / 3) - 40;
-        if (truckImage && truckImage.complete && truckImage.naturalWidth > 0) {
-            ctx.drawImage(truckImage, truck.x - 40, truckY, 80, 40);
-        } else {
-            // fallback: modrý obdélník
-            ctx.save();
-            ctx.fillStyle = '#1976D2';
-            ctx.fillRect(truck.x - 40, truckY, 80, 40);
-            ctx.restore();
+// --- Silnice a auta ---
+const ROAD_HEIGHT = 16;
+const TRUCK_LENGTH = 76;
+const TRUCK_COLORS = { left: '#4F86B5', right: '#C77D2E' }; // laditěné k budovám firem
+
+function drawRoad(groundLevel) {
+    ctx.fillStyle = '#4A4A4A';
+    ctx.fillRect(0, groundLevel, canvas.width, ROAD_HEIGHT);
+    ctx.fillStyle = '#8B4513'; // hrana mezi zemí a silnicí
+    ctx.fillRect(0, groundLevel, canvas.width, 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.fillRect(0, groundLevel + ROAD_HEIGHT - 3, canvas.width, 3);
+}
+
+function pathRoundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else ctx.rect(x, y, w, h);
+}
+
+// Cisterna, kabina vpravo. facing = -1 ji zrcadlí (jede doleva). loadRatio 0–1 = hladina v okénku.
+function drawTankerTruck(x, baseY, facing, color, loadRatio) {
+    ctx.save();
+    ctx.translate(x, baseY);
+    ctx.scale(facing, 1);
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)'; // stín
+    ctx.beginPath();
+    ctx.ellipse(0, 1, 40, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#2B2B2B'; // podvozek
+    ctx.fillRect(-38, -13, 76, 5);
+
+    // cisterna
+    pathRoundRect(-38, -33, 50, 21, 9);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.fillRect(-32, -30, 38, 3);
+    ctx.fillStyle = '#2B2B2B'; // poklopy
+    ctx.fillRect(-28, -36, 8, 3);
+    ctx.fillRect(-6, -36, 8, 3);
+
+    // okénko s hladinou ropy
+    ctx.fillStyle = '#E9E4D3';
+    ctx.fillRect(-30, -24, 32, 7);
+    if (loadRatio > 0) {
+        ctx.fillStyle = '#111111';
+        ctx.fillRect(-30, -24, 32 * Math.min(1, loadRatio), 7);
+    }
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-30, -24, 32, 7);
+
+    // kabina
+    ctx.beginPath();
+    ctx.moveTo(14, -12);
+    ctx.lineTo(14, -29);
+    ctx.lineTo(30, -29);
+    ctx.lineTo(38, -19);
+    ctx.lineTo(38, -12);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.beginPath(); // okno
+    ctx.moveTo(19, -26);
+    ctx.lineTo(28, -26);
+    ctx.lineTo(34, -19);
+    ctx.lineTo(19, -19);
+    ctx.closePath();
+    ctx.fillStyle = '#BFE3F5';
+    ctx.fill();
+    ctx.fillStyle = '#FFE680'; // světlo
+    ctx.fillRect(36, -17, 2, 3);
+
+    // kola
+    [-27, -11, 27].forEach(wx => {
+        ctx.fillStyle = '#1B1B1B';
+        ctx.beginPath();
+        ctx.arc(wx, -6, 6.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#9A9A9A';
+        ctx.beginPath();
+        ctx.arc(wx, -6, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.restore();
+}
+
+function drawTrucks(groundLevel) {
+    // Čekající auta u vrtu se řadí za sebe, ať nejsou na jedné hromadě
+    const queueCount = {};
+    const items = trucks.filter(t => t.state !== 'idle').map(truck => {
+        const facing = truck.facing || 1;
+        let renderX = truck.x;
+        if (truck.state === 'waiting_at_rig') {
+            const n = queueCount[truck.homeNetworkId] || 0;
+            queueCount[truck.homeNetworkId] = n + 1;
+            renderX -= facing * n * (TRUCK_LENGTH + 8);
         }
+        // Dva pruhy podle směru jízdy: doprava dole, doleva nahoře
+        return { truck, facing, renderX, lane: facing > 0 ? 1 : 0 };
+    });
+
+    items.sort((a, b) => a.lane - b.lane); // vzdálenější pruh se kreslí první
+    items.forEach(({ truck, facing, renderX, lane }) => {
+        const color = TRUCK_COLORS[truck.targetCompany] || '#777777';
+        drawTankerTruck(renderX, groundLevel + 7 + lane * 7, facing, color, truck.oil / TRUCK_CAPACITY);
     });
 }
 
@@ -1172,16 +1329,24 @@ function pickCompanyForTruck(activeLeft, activeRight) {
     return pickBestCompany();
 }
 
-function findNetworkForNewTruck() {
-    const active = pipeNetworks.filter(n => n.derrickId >= 0 && n.isPumping);
-    if (active.length === 0) return null;
-
-    return active.sort((a, b) => {
-        const trucksA = trucks.filter(t => t.homeNetworkId === a.id && t.state !== 'idle').length;
-        const trucksB = trucks.filter(t => t.homeNetworkId === b.id && t.state !== 'idle').length;
-        if (trucksA !== trucksB) return trucksA - trucksB;
-        return b.oilStored - a.oilStored;
-    })[0];
+// Vybere vrt pro další jízdu kamionu. Preferuje vrt s nejvíc ropou, penalizuje vrty, kam už
+// jiná auta jedou (rozloží se mezi doly) a vzdálenost od kamionu. Volá se před každou jízdou,
+// takže nový vrt začnou obsluhovat i auta, která už jezdí.
+function findNetworkForTruck(truck) {
+    let best = null;
+    let bestScore = -Infinity;
+    pipeNetworks.forEach(network => {
+        if (network.derrickId < 0 || !network.isPumping) return;
+        const claimed = trucks.filter(t => t !== truck && t.homeNetworkId === network.id &&
+            (t.state === 'to_rig' || t.state === 'waiting_at_rig')).length;
+        const distance = Math.abs(getNetworkPickupX(network) - truck.x);
+        const score = network.oilStored - claimed * TRUCK_CAPACITY - distance * 0.01;
+        if (score > bestScore) {
+            bestScore = score;
+            best = network;
+        }
+    });
+    return best;
 }
 
 function tryLoadTruckAtRig(truck, network) {
@@ -1206,7 +1371,7 @@ function chooseCompanyFor(truck) {
 }
 
 function dispatchIdleTruck(truck) {
-    const network = findNetworkForNewTruck();
+    const network = findNetworkForTruck(truck);
     if (!network) return false;
 
     truck.homeNetworkId = network.id;
@@ -1219,6 +1384,7 @@ function dispatchIdleTruck(truck) {
 // Posune kamion k cíli o nejvýš `step` pixelů. Vrací true, když dorazil (bez přeskoku cíle).
 function moveTruckToward(truck, targetX, step) {
     const distance = targetX - truck.x;
+    if (distance !== 0) truck.facing = Math.sign(distance); // kreslení otáčí auto podle směru jízdy
     if (Math.abs(distance) <= step) {
         truck.x = targetX;
         return true;
@@ -1248,6 +1414,13 @@ function updateTrucks(dt) {
                 if (tryLoadTruckAtRig(truck, network)) {
                     truck.targetCompany = chooseCompanyFor(truck);
                     truck.state = 'to_company';
+                } else {
+                    // Tento vrt nemá co naložit: přejeď k jinému, který ropu má
+                    const other = findNetworkForTruck(truck);
+                    if (other && other.id !== network.id && other.oilStored >= MIN_LOAD_AMOUNT) {
+                        truck.homeNetworkId = other.id;
+                        truck.state = 'to_rig';
+                    }
                 }
                 break;
             }
@@ -1278,7 +1451,15 @@ function updateTrucks(dt) {
                     totalRevenue += sale;
                     totalOilSold += truck.oil;
                     truck.oil = 0;
-                    truck.state = 'to_rig';
+                    // Další jízda: vrt se vybírá znovu (nový nebo plnější vrt)
+                    const nextNetwork = findNetworkForTruck(truck);
+                    if (nextNetwork) {
+                        truck.homeNetworkId = nextNetwork.id;
+                        truck.state = 'to_rig';
+                    } else {
+                        truck.state = 'idle';
+                        truck.homeNetworkId = null;
+                    }
                 }
                 break;
             }
@@ -1384,7 +1565,7 @@ function addEventListeners() {
         if (money >= TRUCK_COST && trucksOwned < MAX_TRUCKS) {
             money -= TRUCK_COST;
             trucksOwned++;
-            trucks.push({ x: -50, y: 0, state: 'idle', homeNetworkId: null, targetCompany: null, oil: 0 });
+            trucks.push({ x: -50, y: 0, state: 'idle', homeNetworkId: null, targetCompany: null, oil: 0, facing: 1 });
             updateUI();
         }
     });
