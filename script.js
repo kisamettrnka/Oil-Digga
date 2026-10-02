@@ -1,5 +1,11 @@
 console.log("script.js: Skript se spustil.");
 
+// Anti-cache: index.html nastaví window.ASSET_VERSION při každém načtení a přidá ji ke všem souborům
+// (?v=...), aby Discord ani prohlížeč nedržely starou verzi hry.
+function assetUrl(path) {
+    return window.ASSET_VERSION ? `${path}?v=${window.ASSET_VERSION}` : path;
+}
+
 // --- Discord SDK Setup ---
 // Tento kód je pro novější verzi SDK, která se inicializuje přes URL parametry.
 // Test
@@ -150,32 +156,32 @@ function loadImages() {
     derrickImage = new window.Image();
     derrickImage.onload = imageLoaded;
     derrickImage.onerror = imageFailed;
-    derrickImage.src = 'img/oil-tower.png';
+    derrickImage.src = assetUrl('img/oil-tower.png');
 
     siloImage = new window.Image();
     siloImage.onload = imageLoaded;
     siloImage.onerror = imageFailed;
-    siloImage.src = 'img/tank.png';
+    siloImage.src = assetUrl('img/tank.png');
 
     truckImage = new window.Image();
     truckImage.onload = imageLoaded;
     truckImage.onerror = imageFailed;
-    truckImage.src = 'img/tanker.png';
+    truckImage.src = assetUrl('img/tanker.png');
 
     dowserImage = new window.Image();
     dowserImage.onload = imageLoaded;
     dowserImage.onerror = imageFailed;
-    dowserImage.src = 'img/divining rod.png';
+    dowserImage.src = assetUrl('img/divining rod.png');
 
     scannerImage = new window.Image();
     scannerImage.onload = imageLoaded;
     scannerImage.onerror = imageFailed;
-    scannerImage.src = 'img/binocular.png';
+    scannerImage.src = assetUrl('img/binocular.png');
 
     moleImage = new window.Image();
     moleImage.onload = imageLoaded;
     moleImage.onerror = imageFailed;
-    moleImage.src = 'img/mole.png';
+    moleImage.src = assetUrl('img/mole.png');
 }
 
 

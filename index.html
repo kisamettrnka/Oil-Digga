@@ -5,11 +5,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oil digga</title>
-    <link rel="icon" type="image/png" href="img/oil-tower.png">
+    <!-- Anti-cache: ať Discord ani prohlížeč nedrží starou verzi hry -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Rye&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <script>
+        // Každé načtení dostane novou verzi souborů (?v=...), script.js ji čte přes assetUrl()
+        window.ASSET_VERSION = Date.now();
+        document.write('<link rel="icon" type="image/png" href="img/oil-tower.png?v=' + window.ASSET_VERSION + '">');
+        document.write('<link rel="stylesheet" href="style.css?v=' + window.ASSET_VERSION + '">');
+    </script>
+    <noscript><link rel="stylesheet" href="style.css"></noscript>
     <!-- Discord Embedded App SDK -->
     <script src="https://discord.com/assets/embedded-app-sdk.js"></script>
 </head>
@@ -36,15 +45,15 @@
                 <!-- Panel s nástroji vlevo od peněz -->
                 <div class="tools-group menu-group">
                     <button id="dowser-btn" class="menu-btn-square">
-                        <div class="icon"><img src="img/divining rod.png" alt="Proutkař"></div>
+                        <div class="icon"><img data-src="img/divining rod.png" alt="Proutkař"></div>
                         <div class="price">$100</div>
                     </button>
                     <button id="scanner-btn" class="menu-btn-square">
-                        <div class="icon"><img src="img/binocular.png" alt="Scanner"></div>
+                        <div class="icon"><img data-src="img/binocular.png" alt="Scanner"></div>
                         <div class="price">$500</div>
                     </button>
                     <button id="mole-btn" class="menu-btn-square">
-                        <div class="icon"><img src="img/mole.png" alt="Krtek"></div>
+                        <div class="icon"><img data-src="img/mole.png" alt="Krtek"></div>
                         <div class="price">$300</div>
                     </button>
                 </div>
@@ -57,15 +66,15 @@
                 <!-- Pravá část: Nákupy budov -->
                 <div class="buildings-group menu-group">
                     <button id="vrt-btn" class="menu-btn-square">
-                        <div class="icon"><img src="img/oil-tower.png" alt="Vrt"></div>
+                        <div class="icon"><img data-src="img/oil-tower.png" alt="Vrt"></div>
                         <div class="price">$350</div>
                     </button>
                     <button id="silo-btn" class="menu-btn-square">
-                        <div class="icon"><img src="img/tank.png" alt="Silo"></div>
+                        <div class="icon"><img data-src="img/tank.png" alt="Silo"></div>
                         <div class="price">$250</div>
                     </button>
                     <button id="truck-btn" class="menu-btn-square">
-                        <div class="icon"><img src="img/tanker.png" alt="Kamion"></div>
+                        <div class="icon"><img data-src="img/tanker.png" alt="Kamion"></div>
                         <div class="price">$150 (0)</div>
                     </button>
                 </div>
@@ -78,7 +87,13 @@
             </div>
         </div>
     </div>
-    <script src="script.js"></script>
+    <script>
+        // Ikony tlačítek a hlavní skript se verzují stejně jako CSS
+        document.querySelectorAll('img[data-src]').forEach(function (img) {
+            img.src = img.dataset.src + '?v=' + window.ASSET_VERSION;
+        });
+        document.write('<script src="script.js?v=' + window.ASSET_VERSION + '"><\/script>');
+    </script>
 </body>
 
 </html>
