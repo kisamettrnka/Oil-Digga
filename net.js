@@ -527,9 +527,16 @@ const Net = (() => {
 
     document.addEventListener('DOMContentLoaded', start);
 
+    // Odkaz ven: Discord iframe nepustí window.open, musí přes SDK
+    function openLink(url) {
+        if (sdk) sdk.commands.openExternalLink({ url }).catch(() => { });
+        else window.open(url, '_blank', 'noopener');
+    }
+
     return {
         isRacing: () => !!raceMode,
         mode: () => mode,
-        sendAction
+        sendAction,
+        openLink
     };
 })();

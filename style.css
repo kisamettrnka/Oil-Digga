@@ -912,6 +912,61 @@ button:disabled {
     margin-bottom: 0.25em;
 }
 
+/* Rámečkový inzerát: dvojitá linka, titulek ve stylu dobového plakátu, adresa razítkem */
+.np-ad {
+    display: block;
+    margin: 0.7em auto 0;
+    width: min(100%, 22em);
+    padding: 0.35em 0.7em 0.45em;
+    border: 3px double var(--ink);
+    outline: 1px solid var(--ink);
+    outline-offset: -0.3em;
+    text-align: center;
+    color: var(--ink);
+    text-decoration: none;
+    font-family: 'Courier Prime', monospace;
+    font-size: 0.8em;
+    line-height: 1.3;
+    transform: rotate(0.4deg);
+}
+.np-ad-kicker {
+    display: block;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    font-size: 0.75em;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    opacity: 0.7;
+}
+.np-ad b {
+    display: block;
+    font-family: 'Rye', Georgia, serif;
+    font-size: 1.5em;
+    line-height: 1.1;
+    margin: 0.1em 0 0.2em;
+}
+.np-ad i {
+    display: inline-block;
+    margin-top: 0.3em;
+    padding: 0 0.5em;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-style: normal;
+    font-weight: 800;
+    font-size: 1.25em;
+    letter-spacing: 0.08em;
+    color: var(--stamp-red);
+    border: 2px solid var(--stamp-red);
+    border-radius: 0.15em;
+    transform: rotate(-2deg);
+}
+.results-paper .np-ad {
+    margin-bottom: 0.9em;
+}
+.results-paper .np-ad:hover i {
+    background: var(--stamp-red);
+    color: var(--paper);
+}
+
 #news-flash {
     position: absolute;
     top: 12%;

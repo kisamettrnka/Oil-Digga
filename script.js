@@ -768,12 +768,14 @@ function drawBlimpBanner(ax, ay, t) {
         ctx.fillText(text[i], cx, ay + 1 + wave((x0 - cx - cw / 2) / w));
         cx += cw;
     }
-    // Lišta s lampami pod plátnem
+    // Šňůra s lampami kopíruje spodní okraj plátna, na kterém visí
     ctx.strokeStyle = '#15151f';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(x0 + 2, ay + h / 2 + 3 + wave(0));
-    ctx.lineTo(x0 - w - 2, ay + h / 2 + 3 + wave(1));
+    for (let i = 0; i <= segs; i++) {
+        const p = at(i);
+        if (i) ctx.lineTo(p.x, ay + h / 2 + 3 + p.dy); else ctx.moveTo(p.x, ay + h / 2 + 3 + p.dy);
+    }
     ctx.stroke();
     for (const l of lamps) {
         ctx.fillStyle = '#ffe2a8';
@@ -1523,7 +1525,8 @@ function showBreakingNews(e) {
     // Zvláštní vydání novin: hlavička, datum, titulek, článek a "burza" s dopadem
     box.innerHTML = '<div class="np-masthead">Pouštní kurýr</div>' +
         '<div class="np-dateline"><span>Zvláštní vydání</span><span class="np-date"></span><span>Cena 5 centů</span></div>' +
-        '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>';
+        '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>' +
+        newspaperAdHtml();
     box.querySelector('.np-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
     box.querySelector('.np-headline').textContent = e.title;
     box.querySelector('.np-lead').textContent = e.desc;
@@ -1535,6 +1538,14 @@ function showBreakingNews(e) {
     newsFlashTimer = setTimeout(() => box.classList.add('leaving'), NEWS_FLASH_MS);
     playSound('news');
     logEvent(`Zprávy: ${e.title}`);
+}
+
+// Rámečkový inzerát na sesterský projekt; v novinách je to jediná reklama, která do světa patří
+function newspaperAdHtml() {
+    return `<a class="np-ad" href="${AD_URL}" target="_blank" rel="noopener">` +
+        '<span class="np-ad-kicker">Inzerce</span><b>Uhodnete, co to stojí?</b>' +
+        '<span>Zboží všeho druhu, cena tajná, tipuje celá osada. Zábava zdarma, v Čechách i za mořem.</span>' +
+        '<i>priceguessr.eu</i></a>';
 }
 
 // Seznam běžících zpráv pod horní lištou
@@ -4886,6 +4897,12 @@ function cancelBuildMode(clearDerrick = true) {
 function addEventListeners() {
     document.getElementById('hud-rig')?.addEventListener('click', handleRigPanelClick);
     document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
+    // Odkazy z inzerátů: v Discordu musí ven přes SDK, ne přes href
+    document.addEventListener('click', (event) => {
+        if (!event.target.closest?.('a.np-ad')) return;
+        event.preventDefault();
+        openAdLink();
+    });
     // Pohyb myši
     canvas.addEventListener('pointermove', (event) => {
         const pos = getCanvasPosition(event);
