@@ -586,7 +586,11 @@ function drawSkyLife(groundLevel) {
     // Reklamní vzducholoď s vlečným transparentem a světlometem na město
     const blimp = flightProgress(90, 70, 20);
     blimpHitRect = null;
-    if (blimp !== null) drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+    if (blimp === null) blimpAd = undefined;
+    else {
+        if (blimpAd === undefined) blimpAd = pickAd('blimp', 'banner'); // jedna reklama na celý přelet
+        drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+    }
 
     // Netopýři
     const bats = flightProgress(34, 16, 5);
@@ -636,8 +640,10 @@ function drawBlimp(x, y, groundLevel) {
     ctx.fill();
     ctx.restore();
 
-    drawBlimpBanner(x - 80, y + 2, t);
-    blimpHitRect = { x: x - 80 - BLIMP_AD_W - 30, y: y - 26, width: BLIMP_AD_W + 30 + 80 + 76, height: 56 };
+    if (blimpAd) {
+        const w = drawBlimpBanner(x - 80, y + 2, t, blimpAd);
+        blimpHitRect = { x: x - 80 - w - 30, y: y - 26, width: w + 30 + 80 + 76, height: 56 };
+    }
     const body = ctx.createLinearGradient(0, y - 22, 0, y + 22);
     body.addColorStop(0, '#5c5e78');
     body.addColorStop(0.5, '#3a3b52');
@@ -680,15 +686,23 @@ function drawBlimp(x, y, groundLevel) {
 }
 
 // Plátěný transparent na lanech za ocasem, vlní se ve větru a nasvěcují ho lampy na spodní hraně
-const AD_URL = 'https://priceguessr.eu';
-const BLIMP_AD = ['HÁDEJ CENY · ', 'priceguessr.eu'];
-const BLIMP_AD_W = 236;
-function openAdLink() {
-    if (typeof Net !== 'undefined' && Net.openLink) Net.openLink(AD_URL);
-    else window.open(AD_URL, '_blank', 'noopener');
+// Reklamy z ads.js: náhodná reklama, která na dané místo smí a má pro něj text, jinak null
+function pickAd(place, field) {
+    const config = typeof OIL_ADS !== 'undefined' ? OIL_ADS : null;
+    if (!config || !config.enabled || !config.places?.[place]) return null;
+    const ads = (config.ads || []).filter(ad => ad.url && ad[field]);
+    return ads.length ? ads[Math.floor(Math.random() * ads.length)] : null;
 }
-function drawBlimpBanner(ax, ay, t) {
-    const w = BLIMP_AD_W, h = 26, segs = 28;
+function openAdLink(url) {
+    if (typeof Net !== 'undefined' && Net.openLink) Net.openLink(url);
+    else window.open(url, '_blank', 'noopener');
+}
+// Vrací šířku plátna, ať zásah myší sedí i na delší nebo kratší text
+function drawBlimpBanner(ax, ay, t, ad) {
+    const parts = ad.banner;
+    const text = parts.join('');
+    ctx.font = '700 16px "Barlow Condensed", system-ui, sans-serif';
+    const w = Math.max(120, ctx.measureText(text).width + 68), h = 26, segs = 28;
     const x0 = ax - 24; // přední (pravý) okraj plátna
     const wave = u => Math.sin(t * 3.2 - u * 7) * 4 * (0.2 + u);
     ctx.strokeStyle = 'rgba(16, 14, 22, 0.9)';
@@ -760,11 +774,10 @@ function drawBlimpBanner(ax, ay, t) {
     ctx.font = '700 16px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const text = BLIMP_AD.join('');
     let cx = x0 - w / 2 - ctx.measureText(text).width / 2;
     for (let i = 0; i < text.length; i++) {
         const cw = ctx.measureText(text[i]).width;
-        ctx.fillStyle = i < BLIMP_AD[0].length ? INK : INK_RED;
+        ctx.fillStyle = i < parts[0].length ? INK : INK_RED;
         ctx.fillText(text[i], cx, ay + 1 + wave((x0 - cx - cw / 2) / w));
         cx += cw;
     }
@@ -782,6 +795,7 @@ function drawBlimpBanner(ax, ay, t) {
         ctx.fillRect(l.x - 1.5, l.y + 2, 3, 3);
         drawGlow(l.x, l.y + 3, 9, '255, 190, 110', 0.7);
     }
+    return w;
 }
 
 function drawBiplane(x, y, dir) {
@@ -1526,7 +1540,7 @@ function showBreakingNews(e) {
     box.innerHTML = '<div class="np-masthead">Pouštní kurýr</div>' +
         '<div class="np-dateline"><span>Zvláštní vydání</span><span class="np-date"></span><span>Cena 5 centů</span></div>' +
         '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>' +
-        newspaperAdHtml();
+        newspaperAdHtml(pickAd('breakingNews', 'headline'));
     box.querySelector('.np-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
     box.querySelector('.np-headline').textContent = e.title;
     box.querySelector('.np-lead').textContent = e.desc;
@@ -1540,12 +1554,14 @@ function showBreakingNews(e) {
     logEvent(`Zprávy: ${e.title}`);
 }
 
-// Rámečkový inzerát na sesterský projekt; v novinách je to jediná reklama, která do světa patří
-function newspaperAdHtml() {
-    return `<a class="np-ad" href="${AD_URL}" target="_blank" rel="noopener">` +
-        '<span class="np-ad-kicker">Inzerce</span><b>Uhodnete, co to stojí?</b>' +
-        '<span>Zboží všeho druhu, cena tajná, tipuje celá osada. Zábava zdarma, v Čechách i za mořem.</span>' +
-        '<i>priceguessr.eu</i></a>';
+// Rámečkový inzerát z ads.js; v novinách je to jediná reklama, která do světa patří
+function newspaperAdHtml(ad) {
+    if (!ad) return '';
+    const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
+    return `<a class="np-ad" href="${esc(ad.url)}" target="_blank" rel="noopener">` +
+        `<span class="np-ad-kicker">${esc(ad.kicker || 'Inzerce')}</span><b>${esc(ad.headline)}</b>` +
+        (ad.text ? `<span>${esc(ad.text)}</span>` : '') +
+        (ad.sign ? `<i>${esc(ad.sign)}</i>` : '') + '</a>';
 }
 
 // Seznam běžících zpráv pod horní lištou
@@ -2752,7 +2768,8 @@ function drawGlow(x, y, radius, color, alpha) {
 
 // Přidám globální pole pro hitboxy cedulí
 let plotSignHitboxes = [];
-let blimpHitRect = null; // reklamní vzducholoď (klik otevře odkaz), jen když je na obloze
+let blimpHitRect = null; // reklamní vzducholoď (klik otevře odkaz), jen když je na obloze a nese reklamu
+let blimpAd; // reklama na transparentu; undefined = pro tento přelet ještě nevylosováno, null = bez reklamy
 let plotsHoverPointer = false; // myš je nad cedulí nebo stavitelným pozemkem
 
 const PLOT_SIGN_PAD = 10;
@@ -4899,10 +4916,14 @@ function addEventListeners() {
     document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
     // Odkazy z inzerátů: v Discordu musí ven přes SDK, ne přes href
     document.addEventListener('click', (event) => {
-        if (!event.target.closest?.('a.np-ad')) return;
+        const link = event.target.closest?.('a.np-ad');
+        if (!link) return;
         event.preventDefault();
-        openAdLink();
+        openAdLink(link.getAttribute('href'));
     });
+    // Inzerát na výsledkové straně závodu (z ads.js; prázdné, když je reklama vypnutá)
+    const resultsAd = document.getElementById('results-ad');
+    if (resultsAd) resultsAd.innerHTML = newspaperAdHtml(pickAd('results', 'headline'));
     // Pohyb myši
     canvas.addEventListener('pointermove', (event) => {
         const pos = getCanvasPosition(event);
@@ -5062,8 +5083,8 @@ function handleCanvasClick(event) {
     updatePlotSignHitboxes(groundLevel);
 
     // Reklamní vzducholoď: klik otevře inzerovaný web
-    if (!currentBuildMode && blimpHitRect && isPointInRect(clickPos, blimpHitRect)) {
-        openAdLink();
+    if (!currentBuildMode && blimpHitRect && blimpAd && isPointInRect(clickPos, blimpHitRect)) {
+        openAdLink(blimpAd.url);
         return;
     }
 
