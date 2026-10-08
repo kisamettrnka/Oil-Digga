@@ -6,5 +6,9 @@
       "Read(./discord-sdk-cache/**)",
       "Read(./package-lock.json)"
     ]
+  },
+  "enabledPlugins": {
+    "explanatory-output-style@claude-plugins-official": false,
+    "learning-output-style@claude-plugins-official": false
   }
 }
