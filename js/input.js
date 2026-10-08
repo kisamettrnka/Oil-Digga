@@ -24,6 +24,10 @@ function addEventListeners() {
     document.getElementById('perks-btn')?.addEventListener('click', () => togglePerks());
     document.getElementById('perks-close')?.addEventListener('click', () => togglePerks(false));
     document.getElementById('perks-list')?.addEventListener('click', handlePerksClick);
+    document.getElementById('yearend-again')?.addEventListener('click', () => restartGame());
+    document.getElementById('hud-goals')?.addEventListener('click', event => {
+        if (event.target.closest('#end-year-btn')) doAction({ type: 'endYear' });
+    });
     document.getElementById('hud-guide')?.addEventListener('click', handleGuideClick);
     document.getElementById('map-btn')?.addEventListener('click', () => toggleSurveyMap());
     document.getElementById('map-close')?.addEventListener('click', () => toggleSurveyMap(false));
@@ -188,11 +192,7 @@ function handleCanvasClick(event) {
     }
     const clickPos = getCanvasPosition(event);
 
-    if (isGameOver) {
-        // V závodě se nerestartuje, další kolo spouští hostitel z výsledků (net.js)
-        if (!raceMode && clickPos.inBounds && isPointInRect(clickPos, getRestartButtonRect())) restartGame();
-        return;
-    }
+    if (isGameOver) return; // konec hry řeší noviny (hud.js / net.js)
 
     if (!clickPos.inBounds) return;
     mousePos.x = clickPos.x;

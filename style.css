@@ -1939,3 +1939,102 @@ button:disabled {
     transform: rotate(-6deg);
     opacity: 0.85;
 }
+
+/* --- Výroční vydání: hodnocení roku s hvězdami a grafy --- */
+.yearend-paper {
+    width: min(64em, 94%);
+}
+.yearend-stars {
+    display: flex;
+    justify-content: center;
+    gap: 0.25em;
+    margin: 0.2em 0 0.6em;
+    font-size: 2.2em;
+    color: var(--stamp-red);
+    letter-spacing: 0.1em;
+}
+.yearend-stars .dim {
+    color: rgba(26, 18, 11, 0.25);
+}
+.yearend-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.8em 1.6em;
+}
+.yearend-sub {
+    font: 700 0.8em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-bottom: 1px solid rgba(26, 18, 11, 0.45);
+    margin-bottom: 0.4em;
+}
+.yearend-stats {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.15em 1em;
+    margin: 0;
+    font-family: 'Courier Prime', monospace;
+    font-size: 0.85em;
+}
+.yearend-stats dt {
+    color: var(--ink-soft);
+}
+.yearend-stats dd {
+    margin: 0;
+    font-weight: 700;
+    text-align: right;
+    border-bottom: 1px dotted rgba(26, 18, 11, 0.35);
+}
+.yearend-stats dd.bad {
+    color: var(--stamp-red);
+}
+.yearend-grid canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+@container (max-width: 1200px) {
+    .yearend-grid {
+        grid-template-columns: 1fr;
+    }
+    .yearend-grid canvas {
+        max-height: 9em;
+    }
+}
+
+#hud-goals .goals-score {
+    margin-top: 0.45em;
+    padding-top: 0.3em;
+    border-top: 1px solid rgba(26, 18, 11, 0.35);
+    font: 700 0.85em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    color: var(--stamp-red);
+}
+#hud-goals .goals-score span {
+    color: var(--ink-soft);
+    font-weight: 600;
+}
+#hud-goals .goals-end {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+    margin-top: 0.4em;
+    font-family: 'Courier Prime', monospace;
+    font-size: 0.75em;
+    color: var(--ink-soft);
+}
+#hud-goals .goals-end button {
+    pointer-events: auto;
+    --stamp: var(--stamp-red);
+    padding: 0.15em 0.5em 0.1em;
+    font: 700 1em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    background: rgba(255, 240, 210, 0.12);
+    border: 3px double var(--stamp);
+    border-radius: 0.2em;
+    cursor: pointer;
+}

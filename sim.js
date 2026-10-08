@@ -264,6 +264,8 @@
                 strikeMs: 0,         // podplacená stávka: vozy stojí
                 route: null,         // kupec, ke kterému mají jezdit všechny vozy (null = sám podle ceny)
                 perks: {},           // koupená vylepšení (klíč PERKS -> true)
+                // Statistika pro hodnocení roku a grafy
+                stats: { contractsDone: 0, contractsFailed: 0, blowouts: 0, strikes: 0, revenueBy: {}, moneyHistory: [] },
                 over: false,
                 reason: null
             };
@@ -715,6 +717,7 @@
             case 'acceptContract': return acceptContract(world, player, action.id);
             case 'setRoute': return setRoute(world, player, action.buyer);
             case 'buyPerk': return buyPerk(world, player, action.perk);
+            case 'endYear': return endYear(world, player);
             case 'bid': return placeBid(world, player, action.plotId, action.amount);
             case 'offerDeal': return offerDeal(world, player, action.to, action.oil, action.price);
             case 'acceptDeal': return answerDeal(world, player, action.id, true);
@@ -814,6 +817,39 @@
         return { ok: true };
     }
 
+    // Sólo: v poslední éře města jde rok uzavřít dřív a jít rovnou na hodnocení
+    function endYear(world, player) {
+        if (world.race || world.shared) return fail('race');
+        if ((world.town?.era || 0) < ERAS.length - 1) return fail('era');
+        endAll(world, 'year_end');
+        return { ok: true };
+    }
+
+    // Hodnocení roku: skóre z tržeb, kapitálu, zakázek, dosažené éry a prodané ropy, mínus nehody
+    const RATING_LABELS = ['Hledač štěstí', 'Těžař', 'Ropný podnikatel', 'Magnát', 'Král ropy'];
+    const RATING_STEPS = [15000, 30000, 50000, 75000];
+    function yearRating(world, playerId) {
+        const p = world.players[playerId];
+        if (!p) return null;
+        const st = p.stats || { contractsDone: 0, contractsFailed: 0, blowouts: 0 };
+        const parts = {
+            revenue: Math.round(p.revenue),
+            capital: Math.round(Math.max(0, p.money) * 0.5),
+            contracts: st.contractsDone * 300,
+            town: (world.town?.era || 0) * 1500,
+            oil: Math.round(p.sold * 0.2),
+            penalties: -(st.blowouts * 400 + st.contractsFailed * 300)
+        };
+        const score = Math.max(0, Object.values(parts).reduce((a, b) => a + b, 0));
+        const stars = 1 + RATING_STEPS.filter(s => score >= s).length;
+        return { score, stars, label: RATING_LABELS[stars - 1], parts };
+    }
+
+    function stat(world, playerId, key, delta = 1) {
+        const st = world.players[playerId]?.stats;
+        if (st) st[key] = (st[key] || 0) + delta;
+    }
+
     function hasPerk(world, playerId, perk) {
         return !!world.players[playerId]?.perks?.[perk];
     }
@@ -879,6 +915,7 @@
             player.money += sale;
             player.revenue += sale;
             player.sold += oil;
+            if (player.stats) player.stats.revenueBy[buyer.id] = (player.stats.revenueBy[buyer.id] || 0) + sale;
             buyer.stock += oil;
             growTown(world, oil);
             checkCartelBreach(world, network.owner, buyer.id);
@@ -1264,6 +1301,10 @@
         world.playerOrder.forEach(id => {
             const player = world.players[id];
             if (player.over) return;
+            if (player.stats) {
+                player.stats.moneyHistory.push(Math.round(player.money));
+                if (player.stats.moneyHistory.length > 400) player.stats.moneyHistory.shift();
+            }
             const ownedPlots = world.plots.filter(p => p.owner === id).length;
             player.lastDayIncome = player.revenue - player.revenueAtDayStart - ownedPlots * landTax;
             player.revenueAtDayStart = player.revenue;
@@ -1394,6 +1435,7 @@
                 player.money -= penalty;
                 if (player.money < 0) endPlayer(world, player, 'bankrupt');
             }
+            stat(world, contract.owner, 'contractsFailed');
             emit(world, { type: 'contract_failed', playerId: contract.owner, id: contract.id, buyer: contract.buyer, penalty });
         });
         c.active = c.active.filter(contract => contract.daysLeft > 0);
@@ -1401,14 +1443,16 @@
         if (c.nextInDays > 0 || c.offers.length >= C.MAX_CONTRACT_OFFERS) return;
         const rand = contractRandom(world);
         const buyers = openBuyers(world);
-        c.nextInDays = C.CONTRACT_GAP_MIN + Math.floor(rand() * C.CONTRACT_GAP_RANGE);
+        // Pozdní éry: zakázky chodí častěji a jsou větší, ať má konec roku tah
+        const late = (world.town?.era || 0) >= ERAS.length - 1;
+        c.nextInDays = (late ? 3 : C.CONTRACT_GAP_MIN) + Math.floor(rand() * C.CONTRACT_GAP_RANGE);
         if (!buyers.length) return;
         const buyer = buyers[Math.floor(rand() * buyers.length)];
         const days = 6 + Math.floor(rand() * 5);
         const offer = {
             id: c.nextId++,
             buyer: buyer.id,
-            amount: Math.max(100, Math.round(buyer.demand * (2.5 + rand() * 2.5) / 50) * 50),
+            amount: Math.max(100, Math.round(buyer.demand * (2.5 + rand() * 2.5) * (late ? 1.6 : 1) / 50) * 50),
             price: Math.round(buyer.base * (1.3 + rand() * 0.25) * 100) / 100,
             days,
             expiresIn: C.CONTRACT_OFFER_DAYS
@@ -1425,6 +1469,7 @@
         contract.delivered += part;
         if (contract.delivered >= contract.amount - 0.01) {
             world.contracts.active = world.contracts.active.filter(a => a !== contract);
+            stat(world, playerId, 'contractsDone');
             emit(world, { type: 'contract_done', playerId, id: contract.id, buyer: buyerId, amount: contract.amount });
         }
         return { paid: part * contract.price, part };
@@ -1513,6 +1558,7 @@
             network.isPumping = pocket.oil > 0;
             network.drillState = 'done';
             if (!pocket.tappedBy.includes(player.id)) pocket.tappedBy.push(player.id);
+            stat(world, player.id, 'strikes');
             emit(world, { type: 'strike', playerId: player.id, plotId: network.derrickId, oil: Math.floor(pocket.oil), x: network.path[0].x });
             return;
         }
@@ -1531,6 +1577,7 @@
         network.blowout = C.BLOWOUT_MS;
         network.bit = 0;
         network.drillState = 'worn';
+        stat(world, player.id, 'blowouts');
         emit(world, { type: 'blowout', playerId: player.id, plotId: network.derrickId, fine, kick: true });
     }
 
@@ -1629,6 +1676,7 @@
                 const player = world.players[network.owner];
                 const fine = getBlowoutFine(world);
                 if (player) player.money -= fine;
+                stat(world, network.owner, 'blowouts');
                 emit(world, { type: 'blowout', playerId: network.owner, plotId: network.derrickId, fine });
             }
         });
@@ -1754,6 +1802,7 @@
             player.money += sale;
             player.revenue += sale;
             player.sold += truck.oil;
+            if (player.stats) player.stats.revenueBy[buyer.id] = (player.stats.revenueBy[buyer.id] || 0) + sale;
         }
         emit(world, { type: 'sale', playerId: truck.owner, amount: Math.round(sale), x: targetX, company: buyer.id });
         checkCartelBreach(world, truck.owner, buyer.id);
@@ -1884,6 +1933,6 @@
         seededRandom, createWorld, act, step, serialize,
         getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
         isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll,
-        eraThreshold, truckSpeed, quoteAtStock, storedOil, linkCost, plotAtX, terrainOf, plotCenterX, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
+        eraThreshold, truckSpeed, quoteAtStock, storedOil, linkCost, yearRating, RATING_LABELS, plotAtX, terrainOf, plotCenterX, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
     };
 });

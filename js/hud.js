@@ -36,8 +36,12 @@ function renderGoals() {
             `<div class="goal-name"><span>${g.name}</span><span class="value">${fmt(Math.min(g.value, g.target))} / ${fmt(g.target)}</span></div>` +
             `<div class="bar"><div style="width:${(ratio * 100).toFixed(1)}%"></div></div></div>`;
     };
+    const rating = world ? OilSim.yearRating(world, myId) : null;
+    const lastEra = world && world.town.era >= OilSim.ERAS.length - 1 && !raceMode && !sharedMode;
     const html = '<div class="goals-title">Ropná horečka</div>' + goals.main.map(row).join('') +
-        '<div class="goals-optional">Volitelné</div>' + goals.optional.map(row).join('');
+        '<div class="goals-optional">Volitelné</div>' + goals.optional.map(row).join('') +
+        (rating ? `<div class="goals-score">Hodnocení: ${'★'.repeat(rating.stars)}${'☆'.repeat(5 - rating.stars)} <span>${rating.label} · ${Math.round(rating.score).toLocaleString('cs-CZ')}</span></div>` : '') +
+        (lastEra ? '<div class="goals-end"><span>Město je v poslední éře.</span><button id="end-year-btn" class="rig-btn">Uzavřít rok</button></div>' : '');
     if (html !== lastGoalsHtml) {
         document.getElementById('hud-goals').innerHTML = html;
         lastGoalsHtml = html;
@@ -651,6 +655,115 @@ function handleMapClick(event) {
         toggleSurveyMap(false);
         updateUI();
     }
+}
+
+// --- Konec roku (sólo): výroční vydání novin ---
+// Sólo konec roku a bankrot: noviny s hvězdami, uzávěrkou a dvěma grafy kreslenými inkoustem
+let yearEndShown = false;
+
+function renderYearEnd() {
+    const box = document.getElementById('year-end');
+    if (!box || !world) return;
+    const me = world.players[myId];
+    const rating = OilSim.yearRating(world, myId);
+    const bankrupt = gameOverReason === 'bankrupt';
+    const title = bankrupt ? 'Podnik skončil v konkurzu' : {
+        1: 'Hledač štěstí odjíždí s prázdnou', 2: 'Těžař přežil svůj první rok', 3: 'Ropný podnikatel se uchytil',
+        4: 'Magnát z pouště', 5: 'Král ropy! Město mu leží u nohou'
+    }[rating.stars];
+    document.getElementById('yearend-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
+    document.getElementById('yearend-title').textContent = title;
+    const stars = bankrupt ? 0 : rating.stars;
+    document.getElementById('yearend-stars').innerHTML = [1, 2, 3, 4, 5].map(i => `<span class="${i <= stars ? '' : 'dim'}">★</span>`).join('') +
+        `<span style="font-size:0.42em;align-self:center;margin-left:0.8em;color:var(--ink-soft)">${bankrupt ? 'bankrot' : rating.label}</span>`;
+    const st = me.stats || {};
+    const fmt = v => Math.round(v).toLocaleString('cs-CZ');
+    const rows = [
+        ['Kapitál na konci', `$${fmt(me.money)}`, me.money < 0], ['Tržby celkem', `$${fmt(me.revenue)}`], ['Prodáno ropy', `${fmt(me.sold)} bbl`],
+        ['Navrtaná ložiska', st.strikes || 0], ['Zakázky splněné / propadlé', `${st.contractsDone || 0} / ${st.contractsFailed || 0}`, (st.contractsFailed || 0) > 0],
+        ['Erupce', st.blowouts || 0, (st.blowouts || 0) > 0], ['Město došlo do éry', OilSim.ERAS[world.town.era].name],
+        ['Claimy / vrty / vozy', `${plots.filter(p => isMine(p)).length} / ${plots.filter(p => isMine(p) && p.hasVrt).length} / ${me.trucksOwned}`],
+        ['Vylepšení', Object.keys(me.perks || {}).length]
+    ];
+    document.getElementById('yearend-stats').innerHTML = rows.map(([k, v, bad]) => `<dt>${k}</dt><dd class="${bad ? 'bad' : ''}">${v}</dd>`).join('');
+    const partNames = { revenue: 'Tržby', capital: 'Kapitál (½)', contracts: 'Zakázky', town: 'Růst města', oil: 'Prodaná ropa', penalties: 'Nehody a penále' };
+    document.getElementById('yearend-score').innerHTML = Object.entries(rating.parts).map(([k, v]) => `<dt>${partNames[k]}</dt><dd class="${v < 0 ? 'bad' : ''}">${v < 0 ? '−' : ''}${fmt(Math.abs(v))}</dd>`).join('') +
+        `<dt><b>Skóre</b></dt><dd><b>${fmt(rating.score)}</b></dd>`;
+    drawInkLineChart(document.getElementById('yearend-money'), st.moneyHistory || [me.money]);
+    drawInkBarChart(document.getElementById('yearend-buyers'), st.revenueBy || {});
+    box.classList.remove('hidden');
+    yearEndShown = true;
+}
+
+function hideYearEnd() {
+    document.getElementById('year-end')?.classList.add('hidden');
+    yearEndShown = false;
+}
+
+// Čárový graf inkoustem: hodnoty po dnech, nula vyznačená, červeně pod nulou
+function drawInkLineChart(cv, values) {
+    if (!cv) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const W = 520, H = 190;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const c = cv.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+    const pad = { l: 46, r: 10, t: 12, b: 22 };
+    const data = values.length ? values : [0];
+    const min = Math.min(0, ...data), max = Math.max(1, ...data);
+    const px = i => pad.l + (data.length > 1 ? i / (data.length - 1) : 0.5) * (W - pad.l - pad.r);
+    const py = v => pad.t + (1 - (v - min) / (max - min)) * (H - pad.t - pad.b);
+    c.strokeStyle = 'rgba(26, 18, 11, 0.25)';
+    c.lineWidth = 1;
+    c.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
+    c.fillStyle = INK_SOFT;
+    c.textAlign = 'right';
+    for (let k = 0; k <= 4; k++) {
+        const v = min + (max - min) * k / 4;
+        c.beginPath(); c.moveTo(pad.l, py(v)); c.lineTo(W - pad.r, py(v)); c.stroke();
+        c.fillText(`$${Math.round(v / 1000)}k`, pad.l - 6, py(v) + 3);
+    }
+    if (min < 0) { c.strokeStyle = INK_RED; c.beginPath(); c.moveTo(pad.l, py(0)); c.lineTo(W - pad.r, py(0)); c.stroke(); }
+    c.textAlign = 'center';
+    ['LED', 'DUB', 'ČVC', 'ŘÍJ', 'PRO'].forEach((m, i) => c.fillText(m, pad.l + i / 4 * (W - pad.l - pad.r), H - 6));
+    c.strokeStyle = INK;
+    c.lineWidth = 2;
+    c.lineJoin = 'round';
+    c.beginPath();
+    data.forEach((v, i) => (i ? c.lineTo(px(i), py(v)) : c.moveTo(px(i), py(v))));
+    c.stroke();
+    c.fillStyle = 'rgba(26, 18, 11, 0.08)';
+    c.lineTo(px(data.length - 1), py(min)); c.lineTo(px(0), py(min)); c.closePath(); c.fill();
+}
+
+// Sloupce inkoustem: tržby po kupcích
+function drawInkBarChart(cv, byBuyer) {
+    if (!cv) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const W = 520, H = 190;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const c = cv.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+    const entries = OilSim.BUYERS.map(b => [b.name, byBuyer[b.id] || 0]);
+    const max = Math.max(1, ...entries.map(e => e[1]));
+    const pad = { l: 16, r: 16, t: 24, b: 26 };
+    const bw = (W - pad.l - pad.r) / entries.length;
+    entries.forEach(([name, v], i) => {
+        const x = pad.l + i * bw + bw * 0.2, w = bw * 0.6;
+        const h = (v / max) * (H - pad.t - pad.b);
+        const y = H - pad.b - h;
+        c.fillStyle = 'rgba(26, 18, 11, 0.82)';
+        c.fillRect(x, y, w, h);
+        c.strokeStyle = INK; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, Math.max(0, h - 1));
+        c.fillStyle = INK; c.textAlign = 'center';
+        c.font = '700 11px "Barlow Condensed", system-ui, sans-serif';
+        c.fillText(`$${Math.round(v).toLocaleString('cs-CZ')}`, x + w / 2, y - 6);
+        c.fillStyle = INK_SOFT;
+        c.fillText(name.toUpperCase(), x + w / 2, H - 9);
+    });
+    c.strokeStyle = INK; c.beginPath(); c.moveTo(pad.l, H - pad.b + 0.5); c.lineTo(W - pad.r, H - pad.b + 0.5); c.stroke();
 }
 
 // --- Vylepšení (perky): list z kanceláře ---

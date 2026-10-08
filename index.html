@@ -207,6 +207,25 @@
                     <div class="board-actions"><button id="prefs-close" class="stamp-btn">Hotovo</button></div>
                 </section>
             </div>
+            <!-- Konec roku (sólo): výroční vydání novin s hodnocením, čísly a grafy (js/hud.js renderYearEnd) -->
+            <div id="year-end" class="overlay dim hidden">
+                <div class="newspaper results-paper yearend-paper">
+                    <div class="np-masthead">Pouštní kurýr</div>
+                    <div class="np-dateline"><span>Výroční vydání</span><span id="yearend-date"></span><span>Cena 5 centů</span></div>
+                    <div id="yearend-title" class="np-headline"></div>
+                    <div id="yearend-stars" class="yearend-stars"></div>
+                    <div class="yearend-grid">
+                        <div class="yearend-col"><div class="yearend-sub">Účetní uzávěrka</div><dl id="yearend-stats" class="yearend-stats"></dl></div>
+                        <div class="yearend-col"><div class="yearend-sub">Kapitál během roku</div><canvas id="yearend-money" width="520" height="190"></canvas></div>
+                        <div class="yearend-col"><div class="yearend-sub">Komu šla ropa</div><canvas id="yearend-buyers" width="520" height="190"></canvas></div>
+                        <div class="yearend-col"><div class="yearend-sub">Z čeho je hodnocení</div><dl id="yearend-score" class="yearend-stats"></dl></div>
+                    </div>
+                    <div class="np-footer">
+                        <button id="yearend-again" class="stamp-btn start">Hrát znovu</button>
+                        <button id="yearend-menu" class="tag-btn hidden">Hlavní menu</button>
+                    </div>
+                </div>
+            </div>
             <!-- Vylepšení: list z kanceláře, každé jde koupit jednou za hru (js/hud.js renderPerks) -->
             <div id="perks" class="overlay hidden">
                 <section class="sheet form prefs-sheet perks-sheet">

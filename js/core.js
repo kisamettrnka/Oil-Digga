@@ -214,6 +214,7 @@ function resetLocalUi() {
     document.getElementById('news-flash')?.classList.add('hidden');
     toggleSurveyMap(false);
     if (typeof togglePerks === 'function') togglePerks(false);
+    if (typeof hideYearEnd === 'function') hideYearEnd();
     resetGuide();
 }
 
@@ -827,13 +828,17 @@ function drawPauseScreen() {
     ctx.textBaseline = 'alphabetic';
 }
 
+// Konec hry: scéna zůstane vidět, v závodě ukazuje výsledky net.js, sólo výroční vydání novin (hud.js)
 function drawGameOver() {
-    resetCamera(true); // tlačítko restartu je v souřadnicích obrazovky
+    resetCamera(true);
     draw();
-    // V závodě ukazuje výsledky noviny z net.js; scéna za nimi má zůstat vidět
-    ctx.fillStyle = raceMode ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.75)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    if (raceMode) return;
+    if (!raceMode && !sharedMode && !yearEndShown) renderYearEnd();
+}
+
+// Starý nápis KONEC ROKU na plátně nahradily noviny; tlačítko na plátně už není
+function drawGameOverLegacy() {
 
     ctx.fillStyle = 'white';
     ctx.font = 'bold 72px sans-serif';

@@ -738,5 +738,27 @@ t('drilling: a well on an exhausted pocket can drill on to the next one', () => 
     assert.strictEqual(n.drillState, 'drilling');
 });
 
+t('year end: stats, rating and closing the year early in the last era', () => {
+    const w = plainWorld(95);
+    assert.strictEqual(Sim.act(w, 'player', { type: 'endYear' }).reason, 'era', 'only in the last era');
+    const p = w.players.player;
+    w.time.dayTimer = C.MS_PER_DAY - 1;
+    Sim.step(w, 2);
+    assert.strictEqual(p.stats.moneyHistory.length, 1, 'daily money history');
+    w.trucks.push({ id: 1, owner: 'player', x: 51, state: 'to_company', oil: 100, targetCompany: 'left', facing: -1 });
+    Sim.step(w, 16);
+    assert.ok(p.stats.revenueBy.left > 0, 'revenue per buyer');
+    const r0 = Sim.yearRating(w, 'player');
+    assert.ok(r0.stars >= 1 && r0.stars <= 5 && r0.label);
+    p.revenue = 60000; p.money = 30000;
+    assert.strictEqual(Sim.yearRating(w, 'player').stars, 5, 'king of oil');
+    w.town.era = Sim.ERAS.length - 1;
+    assert.ok(Sim.act(w, 'player', { type: 'endYear' }).ok);
+    assert.strictEqual(p.reason, 'year_end');
+    const race = Sim.createWorld({ seed: 1, race: { months: 1, mode: 'richest' } });
+    race.town.era = Sim.ERAS.length - 1;
+    assert.strictEqual(Sim.act(race, 'player', { type: 'endYear' }).reason, 'race', 'never in a race');
+});
+
 console.log(out.join('\n'));
 process.exit(out.some(l => l.startsWith('FAIL')) ? 1 : 0);
