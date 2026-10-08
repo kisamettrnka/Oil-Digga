@@ -6,6 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Update CLAUDE.md in the same commit as any change that makes it wrong or incomplete: new or renamed commands, architecture, file responsibilities, network messages, game rules, deployment. Remove statements that are no longer true instead of adding caveats.
 
+## Working style (token budget)
+
+Follows `docs/claude-code-prirucka.md`; this section is the part Claude applies.
+- Terse replies: no preamble, no recap, one line on what changed and where. Show only changed code. At most one clarifying question.
+- Grep/Glob first, then Read only the needed range; `script.js` is huge, never read it whole. Do not re-read files you already read or just edited. Never read `node_modules/`, `dist/`, `package-lock.json`.
+- Trim command output (`| tail -40`, `-q`). Run one suite (`node test/sim.test.js`), not `npm test`, unless the change spans suites. Start the dev server only for visual checks.
+- Smallest change that solves the task, no drive-by refactors. Subagents only when a task spans many files. Big task: short plan first.
+- Skills: when a workflow repeats (same kind of task twice, rediscovered steps or quirks), propose a skill and write it after a yes with superpowers `writing-skills` (or `skill-creator`). Oil Digga skills go to `.claude/skills/<name>/SKILL.md` and get committed; cross-project ones to `~/.claude/skills/`. Keep them short: `description` says when to use it, body has exact steps, commands, pitfalls. Check existing skills before a task; fix a wrong skill in the same session.
+
 ## What this is
 
 "Oil digga" (package name `turmoil-activity`): an oil tycoon that runs as a Discord Activity (solo, a race where everyone plays a copy of the same map, or one shared real-time map). The game is plain browser code with no bundler: `index.html`, `style.css` and classic scripts sharing one global scope (no modules): `sim.js` (game rules, also `require`d by the server), `net.js` (Discord login, lobby, race/shared flow) and one big `script.js` (rendering, input, HUD, sound). A Node server (`server/`, Express + `ws`) serves the game, exchanges the Discord OAuth code and runs the lobby rooms. Only the Discord SDK is bundled (esbuild: `client/discord-sdk.js` -> `dist/discord-sdk.js`, global `OilDiscordSDK`). UI text and code comments are in Czech; keep that. Discord Developer Portal setup (URL mappings, secrets) and Render deployment are in `README.md`.
