@@ -84,7 +84,7 @@
         RICH_MEDIUM_OIL: 8500,
         RICH_LARGE_OIL: 11500,
         // Sdílená mapa: dražby claimů, obchod mezi hráči, kartel, sabotáž
-        AUCTION_MS: 20000,           // dražba končí 2 dny po posledním příhozu
+        AUCTION_MS: 15000,           // dražba končí 1,5 dne po posledním příhozu
         AUCTION_MIN_RAISE: 25,
         DEAL_DAYS: 2,                // nabídka ropy platí tolik dní
         CARTEL_PROPOSAL_DAYS: 2,
@@ -253,6 +253,7 @@
                 revenueAtDayStart: 0,
                 lastDayIncome: 0,
                 strikeMs: 0,         // podplacená stávka: vozy stojí
+                route: null,         // kupec, ke kterému mají jezdit všechny vozy (null = sám podle ceny)
                 over: false,
                 reason: null
             };
@@ -701,6 +702,7 @@
             case 'buildSilo': return buildSilo(world, player, action.plotId);
             case 'buyTruck': return buyTruck(world, player);
             case 'acceptContract': return acceptContract(world, player, action.id);
+            case 'setRoute': return setRoute(world, player, action.buyer);
             case 'bid': return placeBid(world, player, action.plotId, action.amount);
             case 'offerDeal': return offerDeal(world, player, action.to, action.oil, action.price);
             case 'acceptDeal': return answerDeal(world, player, action.id, true);
@@ -797,6 +799,14 @@
         const contract = { id: offer.id, buyer: offer.buyer, amount: offer.amount, price: offer.price, daysLeft: offer.days, delivered: 0, owner: player.id };
         c.active.push(contract);
         emit(world, { type: 'contract_taken', playerId: player.id, id: offer.id, buyer: offer.buyer, amount: offer.amount, price: offer.price, days: offer.days });
+        return { ok: true };
+    }
+
+    // Vozy jezdí k vybranému kupci (razítko na ceníku); null = samy k nejlepší ceně
+    function setRoute(world, player, buyer) {
+        if (buyer != null && !world.market[buyer]) return fail('buyer');
+        player.route = buyer ?? null;
+        emit(world, { type: 'route', playerId: player.id, buyer: player.route });
         return { ok: true };
     }
 
@@ -1606,6 +1616,9 @@
     // Kupec pro vůz: nejvyšší očekávaná cena po započtení ropy, kterou k němu už vezou jiné vozy
     // (plný sklad = nižší cena), mínus kus za vzdálenost. Rozjednaná zakázka vlastníka má přednost.
     function chooseCompanyFor(world, truck) {
+        const owner = world.players[truck.owner];
+        const forced = owner && owner.route ? world.market[owner.route] : null;
+        if (forced && !forced.closed) return forced.id;
         const load = truck.oil || C.TRUCK_CAPACITY;
         let best = null, bestScore = -Infinity;
         openBuyers(world).forEach(buyer => {

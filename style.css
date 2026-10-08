@@ -630,6 +630,10 @@ button:disabled {
 #hud-race {
     display: none;
 }
+/* V závodě a na sdílené mapě čas řídí server: zůstane jen kalendář */
+#stage.racing .time-buttons {
+    display: none;
+}
 #stage.racing #hud-race {
     display: block;
 }

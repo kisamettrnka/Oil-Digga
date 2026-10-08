@@ -64,6 +64,9 @@ let plots = [];
 let pipeNetworks = [];
 let hazards = [];         // zrcadlo world.hazards (plyn, voda)
 let auctions = [];        // zrcadlo world.auctions (sdílená mapa)
+let myRoute = null;       // zrcadlo players[myId].route: kupec, ke kterému jezdí mé vozy
+let buyerControls = {};   // hitboxy razítek Vozit sem na cenících (přepočítává kreslení)
+let buyerHover = false;
 let trucks = [];
 let lastBoughtHighlightTimer = 0;
 let lastBoughtPlotId = null;
@@ -221,6 +224,7 @@ function syncFromWorld() {
     gameOverReason = me.reason || '';
     townEra = world.town ? world.town.era : 0;
     auctions = world.auctions || [];
+    myRoute = me.route || null;
     day = world.time.day;
     month = world.time.month;
     isGameStarted = world.time.started;
@@ -520,6 +524,9 @@ function handleWorldEvents(events) {
             case 'era':
                 showEraNews(e);
                 shakeCamera(4);
+                break;
+            case 'route':
+                if (mine) logEvent(e.buyer ? `Vozy jezdí k: ${buyerName(e.buyer)}.` : 'Vozy si zase vybírají kupce samy.');
                 break;
             case 'contract_offer':
                 playSound('build');
@@ -4743,10 +4750,10 @@ function drawDrillBit(head, network, donePath) {
 // Herně jsou to world.market[id] (cena podle zásoby, poptávka podle éry). Rafinerie a nádraží mají
 // areály po stranách s ceníkem nahoře, petrolejka a benzinka stojí ve městě a ceník visí nad nimi.
 const BUYER_CARD_TOP = 96;
-const BUYER_CARD_H = 148;
+const BUYER_CARD_H = 166;
 const BUYER_ZONE_WIDTH = 100;
 const TOWN_CHIP_W = 132;
-const TOWN_CHIP_H = 66;
+const TOWN_CHIP_H = 84;
 const BUYER_COLORS = { left: '#8a1c14', lamps: '#7a5a12', right: '#1b3a66', garage: '#1f5a2c' };
 
 // Fléra rafinerie: komín s plápolajícím plamenem spalovaného plynu
@@ -5081,7 +5088,31 @@ function drawBuyerCard(buyer, x, y, w, h) {
     }
     drawPriceChart(history, x + 8, y + 72, w - 16, 16);
     drawStockGauge(buyer, x + 8, y + 96, w - 16);
-    drawBuyerFooter(buyer, x + w / 2, y + h - 10);
+    drawRouteStamp(buyer, x + 8, y + 116, w - 16);
+    drawBuyerFooter(buyer, x + w / 2, y + h - 8);
+    ctx.restore();
+}
+
+// Razítko Vozit sem: přepíná, jestli všechny mé vozy jezdí k tomuto kupci; hitbox pro klik
+function drawRouteStamp(buyer, x, y, w) {
+    const rect = { x, y, width: w, height: 17 };
+    buyerControls[buyer.id] = rect;
+    const active = myRoute === buyer.id;
+    const hovered = isPointNearRect(mousePos, rect, 2);
+    if (hovered) buyerHover = true;
+    ctx.save();
+    ctx.translate(x + w / 2, y + rect.height / 2);
+    ctx.rotate(active ? -0.035 : 0);
+    ctx.fillStyle = hovered ? 'rgba(255, 245, 220, 0.3)' : 'rgba(255, 245, 220, 0.12)';
+    ctx.fillRect(-w / 2, -rect.height / 2, w, rect.height);
+    ctx.strokeStyle = active ? INK_RED : (hovered ? INK : 'rgba(26, 18, 11, 0.55)');
+    ctx.lineWidth = active ? 2 : 1.2;
+    ctx.strokeRect(-w / 2 + 1, -rect.height / 2 + 1, w - 2, rect.height - 2);
+    ctx.fillStyle = active ? INK_RED : INK_SOFT;
+    ctx.font = '800 8.5px "Barlow Condensed", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(active ? 'VOZY JEZDÍ SEM' : 'VOZIT SEM', 0, 0.5);
     ctx.restore();
 }
 
@@ -5141,6 +5172,7 @@ function drawTownBuyerChip(buyer, groundLevel) {
     }
     drawBuyerNewsStamp(buyer, x + 7, y + 31, true);
     drawStockGauge(buyer, x + 8, y + 37, w - 16);
+    drawRouteStamp(buyer, x + 8, y + 56, w - 16);
     drawBuyerFooter(buyer, x + w / 2, y + h - 5);
     ctx.restore();
 }
@@ -5205,6 +5237,8 @@ function drawRailConstruction(x0, baseY) {
 }
 
 function drawCompanyBuildings(groundLevel) {
+    buyerControls = {};
+    buyerHover = false;
     const baseY = groundLevel - BUILDING_BASE_OFFSET;
     const rightX = canvas.width - BUYER_ZONE_WIDTH;
     const m = world.market;
@@ -5984,7 +6018,7 @@ function drawDrillPreview(from, to) {
 
 function drawEffectsAndPreviews(groundLevel) {
     const overBlimp = !currentBuildMode && blimpHitRect && isPointInRect(mousePos, blimpHitRect);
-    let newCursor = plotsHoverPointer || overBlimp ? 'pointer' : (camera.tzoom > 1.01 ? 'grab' : 'default');
+    let newCursor = plotsHoverPointer || overBlimp || buyerHover ? 'pointer' : (camera.tzoom > 1.01 ? 'grab' : 'default');
 
     // Náhled stavby
     if (currentBuildMode === 'vrt') {
@@ -6309,6 +6343,14 @@ function handleCanvasClick(event) {
     const groundLevel = getGroundLevel();
 
     updatePlotSignHitboxes(groundLevel);
+
+    // Razítko Vozit sem na ceníku kupce: přepne, kam jezdí mé vozy
+    for (const [id, rect] of Object.entries(buyerControls)) {
+        if (isPointNearRect(clickPos, rect, 2)) {
+            doAction({ type: 'setRoute', buyer: myRoute === id ? null : id });
+            return;
+        }
+    }
 
     // Reklamní vzducholoď: klik otevře inzerovaný web
     if (!currentBuildMode && blimpHitRect && blimpAd && isPointInRect(clickPos, blimpHitRect)) {

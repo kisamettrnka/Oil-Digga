@@ -667,5 +667,22 @@ t('transport: pipeline delivery breaks a cartel too', () => {
     assert.ok(w.events.some(e => e.type === 'cartel_broken' && e.playerId === 'a'));
 });
 
+t('route: trucks go to the chosen buyer, automatic again when cleared', () => {
+    const w = Sim.createWorld({ seed: 81 });
+    w.time.started = true;
+    w.market.lamps.stock = 0;
+    w.market.left.stock = w.market.left.demand * 4;
+    assert.ok(!Sim.act(w, 'player', { type: 'setRoute', buyer: 'nope' }).ok);
+    assert.ok(Sim.act(w, 'player', { type: 'setRoute', buyer: 'left' }).ok);
+    const truck = { id: 1, owner: 'player', x: 400, state: 'to_company', oil: 100, targetCompany: null, facing: 1 };
+    w.trucks.push(truck);
+    Sim.step(w, 16);
+    assert.strictEqual(truck.targetCompany, 'left', 'forced to the flooded refinery');
+    assert.ok(Sim.act(w, 'player', { type: 'setRoute', buyer: null }).ok);
+    truck.targetCompany = null;
+    Sim.step(w, 16);
+    assert.strictEqual(truck.targetCompany, 'lamps', 'best price again');
+});
+
 console.log(out.join('\n'));
 process.exit(out.some(l => l.startsWith('FAIL')) ? 1 : 0);

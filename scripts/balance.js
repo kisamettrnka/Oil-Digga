@@ -1,5 +1,5 @@
 // Balanční simulace: boti hrají celé hry, měří se ekonomika, kupci, éry, zakázky.
-// npm run balance [solo|small|big|nocontracts|allcontracts|links|race3|race1|shared2|shared4|all]
+// npm run balance [solo|small|big|nocontracts|allcontracts|links|race3|race1|shared2|unfair|shared4|all]
 const Sim = require('../sim');
 const C = Sim.C;
 const DT = 50;
@@ -117,7 +117,8 @@ function play({ seed, days = 365, race = null, players = 1, shared = false, bot 
     const ps = Array.from({ length: players }, (_, i) => ({ id: 'p' + i, name: 'P' + i }));
     const w = Sim.createWorld({ seed, race, shared, players: ps });
     w.time.started = true;
-    const bots = ps.map(p => makeBot(w, p.id, bot));
+    // bot = společné nastavení, nebo pole nastavení po hráčích (nerovný souboj)
+    const bots = ps.map((p, i) => makeBot(w, p.id, Array.isArray(bot) ? bot[i % bot.length] : bot));
     const stats = { sales: {}, revenue: {}, eraDays: [], contractsDone: 0, contractsFailed: 0, penalty: 0, blowouts: 0, kicks: 0, bankruptDay: {}, moneyAt: {} };
     let lastEra = 0;
     const steps = days * C.MS_PER_DAY / DT;
@@ -155,6 +156,11 @@ const SEEDS = Array.from({ length: 16 }, (_, i) => 100 + i * 7);
 function report(name, cfg) {
     const res = SEEDS.map(seed => play({ seed, ...cfg }));
     const money = res.flatMap(r => r.money);
+    if (Array.isArray(cfg.bot)) {
+        const per = cfg.bot.map((_, i) => res.map(r => r.money[i]));
+        console.log(`\n== ${name}`);
+        per.forEach((m, i) => console.log(`  hráč ${i + 1}: money median ${median(m)} min ${Math.min(...m)} | bankrupt ${res.filter(r => r.stats.bankruptDay['p' + i] != null).length}/${res.length}`));
+    }
     const sales = {}; const revenue = {};
     res.forEach(r => { Object.entries(r.stats.sales).forEach(([k, v]) => sales[k] = (sales[k] || 0) + v); Object.entries(r.stats.revenue).forEach(([k, v]) => revenue[k] = (revenue[k] || 0) + v); });
     const totalRev = Object.values(revenue).reduce((a, b) => a + b, 0);
@@ -182,6 +188,7 @@ const scen = {
     race3: () => report('závod 3 měsíce (race pravidla)', { days: 93, race: { months: 3, mode: 'richest' }, bot: { reserve: 150, silos: 0, trucksPerWell: 1 } }),
     race1: () => report('závod 1 měsíc', { days: 31, race: { months: 1, mode: 'richest' }, bot: { reserve: 150, silos: 0, trucksPerWell: 1 } }),
     shared2: () => report('sdílená 2 hráči, 6 měsíců', { days: 181, players: 2, shared: true, race: { months: 6, mode: 'richest' }, bot: { reserve: 150, silos: 0, trucksPerWell: 1 } }),
+    unfair: () => report('sdílená 2 hráči, 6 měsíců: malý (2 vrty) proti velkému (6 vrtů, 8 vozů)', { days: 181, players: 2, shared: true, race: { months: 6, mode: 'richest' }, bot: [{ maxWells: 2, reserve: 150, silos: 0, trucksPerWell: 1 }, { maxWells: 6, reserve: 150, silos: 0, trucksPerWell: 2 }] }),
     shared4: () => report('sdílená 4 hráči, 6 měsíců', { days: 181, players: 4, shared: true, race: { months: 6, mode: 'richest' }, bot: { reserve: 150, silos: 0, trucksPerWell: 1 } })
 };
 if (which === 'all') Object.values(scen).forEach(f => f()); else scen[which]();
