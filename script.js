@@ -604,7 +604,7 @@ function drawSkyLife(groundLevel) {
     blimpHitRect = null;
     if (blimp === null) blimpAd = undefined;
     else {
-        if (blimpAd === undefined) blimpAd = pickAd('blimp', 'banner'); // jedna reklama na celý přelet
+        if (blimpAd === undefined) blimpAd = pickAd(); // jedna reklama na celý přelet
         drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
     }
 
@@ -701,14 +701,14 @@ function drawBlimp(x, y, groundLevel) {
     if (!blink) drawGlow(x - 70, y - 14, 8, '255, 255, 255', 0.6);
 }
 
-// Reklamy z ads.js: náhodná reklama, která na dané místo smí a má pro něj text, jinak null
+// Reklamy z ads.js: náhodná reklama s transparentem, jinak null (jediné místo je vzducholoď)
 function adsAvailable() {
     const config = typeof OIL_ADS !== 'undefined' ? OIL_ADS : null;
-    return !!config?.enabled && Object.values(config.places || {}).some(Boolean);
+    return !!config?.enabled;
 }
-function pickAd(place, field) {
-    if (!prefs.ads || !adsAvailable() || !OIL_ADS.places[place]) return null;
-    const ads = (OIL_ADS.ads || []).filter(ad => ad.url && ad[field]);
+function pickAd() {
+    if (!prefs.ads || !adsAvailable()) return null;
+    const ads = (OIL_ADS.ads || []).filter(ad => ad.url && ad.banner);
     return ads.length ? ads[Math.floor(Math.random() * ads.length)] : null;
 }
 function openAdLink(url) {
@@ -1566,8 +1566,7 @@ function showBreakingNews(e) {
     // Zvláštní vydání novin: hlavička, datum, titulek, článek a "burza" s dopadem
     box.innerHTML = '<div class="np-masthead">Pouštní kurýr</div>' +
         '<div class="np-dateline"><span>Zvláštní vydání</span><span class="np-date"></span><span>Cena 5 centů</span></div>' +
-        '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>' +
-        newspaperAdHtml(pickAd('breakingNews', 'headline'));
+        '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>';
     box.querySelector('.np-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
     box.querySelector('.np-headline').textContent = e.title;
     box.querySelector('.np-lead').textContent = e.desc;
@@ -1579,22 +1578,6 @@ function showBreakingNews(e) {
     newsFlashTimer = setTimeout(() => box.classList.add('leaving'), NEWS_FLASH_MS);
     playSound('news');
     logEvent(`Zprávy: ${e.title}`);
-}
-
-// Inzerát na výsledkové straně závodu (z ads.js; prázdné, když je reklama vypnutá)
-function renderResultsAd() {
-    const box = document.getElementById('results-ad');
-    if (box) box.innerHTML = newspaperAdHtml(pickAd('results', 'headline'));
-}
-
-// Rámečkový inzerát z ads.js; v novinách je to jediná reklama, která do světa patří
-function newspaperAdHtml(ad) {
-    if (!ad) return '';
-    const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
-    return `<a class="np-ad" href="${esc(ad.url)}" target="_blank" rel="noopener">` +
-        `<span class="np-ad-kicker">${esc(ad.kicker || 'Inzerce')}</span><b>${esc(ad.headline)}</b>` +
-        (ad.text ? `<span>${esc(ad.text)}</span>` : '') +
-        (ad.sign ? `<i>${esc(ad.sign)}</i>` : '') + '</a>';
 }
 
 // Seznam běžících zpráv pod horní lištou
@@ -4777,10 +4760,7 @@ function setPref(key, value) {
     }
     if (key === 'sound') updateSoundButton();
     if (key === 'volume') playSound('sale'); // ukázka nové hlasitosti
-    if (key === 'ads') {
-        blimpAd = undefined; // vzducholoď si reklamu vylosuje znovu (nebo poletí bez ní)
-        renderResultsAd();
-    }
+    if (key === 'ads') blimpAd = undefined; // vzducholoď si reklamu vylosuje znovu (nebo poletí bez ní)
     renderPrefs();
 }
 
@@ -5004,15 +4984,7 @@ function cancelBuildMode(clearDerrick = true) {
 function addEventListeners() {
     document.getElementById('hud-rig')?.addEventListener('click', handleRigPanelClick);
     document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
-    // Odkazy z inzerátů: v Discordu musí ven přes SDK, ne přes href
-    document.addEventListener('click', (event) => {
-        const link = event.target.closest?.('a.np-ad');
-        if (!link) return;
-        event.preventDefault();
-        openAdLink(link.getAttribute('href'));
-    });
-    // Inzerát na výsledkové straně závodu, předvolby hráče a jejich tlačítko
-    renderResultsAd();
+    // Předvolby hráče a jejich tlačítko
     updateSoundButton();
     document.getElementById('prefs-btn')?.addEventListener('click', () => togglePrefs());
     document.getElementById('prefs-close')?.addEventListener('click', () => togglePrefs(false));

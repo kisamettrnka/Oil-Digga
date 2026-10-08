@@ -9,7 +9,6 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ### Reklamní vzducholoď
 - Vzducholoď nad městem vleče plátěný transparent s lampami, reklamu na sesterský projekt priceguessr.eu. Klik na vzducholoď otevře web (v Discordu přes jeho vlastní dialog).
-- Pouštní kurýr tiskne stejný inzerát v rámečku, v mimořádném vydání i na výsledkové straně, kde je kliknutelný.
 
 ## 2026-10-08
 
