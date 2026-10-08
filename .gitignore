@@ -2,3 +2,5 @@ node_modules/
 discord-sdk-cache/
 .vscode/
 .playwright-mcp/
+dist/
+.env

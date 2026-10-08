@@ -9,9 +9,6 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Rye&display=swap" rel="stylesheet">
     <script>
         // Každé načtení dostane novou verzi souborů (?v=...), script.js ji čte přes assetUrl()
         window.ASSET_VERSION = Date.now();
@@ -19,8 +16,6 @@
         document.write('<link rel="stylesheet" href="style.css?v=' + window.ASSET_VERSION + '">');
     </script>
     <noscript><link rel="stylesheet" href="style.css"></noscript>
-    <!-- Discord Embedded App SDK -->
-    <script src="https://discord.com/assets/embedded-app-sdk.js"></script>
 </head>
 
 <body>
@@ -71,6 +66,7 @@
 
             <!-- Vpravo nahoře: kamera a zvuk -->
             <div id="hud-corner">
+                <button id="lobby-btn" class="hud-icon-btn hidden" title="Zpět do lobby">👥</button>
                 <button id="zoom-out" class="hud-icon-btn" title="Oddálit (−)">−</button>
                 <button id="zoom-reset" class="hud-icon-btn" title="Celý pohled (0)">⤢</button>
                 <button id="zoom-in" class="hud-icon-btn" title="Přiblížit (+), táhni myší pro posun">+</button>
@@ -127,11 +123,41 @@
 
             <!-- Vpravo dole: deník událostí -->
             <div id="hud-log" class="hud-panel"></div>
+
+            <!-- Závod: žebříček místo cílů roku (net.js) -->
+            <div id="hud-race" class="hud-panel"></div>
+
+            <!-- Lobby: hráči z instance aktivity, připravenost a start závodu (net.js) -->
+            <div id="lobby" class="overlay hidden">
+                <div class="lobby-card">
+                    <div class="lobby-title">OIL DIGGA</div>
+                    <div class="lobby-sub">Ropný závod: všichni stejná mapa, jeden rok, vyhrává nejvíc peněz</div>
+                    <div id="lobby-players"></div>
+                    <div class="lobby-actions">
+                        <button id="lobby-ready" class="lobby-btn">Připraven</button>
+                        <button id="lobby-start" class="lobby-btn primary hidden">Spustit závod</button>
+                        <button id="lobby-solo" class="lobby-btn ghost">Hrát sám</button>
+                        <button id="lobby-invite" class="lobby-btn ghost hidden">Pozvat</button>
+                    </div>
+                    <div id="lobby-status">Připojuji…</div>
+                </div>
+            </div>
+            <div id="race-countdown" class="hidden"></div>
+            <div id="race-results" class="overlay hidden">
+                <div class="lobby-card results-card">
+                    <div id="results-title" class="lobby-title small">Průběžné pořadí</div>
+                    <div id="results-list"></div>
+                    <button id="results-reset" class="lobby-btn primary hidden">Zpět do lobby</button>
+                    <div id="results-wait" class="lobby-sub">Další kolo spustí hostitel.</div>
+                </div>
+            </div>
         </div>
     </div>
     <script>
-        // Hlavní skript se verzuje stejně jako CSS
-        document.write('<script src="script.js?v=' + window.ASSET_VERSION + '"><\/script>');
+        // Skripty se verzují stejně jako CSS; SDK je zabalené esbuildem (npm run build)
+        ['dist/discord-sdk.js', 'net.js', 'script.js'].forEach(function (src) {
+            document.write('<script src="' + src + '?v=' + window.ASSET_VERSION + '"><\/script>');
+        });
     </script>
 </body>
 

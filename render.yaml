@@ -1,0 +1,18 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> vyber tento repozitář.
+# Render sám nastaví PORT; DISCORD_CLIENT_SECRET se zadává ručně v dashboardu (nikdy do repa).
+services:
+  - type: web
+    name: oil-digga
+    runtime: node
+    plan: free                      # free usne po ~15 min nečinnosti, první načtení pak trvá desítky sekund
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: node server/index.js
+    healthCheckPath: /api/config
+    envVars:
+      - key: NODE_ENV
+        value: production           # vypne hosty bez Discordu (?user=...)
+      - key: DISCORD_CLIENT_ID
+        value: "1385652220707606668"
+      - key: DISCORD_CLIENT_SECRET
+        sync: false                 # Render se na hodnotu zeptá při vytvoření služby

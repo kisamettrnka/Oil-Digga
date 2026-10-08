@@ -6,27 +6,14 @@ function assetUrl(path) {
     return window.ASSET_VERSION ? `${path}?v=${window.ASSET_VERSION}` : path;
 }
 
-// --- Discord SDK Setup ---
-// Tento kód je pro novější verzi SDK, která se inicializuje přes URL parametry.
-// Test
-let sdk = null;
-
-async function setupDiscordSdk() {
-    console.log("script.js: Volá se setupDiscordSdk(). Čeká se na sdk.ready()...");
-    await sdk.ready();
-    console.log("Discord SDK je připraveno!");
-
-    // Získání informací o uživatelích v aktivitě
-    try {
-        const { participants } = await sdk.commands.getInstanceParticipants();
-        console.log("Načteni počáteční hráči:", participants);
-    } catch (e) {
-        console.error("Nepodařilo se načíst účastníky", e);
-    }
-}
-
+// Discord, lobby a závod řeší net.js (načítá se před tímto souborem)
 
 // --- Globální proměnné a konstanty ---
+// Závod: net.js nastaví { raceId } a restartGame(seed); rychlost je pak zamčená na 1× a pauza vypnutá,
+// aby všichni hráli stejnou mapu se stejným vývojem cen ve stejném čase
+let raceMode = null;
+let worldSeed = null;          // null = náhodný svět (sólo)
+let marketRandom = Math.random; // náhoda pro ceny výkupců; v závodě seedovaná, stejná pro všechny
 const GROUND_RATIO = 0.44;        // povrch (přední hrana desky) ve 44 % výšky plátna
 const POCKET_BOTTOM_MARGIN = 125; // spodní pás plátna zakrývá panel nástrojů
 
@@ -154,6 +141,9 @@ function initializeGame() {
 
     ctx = canvas.getContext('2d');
 
+    // Plátno font Rye samo nenačte (není v DOM), proto ho vyžádáme
+    if (document.fonts) document.fonts.load('18px "Rye"').catch(() => { });
+
     // Nastavení rozměrů a generování herních prvků
     generatePlotsAndPockets();
 
@@ -175,7 +165,9 @@ function startGameLoop() {
 }
 
 // Vrátí všechen herní stav do výchozího a vygeneruje nový svět
-function restartGame() {
+function restartGame(seed = null) {
+    if (!canvas) return;
+    worldSeed = seed;
     money = START_MONEY;
     isGameOver = false;
     gameOverReason = '';
@@ -227,6 +219,9 @@ function restartGame() {
 }
 
 function generatePlotsAndPockets() {
+    // Se seedem (závod) vyjde všem hráčům stejná mapa i stejný vývoj cen
+    const rand = worldSeed == null ? Math.random : seededRandom(worldSeed);
+    marketRandom = worldSeed == null ? Math.random : seededRandom((worldSeed ^ 0x9E3779B9) >>> 0);
     const buildingWidth = 100; // Šířka budovy společnosti
     const gap = 10;
     const sideMargin = buildingWidth + gap;
@@ -241,26 +236,26 @@ function generatePlotsAndPockets() {
             owner: null,
             hasVrt: false,
             siloCount: 0,
-            price: 50 + Math.floor(Math.random() * 451) // 50 až 500
+            price: 50 + Math.floor(rand() * 451) // 50 až 500
         });
     }
 
     // Generování ložisek ropy
     oilPockets = [];
     const groundLevel = getGroundLevel();
-    const numberOfPockets = 5 + Math.floor(Math.random() * 5);
+    const numberOfPockets = 5 + Math.floor(rand() * 5);
     for (let i = 0; i < numberOfPockets; i++) {
-        const pocketWidth = 80 + Math.random() * 170;
-        const x = Math.random() * (canvas.width - pocketWidth);
-        const height = 40 + Math.random() * 80;
+        const pocketWidth = 80 + rand() * 170;
+        const x = rand() * (canvas.width - pocketWidth);
+        const height = 40 + rand() * 80;
         // Celé ložisko musí být nad spodním panelem HUD, jinak by na něj nešlo kliknout
         const minY = groundLevel + 80;
         const maxY = canvas.height - POCKET_BOTTOM_MARGIN - height;
-        const y = minY + Math.random() * Math.max(0, maxY - minY);
-        const richness = 5000 + Math.random() * 10000;
+        const y = minY + rand() * Math.max(0, maxY - minY);
+        const richness = 5000 + rand() * 10000;
         let vertices = [];
         // between 3 and 6 vertices
-        const numberOfVertices = 3 + Math.floor(Math.random() * 4);
+        const numberOfVertices = 3 + Math.floor(rand() * 4);
 
         for (let j = 0; j < numberOfVertices; j++) {
             const angle = (j / numberOfVertices) * Math.PI * 2;
@@ -812,12 +807,12 @@ function update(dt) {
     priceUpdateTimer += dt;
     if (priceUpdateTimer > PRICE_UPDATE_INTERVAL) {
         priceUpdateTimer = 0;
-        const leftDelta = (Math.random() - 0.45 + leftPriceTrend * 0.15) * 0.12;
-        const rightDelta = (Math.random() - 0.45 + rightPriceTrend * 0.15) * 0.12;
+        const leftDelta = (marketRandom() - 0.45 + leftPriceTrend * 0.15) * 0.12;
+        const rightDelta = (marketRandom() - 0.45 + rightPriceTrend * 0.15) * 0.12;
         leftIncPrice = Math.max(0.25, Math.min(2.80, leftIncPrice + leftDelta));
         rightIncPrice = Math.max(0.25, Math.min(2.80, rightIncPrice + rightDelta));
-        leftPriceTrend = Math.max(-1, Math.min(1, leftPriceTrend + (Math.random() - 0.5) * 0.4));
-        rightPriceTrend = Math.max(-1, Math.min(1, rightPriceTrend + (Math.random() - 0.5) * 0.4));
+        leftPriceTrend = Math.max(-1, Math.min(1, leftPriceTrend + (marketRandom() - 0.5) * 0.4));
+        rightPriceTrend = Math.max(-1, Math.min(1, rightPriceTrend + (marketRandom() - 0.5) * 0.4));
 
         leftPriceHistory.push(leftIncPrice);
         rightPriceHistory.push(rightIncPrice);
@@ -992,10 +987,13 @@ function updateUI() {
         if (item.isDrone) item.el.classList.toggle('active-build-mode', drone !== null);
     });
 
-    // Rychlost hry
-    document.getElementById('pause-btn').classList.toggle('active', isPaused);
+    // Rychlost hry (v závodě zamčená)
+    const pauseBtn = document.getElementById('pause-btn');
+    pauseBtn.classList.toggle('active', isPaused);
+    pauseBtn.disabled = !!raceMode;
     document.querySelectorAll('.time-btn[data-speed]').forEach(btn => {
         btn.classList.toggle('active', !isPaused && Number(btn.dataset.speed) === gameSpeed);
+        btn.disabled = !!raceMode;
     });
 }
 
@@ -3490,6 +3488,7 @@ function drawGameOver() {
     draw();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (raceMode) return; // v závodě ukazuje výsledky panel z net.js
 
     ctx.fillStyle = 'white';
     ctx.font = 'bold 72px sans-serif';
@@ -3875,9 +3874,12 @@ function addEventListeners() {
     });
 
     // Ovládání času
-    document.getElementById('pause-btn').addEventListener('click', () => isPaused = !isPaused);
+    document.getElementById('pause-btn').addEventListener('click', () => {
+        if (!raceMode) isPaused = !isPaused;
+    });
     document.querySelectorAll('.time-btn[data-speed]').forEach(btn => {
         btn.addEventListener('click', () => {
+            if (raceMode) return;
             gameSpeed = Number(btn.dataset.speed);
             isPaused = false;
             updateUI();
@@ -3979,7 +3981,8 @@ function handleCanvasClick(event) {
     const clickPos = getCanvasPosition(event);
 
     if (isGameOver) {
-        if (clickPos.inBounds && isPointInRect(clickPos, getRestartButtonRect())) restartGame();
+        // V závodě se nerestartuje, další kolo spouští hostitel z výsledků (net.js)
+        if (!raceMode && clickPos.inBounds && isPointInRect(clickPos, getRestartButtonRect())) restartGame();
         return;
     }
 
@@ -4531,26 +4534,5 @@ function checkPipeCollision(pipeSegment, specificPocket) {
 
 // --- Spuštění při načtení stránky ---
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("script.js: DOMContentLoaded event nastal.");
-
-    // Rozlišení mezi lokálním vývojem a produkcí (Discord)
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-    if (isLocal) {
-        console.log("Běží v lokálním režimu. SDK se neaktivuje.");
-        loadImages(); // V lokálním režimu rovnou načítáme
-    } else {
-        try {
-            sdk = new Discord.EmbeddedAppSDK(window.location.search);
-            setupDiscordSdk().then(() => {
-                loadImages(); // Načítáme až po setupu SDK
-            }).catch(e => {
-                console.error("Chyba při spuštění setupDiscordSdk:", e);
-                loadImages(); // I při chybě zkusíme hru načíst
-            });
-        } catch (e) {
-            console.error("Nepodařilo se inicializovat Discord SDK", e);
-            loadImages(); // Zkusíme pokračovat i bez SDK
-        }
-    }
+    loadImages();
 }); 

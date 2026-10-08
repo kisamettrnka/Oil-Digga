@@ -4,14 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-"Oil digga" (package name `turmoil-activity`): a Turmoil-style oil tycoon, meant to run as a Discord Activity. It is a static, dependency-free browser game: `index.html` + `style.css` + one big `script.js` (global scope, no modules, no bundler). The only npm dependency is `http-server` (dev). UI text and code comments are in Czech; keep that.
+"Oil digga" (package name `turmoil-activity`): a Turmoil-style oil tycoon, meant to run as a Discord Activity. The game itself is plain browser code with no bundler: `index.html` + `style.css` + one big `script.js` + `net.js` (classic scripts sharing global scope, no modules). A small Node server (`server/`, Express + `ws`) serves it, exchanges the Discord OAuth code and runs the lobby/race rooms. Only the Discord SDK is bundled (esbuild, `client/discord-sdk.js` -> `dist/discord-sdk.js`, global `OilDiscordSDK`). UI text and code comments are in Czech; keep that. Discord Developer Portal setup is in `README.md`.
 
 ## Commands
 
 ```bash
 npm install
-npm start                 # http-server on :3000 with caching disabled (-c-1), opens the browser
-node --check script.js    # the only static check; there is no lint, build or test suite
+cp .env.example .env      # DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET / PORT; .env is gitignored
+npm run dev               # build the SDK bundle, run server/index.js on :3000 with --watch
+npm start                 # same without watch (what a host runs)
+npm run static            # old static http-server, no lobby (net.js falls back to solo)
+node --check script.js    # the only static check (also net.js, server/*.js); no lint or test suite
 ```
 
 There are no automated tests. Verify by running the game in a browser. Top-level `let`/`const` in `script.js` are reachable from the devtools console, so the game can be driven directly:
@@ -21,7 +24,9 @@ plots[1].owner = 'player'; plots[1].hasVrt = true; startGameLoop(); isPaused = t
 update(16);        // then step the simulation yourself
 ```
 
-Stepping `update(16)` in a loop (e.g. 5000 times) is a cheap way to test truck logic; only prices, pocket layout and some tie-breaks use `Math.random`.
+Stepping `update(16)` in a loop (e.g. 5000 times) is a cheap way to test truck logic; prices and pocket layout use `marketRandom`/a seeded `rand` only when `worldSeed` is set (race), otherwise `Math.random`.
+
+Lobby without Discord: open `/?user=Alice&room=test` and `/?user=Bob&room=test` in two tabs (guest ids live in `sessionStorage`, so each tab is a separate player). A raw `ws` client from Node can also join a room to inspect its state.
 
 ## Architecture
 
@@ -37,6 +42,8 @@ Stepping `update(16)` in a loop (e.g. 5000 times) is a cheap way to test truck l
 - Sound: synthesized in `SOUNDS` (FM bell `playBell`, filtered noise `playNoise`, pitch-drop `playThump`), sale sounds are throttled by `SALE_SOUND_GAP_MS`.
 - Economy: land tax per owned plot per game day, bankruptcy when money < 0, the year ends after Dec 31 (`isGameOver` with `gameOverReason`, restart button drawn on the canvas).
 
+**Network (`net.js`, `server/`).** `Net` boots on `DOMContentLoaded`: `GET /api/config`; in Discord (`frame_id` in the URL) `DiscordSDK.ready()` -> `authorize` -> `POST /api/token` (server exchanges the code with the client secret) -> `authenticate`; elsewhere a guest identity (only if the server allows guests, i.e. not `NODE_ENV=production`). Then a WebSocket `/api/ws` with `hello`; the server verifies Discord users via `/users/@me`. In Discord all API paths use the `/.proxy` prefix; the server strips it. Room = `instanceId` (`server/rooms.js`): phases `lobby -> playing -> finished -> lobby`, the first connected player is host, only the host can `start`/`reset`. A race sends everyone the same `seed`; `restartGame(seed)` makes the same map and the same price sequence, `raceMode` locks speed to 1× and disables pause, the countdown calls `startGameLoop()`. Clients send `progress` every second and `finish` on game over; the server re-broadcasts state at most twice per second. If `/api/config` fails, the game silently runs solo. The server only serves an allowlist (`/`, `script.js`, `net.js`, `style.css`, `img/`, `dist/`, `/fonts` from `@fontsource/rye`), never the repo root.
+
 **Camera.** The world uses canvas coordinates at zoom 1; `camera` (`x`, `y`, `zoom` easing toward `tx`, `ty`, `tzoom`) is applied by `applyCameraTransform()` in `draw()`; the vignette, pause and game-over overlays are drawn in screen space after `setTransform(1,0,0,1,0,0)`. `getCanvasPosition()` returns world `x/y` plus raw canvas `px/py`, so hit tests keep working while zoomed. Wheel zooms (except over a buyer, where it assigns trucks), dragging pans when zoomed (`suppressNextClick` swallows the click that ends a drag), keys: arrows/WASD, `+`/`-`, `0`. Game over resets the camera instantly.
 
 **Canvas input.** One `click` handler (`handleCanvasClick`) dispatches by priority: game-over restart, buyer −/+ buttons, plot purchase, then build-mode (vrt, silo, seismic, radar) / pipe placement / derrick selection. Hit rectangles for canvas controls (`companyControls`, sign hitboxes) are recomputed during drawing, so they only exist after at least one `draw()`.
@@ -47,13 +54,13 @@ Stepping `update(16)` in a loop (e.g. 5000 times) is a cheap way to test truck l
 
 ## Cache busting (Discord caches aggressively)
 
-`index.html` sets `window.ASSET_VERSION = Date.now()` and loads `style.css`, `script.js` and the favicon through `document.write` with `?v=<version>`; any image loaded from JS must go through `assetUrl()`. Do not add plain `src`/`href` references to local assets, or they will be cached. `npm start` serves with `-c-1`. `index.html` itself can only be kept fresh by server headers, and there is no hosting config in the repo.
+`index.html` sets `window.ASSET_VERSION = Date.now()` and loads `style.css`, `script.js` and the favicon through `document.write` with `?v=<version>`; any image loaded from JS must go through `assetUrl()`. Do not add plain `src`/`href` references to local assets, or they will be cached. The server sends `Cache-Control: no-store` for everything it serves. The Rye font is self-hosted (`@font-face` in `style.css`), because Discord's CSP blocks Google Fonts; canvas text needs `document.fonts.load` to trigger it.
 
 ## Known gaps
 
-- **Discord SDK does not work.** `https://discord.com/assets/embedded-app-sdk.js` returns 404 and `Discord.EmbeddedAppSDK` does not exist (the real package is `@discord/embedded-app-sdk`, `new DiscordSDK(clientId)`, needs a bundler). It only "works" because the `catch` falls back to `loadImages()`. The local/Discord switch is `hostname === 'localhost' || '127.0.0.1'`. External resources (Google Fonts "Rye", `transparenttextures.com` wood texture, which also 404s) need Discord URL mappings.
-- `Analýza.docx` and `README.md` describe an older truck system (`collecting`/`returning` states) and are out of date; trust the code.
-- `node_modules` is committed and there is no `.gitignore`.
+- The Discord path (SDK auth, `/.proxy`, avatar URL mapping `/discord-cdn`) has not been tested inside Discord yet, only the guest lobby locally.
+- The race is not cheat-proof: clients report their own money.
+- `Analýza.docx` describes an older truck system (`collecting`/`returning` states) and is out of date; trust the code.
 
 ## Git workflow used here
 

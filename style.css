@@ -1,4 +1,14 @@
 /* --- Základní nastavení --- */
+/* Rye lokálně (z @fontsource/rye, server ho vydává na /fonts): Google Fonts by v Discordu blokovalo CSP */
+@font-face {
+    font-family: 'Rye';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/rye-latin-400-normal.woff2') format('woff2'),
+         url('fonts/rye-latin-ext-400-normal.woff2') format('woff2');
+}
+
 :root {
     --hud-bg: rgba(12, 12, 20, 0.82);
     --hud-bg-solid: rgba(12, 12, 20, 0.92);
@@ -504,4 +514,258 @@ button:disabled {
     #hud-log {
         width: 18em;
     }
+}
+
+/* --- Lobby, závod a výsledky (net.js) --- */
+.hidden {
+    display: none !important;
+}
+
+.overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at 50% 40%, rgba(10, 10, 20, 0.55), rgba(5, 5, 10, 0.85));
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    z-index: 50;
+}
+
+.lobby-card {
+    width: min(46em, 90%);
+    padding: 1.8em 2em 1.4em;
+    background: linear-gradient(180deg, rgba(16, 16, 28, 0.96), rgba(12, 12, 20, 0.9));
+    border: 1px solid var(--hud-border);
+    border-radius: 1em;
+    box-shadow: 0 1.5em 4em rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    text-align: center;
+}
+.lobby-title {
+    font-family: 'Rye', Georgia, serif;
+    font-size: 3.2em;
+    color: var(--hud-gold);
+    text-shadow: 0 0 0.6em rgba(255, 170, 80, 0.45);
+    letter-spacing: 0.04em;
+}
+.lobby-title.small {
+    font-size: 2em;
+    margin-bottom: 0.5em;
+}
+.lobby-sub {
+    color: var(--hud-muted);
+    font-size: 0.95em;
+    margin: 0.3em 0 1.3em;
+}
+
+#lobby-players {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9em, 1fr));
+    gap: 0.6em;
+    margin-bottom: 1.3em;
+}
+.lobby-player {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35em;
+    padding: 0.8em 0.4em;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--hud-border);
+    border-radius: 0.7em;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.lobby-player.you {
+    background: rgba(255, 180, 90, 0.07);
+}
+.lobby-player.ready {
+    border-color: var(--hud-good);
+    box-shadow: 0 0 1em rgba(110, 227, 154, 0.25);
+}
+.lobby-player .avatar {
+    width: 3.4em;
+    height: 3.4em;
+    font-size: 1.2em;
+}
+.lobby-name {
+    font-weight: 700;
+    font-size: 0.95em;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.lobby-state {
+    font-size: 0.75em;
+    color: var(--hud-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+.lobby-player.ready .lobby-state {
+    color: var(--hud-good);
+}
+.badge {
+    font-size: 0.7em;
+    font-weight: 700;
+    color: var(--hud-accent);
+    border: 1px solid rgba(255, 180, 90, 0.5);
+    border-radius: 1em;
+    padding: 0 0.5em;
+    vertical-align: middle;
+}
+
+.avatar {
+    width: 1.7em;
+    height: 1.7em;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.avatar-initial {
+    --hue: 30;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    color: #fff;
+    background: hsl(var(--hue), 45%, 38%);
+}
+
+.lobby-actions {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.6em;
+}
+.lobby-btn {
+    min-width: 9em;
+    padding: 0.7em 1.4em;
+    font-size: 1em;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: 0.6em;
+    border: 1px solid var(--hud-border);
+    background: rgba(255, 255, 255, 0.07);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.lobby-btn:hover:not(:disabled) {
+    border-color: rgba(255, 190, 110, 0.6);
+}
+.lobby-btn.active {
+    background: rgba(110, 227, 154, 0.18);
+    border-color: var(--hud-good);
+    color: var(--hud-good);
+}
+.lobby-btn.primary {
+    background: linear-gradient(180deg, #ffb45a, #e8862f);
+    border-color: #ffc27a;
+    color: #2a1406;
+    box-shadow: 0 0 1.4em rgba(255, 160, 70, 0.35);
+}
+.lobby-btn.ghost {
+    background: transparent;
+}
+.lobby-btn:disabled {
+    opacity: 0.4;
+}
+#lobby-status {
+    margin-top: 1em;
+    min-height: 1.3em;
+    font-size: 0.85em;
+    color: var(--hud-muted);
+}
+
+#race-countdown {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Rye', Georgia, serif;
+    font-size: 9em;
+    color: var(--hud-gold);
+    text-shadow: 0 0 0.4em rgba(255, 170, 80, 0.7);
+    background: rgba(5, 5, 10, 0.35);
+    z-index: 60;
+}
+#race-countdown.go {
+    animation: race-go 0.7s ease-out forwards;
+}
+@keyframes race-go {
+    from { transform: scale(1); opacity: 1; }
+    to { transform: scale(1.6); opacity: 0; }
+}
+
+/* Žebříček během závodu nahrazuje panel cílů */
+#hud-race {
+    display: none;
+    top: 4.2em;
+    right: 7.6%;
+    width: 17em;
+    padding: 0.7em 0.9em;
+    pointer-events: none;
+}
+#stage.racing #hud-race {
+    display: block;
+}
+#stage.racing #hud-goals {
+    display: none;
+}
+.race-title {
+    font-weight: 800;
+    font-size: 0.95em;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 0.4em;
+}
+.race-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.25em 0.3em;
+    border-radius: 0.4em;
+    font-size: 0.9em;
+}
+.race-row.you {
+    background: rgba(255, 180, 90, 0.12);
+}
+.race-row .rank {
+    width: 1.4em;
+    color: var(--hud-muted);
+    font-variant-numeric: tabular-nums;
+}
+.race-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+}
+.race-money {
+    font-weight: 800;
+    color: var(--hud-gold);
+    font-variant-numeric: tabular-nums;
+}
+.race-state {
+    width: 5.5em;
+    text-align: right;
+    font-size: 0.8em;
+    color: var(--hud-muted);
+}
+
+.results-card #results-list {
+    margin-bottom: 1.2em;
+    text-align: left;
+}
+.results-card .race-row {
+    font-size: 1.1em;
+    padding: 0.5em 0.6em;
+}
+.results-card .race-row:first-child .rank {
+    color: var(--hud-gold);
 }
