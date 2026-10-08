@@ -106,6 +106,7 @@ const Net = (() => {
             }
             if (msg.type === 'state') onState(msg);
             else if (msg.type === 'race_start') onRaceStart(msg);
+            else if (msg.type === 'race_end') onRaceEnd(msg);
             else if (msg.type === 'error') onError(msg);
         };
         ws.onclose = () => {
@@ -162,12 +163,31 @@ const Net = (() => {
         raceId = msg.raceId;
         finishSent = false;
         raceStartedAt = Date.now() + msg.startIn;
+        // raceMode musí být nastavený před restartGame: podle něj se vezmou závodní pravidla
+        raceMode = { raceId: msg.raceId, months: msg.months || 3, mode: msg.mode || 'richest', target: msg.target || 0 };
         if (typeof restartGame === 'function') restartGame(msg.seed);
-        raceMode = { raceId: msg.raceId };
         gameSpeed = 1;
         isPaused = false;
         setMode('countdown');
         runCountdown(msg.startIn);
+    }
+
+    // Server ukončil závod: zbyl jsi poslední (ostatní zkrachovali/odpadli), nebo vypršel čas
+    function onRaceEnd(msg) {
+        if (!raceMode || msg.raceId !== raceId || isGameOver) return;
+        isGameOver = true;
+        gameOverReason = 'race_end';
+        if (typeof notify === 'function') {
+            const winner = room?.players.find(p => p.id === msg.winnerId);
+            if (msg.reason === 'target') {
+                notify(msg.winnerId === youId ? 'Vyhrál jsi!' : 'Konec závodu',
+                    `${msg.winnerId === youId ? 'Jako první máš' : `${winner ? winner.name : 'Soupeř'} má jako první`} ${formatMoney(raceMode.target)}`,
+                    msg.winnerId === youId ? 'good' : 'bad', '🏆');
+            } else if (msg.reason === 'last_standing') {
+                notify('Poslední na trhu!', 'Ostatní zkrachovali nebo odpadli, závod končí', 'good', '🏆');
+            }
+        }
+        sendProgress();
     }
 
     function runCountdown(ms) {
@@ -280,6 +300,17 @@ const Net = (() => {
             if (sdk) sdk.commands.openInviteDialog().catch(() => setStatus('Pozvánku tady poslat nejde (DM nebo chybí oprávnění).'));
         });
         $('results-reset').addEventListener('click', () => sendMsg({ type: 'reset' }));
+        // Volby hostitele: délka, režim, cíl (server přijme jen od hostitele v lobby)
+        ['lobby-length', 'lobby-mode', 'lobby-target'].forEach(id => $(id).addEventListener('click', event => {
+            const btn = event.target.closest('.length-btn');
+            if (!btn || btn.disabled) return;
+            if (btn.dataset.months) sendMsg({ type: 'settings', months: Number(btn.dataset.months) });
+            if (btn.dataset.mode) sendMsg({ type: 'settings', mode: btn.dataset.mode });
+            if (btn.dataset.target) sendMsg({ type: 'settings', target: Number(btn.dataset.target) });
+        }));
+        $('lobby-rules').innerHTML = `Závodní pravidla: start <b>$${RACE_RULES.startMoney.toLocaleString('cs-CZ')}</b>,
+            daň <b>$${RACE_RULES.landTax}</b>/pozemek/den (v přežití +$${SURVIVAL_TAX_STEP} každý měsíc), rychlejší přetlak,
+            pokuta za erupci <b>$${RACE_RULES.blowoutFine}</b>. Kdo zkrachuje, končí. Zbyde-li jediný, závod hned skončí.`;
         $('lobby-invite').classList.toggle('hidden', !isDiscord);
     }
 
@@ -315,6 +346,23 @@ const Net = (() => {
         return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
 
+    const RACE_LENGTHS = [1, 3, 6, 12];
+    const RACE_TARGETS = [10000, 20000, 50000];
+    const RACE_MODES = {
+        richest: { name: 'Nejbohatší', desc: 'Na konci vyhrává nejvíc peněz' },
+        target: { name: 'Cíl', desc: 'Kdo první nasbírá cílovou částku' },
+        survival: { name: 'Přežití', desc: 'Daň každý měsíc roste, vyhrává kdo jediný nezkrachuje' }
+    };
+
+    function modeTitle(settings) {
+        if (settings.mode === 'target') return `Cíl ${formatMoney(settings.target)}`;
+        return RACE_MODES[settings.mode]?.name || 'Závod';
+    }
+
+    function raceDays(months) {
+        return daysInMonth.slice(1, months + 1).reduce((a, b) => a + b, 0);
+    }
+
     const STATUS_TEXT = {
         lobby: 'v lobby', solo: 'hraje sám', racing: 'závodí', finished: 'v cíli', spectating: 'sleduje'
     };
@@ -327,7 +375,10 @@ const Net = (() => {
         const isHost = youId === room.hostId;
         $('results-reset').classList.toggle('hidden', !isHost);
         $('results-wait').classList.toggle('hidden', isHost);
-        $('results-title').textContent = room.phase === 'finished' ? 'Konečné pořadí' : 'Průběžné pořadí';
+        const winner = room.players.find(p => p.id === room.winnerId);
+        $('results-title').textContent = room.phase === 'finished'
+            ? (winner ? (winner.id === youId ? 'Vyhrál jsi!' : `Vítěz: ${winner.name}`) : 'Konečné pořadí')
+            : 'Průběžné pořadí';
     }
 
     function renderLobby() {
@@ -350,6 +401,22 @@ const Net = (() => {
         startBtn.classList.toggle('hidden', !isHost);
         startBtn.disabled = room.phase !== 'lobby';
 
+        // Režim, cíl a délka závodu: hostitel volí, ostatní vidí
+        const settings = room.settings || { months: 3, mode: 'richest', target: 20000 };
+        const canEdit = isHost && room.phase === 'lobby';
+        $('lobby-mode').innerHTML = Object.entries(RACE_MODES).map(([key, m]) => `
+            <button class="length-btn mode-btn${key === settings.mode ? ' active' : ''}" data-mode="${key}" ${canEdit ? '' : 'disabled'}>
+                ${m.name}<small>${m.desc}</small>
+            </button>`).join('');
+        $('lobby-target').classList.toggle('hidden', settings.mode !== 'target');
+        $('lobby-target').innerHTML = RACE_TARGETS.map(t => `
+            <button class="length-btn${t === settings.target ? ' active' : ''}" data-target="${t}" ${canEdit ? '' : 'disabled'}>${formatMoney(t)}</button>`).join('');
+        const months = settings.months;
+        $('lobby-length').innerHTML = RACE_LENGTHS.map(m => `
+            <button class="length-btn${m === months ? ' active' : ''}" data-months="${m}" ${canEdit ? '' : 'disabled'}>
+                ${m} ${m === 1 ? 'měsíc' : (m < 5 ? 'měsíce' : 'měsíců')}<small>~${Math.round(raceDays(m) * MS_PER_DAY / 60000)} min</small>
+            </button>`).join('');
+
         if (room.phase !== 'lobby') setStatus('Probíhá závod. Počkej na další kolo, nebo hraj sám.');
         else if (isHost) {
             const readyCount = room.players.filter(p => p.connected && p.ready).length;
@@ -368,21 +435,31 @@ const Net = (() => {
             const live = p.id === youId && raceMode && !finishSent;
             return {
                 p,
-                money: live ? Math.floor(money) : (p.progress?.money ?? 0),
+                money: live ? Math.floor(money) : (p.progress?.money ?? RACE_RULES.startMoney),
                 month: live ? month : (p.progress?.month ?? 1),
                 day: live ? day : (p.progress?.day ?? 1)
             };
-        }).sort((a, b) => b.money - a.money);
-        const title = detailed ? '' : '<div class="race-title">Závod o ropu</div>';
+        }).sort((a, b) => {
+            const outA = a.p.progress?.reason === 'bankrupt', outB = b.p.progress?.reason === 'bankrupt';
+            return outA !== outB ? (outA ? 1 : -1) : b.money - a.money;
+        });
+        const settings = room.settings || {};
+        const goal = settings.mode === 'target' ? settings.target : 0;
+        const subtitle = settings.mode === 'survival' && raceMode ? ` · daň $${getLandTax()}` : '';
+        const title = detailed ? '' : `<div class="race-title">${escapeHtml(modeTitle(settings))}${subtitle}</div>`;
         el.innerHTML = title + rows.map((r, i) => {
-            const state = !r.p.connected ? 'odpojen'
-                : r.p.status === 'finished' ? (r.p.progress?.reason === 'bankrupt' ? 'bankrot' : 'v cíli')
-                    : `${r.day}. ${monthNames[r.month]}`;
-            return `<div class="race-row${r.p.id === youId ? ' you' : ''}">
-                <span class="rank">${i + 1}.</span>${avatarHtml(r.p)}
+            const bankrupt = r.p.progress?.reason === 'bankrupt';
+            const state = bankrupt ? 'bankrot'
+                : !r.p.connected ? 'odpojen'
+                    : r.p.status === 'finished' ? 'v cíli'
+                        : `${r.day}. ${monthNames[r.month]}`;
+            const winner = room.phase === 'finished' && r.p.id === room.winnerId;
+            return `<div class="race-row${r.p.id === youId ? ' you' : ''}${bankrupt ? ' out' : ''}">
+                <span class="rank">${winner ? '🏆' : `${i + 1}.`}</span>${avatarHtml(r.p)}
                 <span class="race-name">${escapeHtml(r.p.name)}</span>
                 <span class="race-money">${formatMoney(r.money)}</span>
                 ${detailed ? `<span class="race-state">${state}</span>` : ''}
+                ${goal ? `<span class="goal-bar"><span style="width:${Math.max(0, Math.min(100, r.money / goal * 100)).toFixed(1)}%"></span></span>` : ''}
             </div>`;
         }).join('');
         bindAvatarFallbacks(el);

@@ -24,8 +24,22 @@ function getGroundLevel() {
 let canvas = null;
 let ctx = null;
 let lastTime = 0;
-const START_MONEY = 3000;
-let money = START_MONEY;
+// Pravidla: v závodě (raceMode) jsou tvrdší, sólo zůstává přívětivé
+const SOLO_RULES = { startMoney: 3000, landTax: 15, pressureBuildMs: 20000, blowoutFine: 250 };
+const RACE_RULES = { startMoney: 2000, landTax: 25, pressureBuildMs: 12000, blowoutFine: 400 };
+
+const SURVIVAL_TAX_STEP = 15; // režim přežití: daň za pozemek roste každý měsíc o tolik
+
+function getRules() {
+    return raceMode ? RACE_RULES : SOLO_RULES;
+}
+
+function getLandTax() {
+    const base = getRules().landTax;
+    return raceMode && raceMode.mode === 'survival' ? base + SURVIVAL_TAX_STEP * (month - 1) : base;
+}
+
+let money = SOLO_RULES.startMoney;
 let isGameOver = false;
 let gameOverReason = '';
 let isPaused = false;
@@ -54,7 +68,6 @@ const SILO_CAPACITY_BONUS = 500;
 const DERRICK_BASE_CAPACITY = 50;
 const OIL_PER_SECOND = 8;
 const MAX_SILOS_PER_PLOT = 4;
-const DAILY_LAND_TAX = 15;
 const MIN_LOAD_AMOUNT = 25;
 const MAX_TRUCKS = 8;
 const MAX_FRAME_MS = 100; // Strop reálného času jednoho snímku (po návratu na kartu apod.)
@@ -168,7 +181,7 @@ function startGameLoop() {
 function restartGame(seed = null) {
     if (!canvas) return;
     worldSeed = seed;
-    money = START_MONEY;
+    money = getRules().startMoney; // net.js nastaví raceMode před restartGame(seed)
     isGameOver = false;
     gameOverReason = '';
     isPaused = false;
@@ -778,17 +791,25 @@ function update(dt) {
         dayTimer -= MS_PER_DAY;
         day++;
         const ownedPlots = plots.filter(p => p.owner === 'player').length;
-        lastDayIncome = totalRevenue - revenueAtDayStart - ownedPlots * DAILY_LAND_TAX;
+        const landTax = getLandTax();
+        lastDayIncome = totalRevenue - revenueAtDayStart - ownedPlots * landTax;
         revenueAtDayStart = totalRevenue;
         if (ownedPlots > 0) {
-            money -= ownedPlots * DAILY_LAND_TAX;
+            money -= ownedPlots * landTax;
             if (money < 0) {
                 isGameOver = true;
                 gameOverReason = 'bankrupt';
             }
         }
         if (day > daysInMonth[month]) {
-            if (month === 12) {
+            if (raceMode && month >= raceMode.months) {
+                // Konec závodu: poslední den zvolené délky (hostitel ji vybírá v lobby)
+                day = daysInMonth[month];
+                if (!isGameOver) {
+                    isGameOver = true;
+                    gameOverReason = 'race_end';
+                }
+            } else if (month === 12) {
                 // Konec roku: kalendář zůstane na posledním dni, nikdy nejde na měsíc 13
                 day = daysInMonth[month];
                 if (!isGameOver) {
@@ -949,7 +970,9 @@ function updateUI() {
     setText('month', monthNames[month]);
     setText('day', String(day));
     const daysBefore = daysInMonth.slice(1, month).reduce((a, b) => a + b, 0);
-    document.getElementById('date-dial').style.setProperty('--year', ((daysBefore + day - 1) / 365).toFixed(4));
+    // V závodě kruh ukazuje průběh závodu, jinak průběh roku
+    const totalDays = raceMode ? daysInMonth.slice(1, raceMode.months + 1).reduce((a, b) => a + b, 0) : 365;
+    document.getElementById('date-dial').style.setProperty('--year', Math.min(1, (daysBefore + day - 1) / totalDays).toFixed(4));
 
     renderGoals();
 
@@ -4111,7 +4134,6 @@ function handleDefaultClick(plot) {
 // Čerpající vrt s plným zásobníkem dál tlačí ropu z ložiska a roste tlak (manometr nad vrtem).
 // Od VENT_MIN jde kliknutím na vrt odpustit ventil (pára, tlak spadne na nulu). Při 100 % vrt
 // vybuchne gejzírem: ropa z ložiska letí do vzduchu, dělá na pozemku kaluž a platí se pokuta.
-const PRESSURE_BUILD_MS = 20000;      // od 0 do 100 % při plném zásobníku (herní čas, 2 dny)
 const PRESSURE_RELIEF_MS = 5000;      // pokles ze 100 % na 0, jakmile má zásobník místo
 const VENT_MIN = 0.3;                 // od tohoto tlaku jde ventil odpustit
 const PRESSURE_WARN = 0.6;            // siréna a oznámení
@@ -4119,7 +4141,6 @@ const PRESSURE_AFTER_BLOWOUT = 0.35;
 const VENT_MS = 1600;
 const BLOWOUT_MS = 4500;
 const BLOWOUT_WASTE_PER_SECOND = 40;  // barelů z ložiska do vzduchu
-const BLOWOUT_FINE = 250;
 const SPILL_PER_DROP = 0.0008;     // jedna erupce udělá zhruba dvoutřetinovou kaluž
 const SPILL_FADE_MS = 40000;          // kaluž zmizí asi za 4 herní dny
 
@@ -4141,10 +4162,11 @@ function ventRig(network) {
 
 function startBlowout(network) {
     network.blowout = BLOWOUT_MS;
-    money -= BLOWOUT_FINE;
+    const fine = getRules().blowoutFine;
+    money -= fine;
     shakeCamera(12);
     playSound('gush');
-    notify('Erupce ropy!', `Vrt na pozemku ${network.derrickId + 1}: únik a pokuta $${BLOWOUT_FINE}`, 'bad', '🌋');
+    notify('Erupce ropy!', `Vrt na pozemku ${network.derrickId + 1}: únik a pokuta $${fine}`, 'bad', '🌋');
 }
 
 function updateRigPressure(dt) {
@@ -4169,7 +4191,7 @@ function updateRigPressure(dt) {
         const pressure = network.pressure || 0;
         const full = network.isPumping && network.oilStored >= network.oilCapacity - 0.01;
         network.pressure = full
-            ? Math.min(1, pressure + dt / PRESSURE_BUILD_MS)
+            ? Math.min(1, pressure + dt / getRules().pressureBuildMs)
             : Math.max(0, pressure - dt / PRESSURE_RELIEF_MS);
         if (network.pressure >= PRESSURE_WARN && !network.warned) {
             network.warned = true;

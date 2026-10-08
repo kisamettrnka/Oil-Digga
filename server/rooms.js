@@ -5,6 +5,15 @@ const ROOM_IDLE_MS = 60_000;          // prázdná místnost se po minutě zahod
 const STATE_THROTTLE_MS = 500;        // průběžné výsledky se rozesílají nejvýš 2× za sekundu
 const RACE_COUNTDOWN_MS = 4000;
 const MAX_PLAYERS = 12;
+const RACE_DAY_MS = 10000;            // = MS_PER_DAY ve script.js (závod běží na 1×)
+const RACE_GRACE_MS = 60_000;         // rezerva na zpoždění klientů, pak server závod ukončí sám
+const RACE_MONTH_OPTIONS = [1, 3, 6, 12];
+// Režimy: richest = nejvíc peněz na konci, target = kdo první nasbírá cíl, survival = kdo jediný nezkrachuje
+const RACE_MODES = ['richest', 'target', 'survival'];
+const TARGET_OPTIONS = [10000, 20000, 50000];
+const RACE_END_WAIT_MS = 10_000;      // po race_end čeká server na finish klientů, pak uzavře sám
+const DEFAULT_SETTINGS = { months: 3, mode: 'richest', target: 20000 };
+const DAYS_IN_MONTH = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 function clampNumber(value, min, max, fallback = 0) {
     const n = Number(value);
@@ -19,7 +28,7 @@ function sanitizeProgress(msg) {
         day: Math.round(clampNumber(msg.day, 1, 31, 1)),
         month: Math.round(clampNumber(msg.month, 1, 12, 1)),
         over: msg.over === true,
-        reason: msg.reason === 'bankrupt' ? 'bankrupt' : (msg.reason === 'year_end' ? 'year_end' : null)
+        reason: ['bankrupt', 'year_end', 'race_end'].includes(msg.reason) ? msg.reason : null
     };
 }
 
@@ -36,6 +45,12 @@ class Room {
         this.seed = null;
         this.raceId = 0;
         this.raceStartedAt = null;
+        this.raceSize = 0;            // kolik hráčů závod začalo
+        this.lastStandingSent = false;
+        this.raceTimer = null;
+        this.settings = { ...DEFAULT_SETTINGS };
+        this.winnerId = null;
+        this.ending = false;
         this.emptySince = null;
         this.stateTimer = null;
     }
@@ -94,12 +109,25 @@ class Room {
                     player.status = this.phase === 'lobby' ? 'lobby' : 'spectating';
                 }
                 break;
+            case 'settings':
+                if (!isHost || this.phase !== 'lobby') return;
+                if (RACE_MONTH_OPTIONS.includes(msg.months)) this.settings.months = msg.months;
+                if (RACE_MODES.includes(msg.mode)) this.settings.mode = msg.mode;
+                if (TARGET_OPTIONS.includes(msg.target)) this.settings.target = msg.target;
+                break;
             case 'start':
                 if (isHost && this.phase === 'lobby') this.startRace();
                 return;
             case 'progress':
                 if (player.status !== 'racing' || msg.raceId !== this.raceId) return;
                 player.progress = sanitizeProgress(msg);
+                // Režim cíl: kdo první nahlásí peníze nad cílem, vyhrává
+                if (this.settings.mode === 'target' && !this.winnerId && player.progress.money >= this.settings.target) {
+                    this.winnerId = player.id;
+                    this.endRaceForAll('target');
+                    this.broadcastState();
+                    return;
+                }
                 this.scheduleState();
                 return;
             case 'finish':
@@ -124,24 +152,93 @@ class Room {
         this.raceId++;
         this.seed = Math.floor(Math.random() * 2 ** 31);
         this.raceStartedAt = Date.now() + RACE_COUNTDOWN_MS;
+        this.raceSize = racers.length;
+        this.lastStandingSent = false;
+        this.winnerId = null;
+        this.ending = false;
+        const { months, mode, target } = this.settings;
         racers.forEach(p => {
             p.status = 'racing';
             p.ready = false;
-            p.progress = sanitizeProgress({ money: 3000 });
-            send(p.ws, { type: 'race_start', raceId: this.raceId, seed: this.seed, startIn: RACE_COUNTDOWN_MS });
+            p.progress = null;
+            send(p.ws, { type: 'race_start', raceId: this.raceId, seed: this.seed, months, mode, target, startIn: RACE_COUNTDOWN_MS });
         });
+        // Pojistka: po uplynutí herní délky závodu ho server ukončí, i když se klient zasekne
+        const raceDays = DAYS_IN_MONTH.slice(1, months + 1).reduce((a, b) => a + b, 0);
+        const raceId = this.raceId;
+        clearTimeout(this.raceTimer);
+        this.raceTimer = setTimeout(() => this.forceEnd(raceId), RACE_COUNTDOWN_MS + raceDays * RACE_DAY_MS + RACE_GRACE_MS);
+        this.raceTimer.unref?.();
         this.broadcastState();
     }
 
-    // Závod končí, když už nikdo připojený nejede (odpojení hráči závod neblokují)
+    racing() {
+        return this.connectedPlayers().filter(p => p.status === 'racing');
+    }
+
+    // Závod končí, když už nikdo připojený nejede (odpojení hráči závod neblokují).
+    // Ve hře o víc hráčích vyhrává poslední přeživší: zbyde-li jediný, dostane race_end.
     checkRaceEnd() {
         if (this.phase !== 'playing') return;
-        if (!this.connectedPlayers().some(p => p.status === 'racing')) this.phase = 'finished';
+        const active = this.racing();
+        if (!active.length) {
+            this.finishRace();
+        } else if (this.raceSize >= 2 && active.length === 1 && !this.lastStandingSent && !this.ending
+            && this.othersAreOut(active[0])) {
+            this.lastStandingSent = true;
+            if (this.settings.mode === 'survival') this.winnerId = active[0].id;
+            send(active[0].ws, { type: 'race_end', raceId: this.raceId, reason: 'last_standing', winnerId: this.winnerId });
+        }
+    }
+
+    // Ostatní závodníci zkrachovali nebo odpadli (kdo dojel na čas, z boje nevypadl)
+    othersAreOut(survivor) {
+        return [...this.players.values()]
+            .filter(p => p !== survivor && (p.status === 'racing' || p.status === 'finished'))
+            .every(p => !p.connected || p.progress?.reason === 'bankrupt');
+    }
+
+    // Konec pro všechny najednou (dosažený cíl): klienti pošlou finish se svými penězi
+    endRaceForAll(reason) {
+        if (this.ending) return;
+        this.ending = true;
+        for (const p of this.racing()) send(p.ws, { type: 'race_end', raceId: this.raceId, reason, winnerId: this.winnerId });
+        const raceId = this.raceId;
+        clearTimeout(this.raceTimer);
+        this.raceTimer = setTimeout(() => this.forceEnd(raceId), RACE_END_WAIT_MS);
+        this.raceTimer.unref?.();
+    }
+
+    forceEnd(raceId) {
+        if (this.phase !== 'playing' || this.raceId !== raceId) return;
+        for (const p of this.players.values()) {
+            if (p.status !== 'racing') continue;
+            send(p.ws, { type: 'race_end', raceId, reason: 'timeout' });
+            p.status = 'finished';
+        }
+        this.finishRace();
+        this.broadcastState();
+    }
+
+    // Vítěz, pokud ho neurčil cíl nebo přežití: nejvíc peněz z těch, kdo nezkrachovali
+    finishRace() {
+        this.phase = 'finished';
+        clearTimeout(this.raceTimer);
+        this.raceTimer = null;
+        if (!this.winnerId) {
+            const survivors = [...this.players.values()].filter(p => p.progress && p.progress.reason !== 'bankrupt');
+            survivors.sort((a, b) => b.progress.money - a.progress.money);
+            this.winnerId = survivors[0]?.id || null;
+        }
     }
 
     backToLobby() {
+        clearTimeout(this.raceTimer);
+        this.raceTimer = null;
         this.phase = 'lobby';
         this.seed = null;
+        this.winnerId = null;
+        this.ending = false;
         this.raceStartedAt = null;
         for (const [id, p] of this.players) {
             if (!p.connected) {
@@ -161,6 +258,9 @@ class Room {
             hostId: this.hostId,
             raceId: this.raceId,
             raceStartedAt: this.raceStartedAt,
+            raceSize: this.raceSize,
+            settings: this.settings,
+            winnerId: this.winnerId,
             players: [...this.players.values()].map(p => ({
                 id: p.id, name: p.name, avatar: p.avatar, ready: p.ready,
                 status: p.status, connected: p.connected, progress: p.progress
@@ -210,4 +310,4 @@ class RoomRegistry {
     }
 }
 
-module.exports = { RoomRegistry, Room, sanitizeProgress, send, RACE_COUNTDOWN_MS };
+module.exports = { RoomRegistry, Room, sanitizeProgress, send, RACE_COUNTDOWN_MS, RACE_MONTH_OPTIONS, RACE_MODES, TARGET_OPTIONS };
