@@ -54,7 +54,7 @@ Vercel nestačí: neumí WebSocket server, na kterém běží lobby. Na Renderu 
 1. Kód musí být na GitHubu v `main` (Render nasazuje z něj, při každém pushi znovu).
 2. https://dashboard.render.com → **New → Blueprint** → vyber repozitář. Render načte `render.yaml`
    a zeptá se na `DISCORD_CLIENT_SECRET`, vlož ho tam (ne do repa).
-3. Po nasazení dostaneš adresu `https://oil-digga-xxxx.onrender.com`. V Developer Portalu v URL mappingu `/`
+3. Po nasazení dostaneš adresu `https://oil-digga-xxxx.onrender.com`. Free tier služby po čtvrthodině uspává; workflow `.github/workflows/keepalive.yml` ji každých 10 minut pinguje, stačí v GitHubu nastavit proměnnou `RENDER_URL` (Settings → Secrets and variables → Actions → Variables) na tuto adresu bez lomítka na konci. V Developer Portalu v URL mappingu `/`
    nahraď adresu Vercelu touto (bez `https://`).
 
 Zdarma tarif po ~15 minutách bez hráčů usne a první spuštění pak trvá desítky sekund. Kdyby to vadilo,

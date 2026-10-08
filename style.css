@@ -1865,3 +1865,23 @@ button:disabled {
         display: none;
     }
 }
+
+/* --- Barva hráče v lobby: tečka, vlastní jde kliknutím protočit --- */
+.lobby-dot {
+    flex: none;
+    width: 0.9em;
+    height: 0.9em;
+    margin-right: 0.4em;
+    border-radius: 50%;
+    border: 1px solid rgba(26, 18, 11, 0.6);
+    box-shadow: inset 0 0 0.2em rgba(255, 255, 255, 0.35);
+}
+.lobby-dot.own {
+    cursor: pointer;
+    padding: 0;
+    outline: 2px dashed rgba(26, 18, 11, 0.45);
+    outline-offset: 2px;
+}
+.np-footer .stamp-btn.start {
+    margin-right: 0.6em;
+}

@@ -138,5 +138,27 @@ t('clients cannot report money: progress and finish messages are ignored', () =>
     assert.ok(room.players.get('p1').progress.money < 10000);
 });
 
+
+t('lobby: colour pick is free-only, rematch keeps the seed and the colours reach the world', () => {
+    const room = new Room('c'); const a = fakeWs('a'), b = fakeWs('b');
+    room.join({ id: 'a', name: 'A' }, a); room.join({ id: 'b', name: 'B' }, b);
+    assert.notStrictEqual(room.players.get('a').colorIndex, room.players.get('b').colorIndex, 'different defaults');
+    room.handle('b', { type: 'color', index: room.players.get('a').colorIndex });
+    assert.notStrictEqual(room.players.get('b').colorIndex, room.players.get('a').colorIndex, 'taken colour refused');
+    room.handle('b', { type: 'color', index: 3 });
+    assert.strictEqual(room.players.get('b').colorIndex, 3);
+    room.handle('a', { type: 'settings', kind: 'shared' });
+    room.handle('a', { type: 'start' });
+    const seed = room.seed;
+    assert.strictEqual(room.shared.world.players.b.color, Sim.PLAYER_COLORS[3], 'colour in the world');
+    room.handle('a', { type: 'reset' });
+    room.handle('a', { type: 'start', sameMap: true });
+    assert.strictEqual(room.seed, seed, 'rematch on the same map');
+    room.handle('a', { type: 'reset' });
+    room.handle('a', { type: 'start' });
+    assert.notStrictEqual(room.seed, seed, 'a plain start rolls a new map');
+    room.backToLobby();
+});
+
 console.log(results.join('\n'));
 process.exit(results.some(r => r.startsWith('FAIL')) ? 1 : 0);

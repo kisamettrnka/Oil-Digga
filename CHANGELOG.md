@@ -4,6 +4,12 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Lobby a konec hry
+- V lobby si klikem na tečku u svého jména vybereš barvu (volné z palety); barva platí pro praporky, vozy i žebříček.
+- Hostitel může po konci hry spustit odvetu na stejné mapě jedním tlačítkem ve výsledcích.
+- Kdo na sdílené mapě zkrachuje, může zavřít výsledky a sledovat hru dál; výsledky se vrátí, až hra skončí.
+- Na sdílené mapě chodí telegramy a zápisy, když soupeř navrtá ropu, postaví vrt, ropovod nebo vlečku, splní zakázku nebo mu vybuchne vrt.
+
 ### Rychlejší a úspornější hra
 - Závod „každý svou mapu“ počítá server (svět na hráče ze stejného seedu), takže nejde podvádět hlášením peněz a žebříček je přesný.
 - Akce na sdílené mapě se projeví hned, bez čekání na odpověď serveru.

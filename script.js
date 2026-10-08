@@ -401,7 +401,10 @@ function handleWorldEvents(events) {
                 if (mine) notify('Stávka skončila', 'Vozy zase jezdí', 'good', 'wire');
                 break;
             case 'derrick_built':
-                if (!mine) break;
+                if (!mine) {
+                    if (sharedMode) logEvent(`${playerName(e.playerId)} postavil vrt na claimu ${e.plotId + 1}.`);
+                    break;
+                }
                 playSound('build');
                 notify('Vrt postaven', 'Klikej do podzemí: vrták pojede po trase a platí se za metr', 'cool', 'derrick');
                 selectedDerrickPlotId = e.plotId;
@@ -420,7 +423,10 @@ function handleWorldEvents(events) {
                 // Oslava: z věže vystřelí ohňostroj (vidí ho všichni)
                 const rigTop = groundLevel - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT;
                 for (let i = 0; i < 3; i++) launchFirework(e.x + (i - 1) * 14, rigTop, FIREWORK_COLORS[i]);
-                if (!mine) break;
+                if (!mine) {
+                    if (sharedMode) notify('Soupeř navrtal ropu', `${playerName(e.playerId)}: ložisko s ${e.oil.toLocaleString('cs-CZ')} barely`, '', 'gusher');
+                    break;
+                }
                 playSound('strike');
                 notify('Ropa navrtána!', `Ložisko s ${e.oil.toLocaleString('cs-CZ')} barely`, 'good', 'gusher');
                 break;
@@ -460,7 +466,10 @@ function handleWorldEvents(events) {
                 if (mine) notify('Vrták stojí', 'Došly peníze na vrtání, pojede dál, až přibydou', 'bad', 'derrick');
                 break;
             case 'link_built':
-                if (!mine) break;
+                if (!mine) {
+                    if (sharedMode) logEvent(`${playerName(e.playerId)} postavil ${e.kind === 'siding' ? 'vlečku' : 'ropovod'} → ${e.name}.`);
+                    break;
+                }
                 playSound('build');
                 notify(e.kind === 'siding' ? 'Vlečka postavena' : 'Ropovod postaven', `Pozemek ${e.plotId + 1} → ${e.name} za $${e.cost}`, 'good', e.kind === 'siding' ? 'rail' : 'pipe');
                 break;
@@ -486,7 +495,10 @@ function handleWorldEvents(events) {
                 notify('Přetlak na vrtu!', `Pozemek ${e.plotId + 1}: odvez ropu, nebo klikni na vrt a odpusť ventil`, 'bad', 'warning');
                 break;
             case 'blowout':
-                if (!mine) break;
+                if (!mine) {
+                    if (sharedMode) logEvent(`U hráče ${playerName(e.playerId)} ${e.kick ? 'vyrazil plyn z vrtu' : 'vybuchl vrt'}.`);
+                    break;
+                }
                 focusCameraOnPlot(e.plotId);
                 shakeCamera(12);
                 playSound('gush');
@@ -550,7 +562,10 @@ function handleWorldEvents(events) {
                 else notify('Zakázku vzal soupeř', `${world.players[e.playerId]?.name || 'Hráč'}: ${buyerName(e.buyer)}, ${e.amount} bbl`, '', 'wire');
                 break;
             case 'contract_done':
-                if (!mine) break;
+                if (!mine) {
+                    if (sharedMode) logEvent(`${playerName(e.playerId)} splnil zakázku pro ${buyerName(e.buyer)}.`);
+                    break;
+                }
                 playSound('strike');
                 notify('Zakázka splněna', `${buyerName(e.buyer)}: ${e.amount} bbl dodáno`, 'good', 'barrel');
                 break;

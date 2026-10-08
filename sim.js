@@ -245,7 +245,7 @@
             world.players[p.id] = {
                 id: p.id,
                 name: p.name || 'Hráč',
-                color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+                color: p.color || PLAYER_COLORS[i % PLAYER_COLORS.length],
                 money: rules.startMoney,
                 revenue: 0,
                 sold: 0,

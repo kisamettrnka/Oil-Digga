@@ -3,6 +3,7 @@
 // Klient mezi zprávami svět dopočítává sám, takže vozy jezdí plynule, a další zpráva ho opraví.
 // Sdílená mapa = jeden svět pro všechny, závod = svět na hráče ze stejného seedu.
 const Sim = require('../sim');
+const playerSpec = p => ({ id: p.id, name: p.name, color: Sim.PLAYER_COLORS[p.colorIndex] });
 
 const TICK_MS = 50;
 const BROADCAST_EVERY = 4;         // každý 4. krok = 5× za sekundu
@@ -44,9 +45,9 @@ class SharedGame {
         this.ids = racers.map(p => p.id);
         this.worlds = new Map();
         if (separate) {
-            racers.forEach(p => this.worlds.set(p.id, Sim.createWorld({ seed: room.seed, race, shared: false, players: [{ id: p.id, name: p.name }] })));
+            racers.forEach(p => this.worlds.set(p.id, Sim.createWorld({ seed: room.seed, race, shared: false, players: [playerSpec(p)] })));
         } else {
-            const world = Sim.createWorld({ seed: room.seed, race, shared: true, players: racers.map(p => ({ id: p.id, name: p.name })) });
+            const world = Sim.createWorld({ seed: room.seed, race, shared: true, players: racers.map(playerSpec) });
             racers.forEach(p => this.worlds.set(p.id, world));
         }
         this.startAt = Date.now() + startInMs;

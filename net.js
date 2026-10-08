@@ -146,6 +146,11 @@ const Net = (() => {
         const player = me();
         if (!player) return;
 
+        // Divák: hra skončila, výsledky se vrátí
+        if (spectating && room.phase === 'finished') {
+            spectating = false;
+            setMode('results');
+        }
         // Zpět do lobby: hostitel ukončil závod
         if (room.phase === 'lobby' && (mode === 'race' || mode === 'results' || mode === 'countdown')) {
             leaveRace();
@@ -226,7 +231,10 @@ const Net = (() => {
         tick();
     }
 
+    let spectating = false;
+
     function leaveRace() {
+        spectating = false;
         if (raceMode?.shared && typeof leaveSharedWorld === 'function') leaveSharedWorld();
         raceMode = null;
         raceId = null;
@@ -269,7 +277,7 @@ const Net = (() => {
         const stage = $('stage');
         $('lobby').classList.toggle('hidden', mode !== 'lobby');
         $('race-countdown').classList.toggle('hidden', mode !== 'countdown');
-        $('race-results').classList.toggle('hidden', mode !== 'results');
+        $('race-results').classList.toggle('hidden', mode !== 'results' || spectating);
         stage.classList.toggle('racing', mode === 'race' || mode === 'results' || mode === 'countdown');
         $('lobby-btn').classList.toggle('hidden', mode !== 'solo');
         clearInterval(progressTimer);
@@ -301,6 +309,21 @@ const Net = (() => {
             if (sdk) sdk.commands.openInviteDialog().catch(() => setStatus('Pozvánku tady poslat nejde (DM nebo chybí oprávnění).'));
         });
         $('results-reset').addEventListener('click', () => sendMsg({ type: 'reset' }));
+        // Odveta: zpět do lobby a hned start na stejné mapě
+        $('results-rematch').addEventListener('click', () => {
+            sendMsg({ type: 'reset' });
+            sendMsg({ type: 'start', sameMap: true });
+        });
+        // Divák: zkrachovalý hráč na sdílené mapě kouká dál, výsledky se vrátí na konci
+        $('results-watch').addEventListener('click', () => {
+            spectating = true;
+            $('race-results').classList.add('hidden');
+            if (typeof notify === 'function') notify('Sleduješ', 'Hra běží dál, výsledky přijdou na konci', 'cool', 'people');
+        });
+        $('lobby-players').addEventListener('click', event => {
+            const dot = event.target.closest('[data-color]');
+            if (dot) sendMsg({ type: 'color', index: Number(dot.dataset.color) });
+        });
         // Volby hostitele: délka, režim, cíl (server přijme jen od hostitele v lobby)
         ['lobby-kind', 'lobby-length', 'lobby-mode', 'lobby-target'].forEach(id => $(id).addEventListener('click', event => {
             const btn = event.target.closest('.length-btn');
@@ -380,7 +403,10 @@ const Net = (() => {
         renderLeaderboard($('results-list'), true);
         const isHost = youId === room.hostId;
         $('results-reset').classList.toggle('hidden', !isHost);
+        $('results-rematch').classList.toggle('hidden', !isHost || room.phase !== 'finished');
         $('results-wait').classList.toggle('hidden', isHost);
+        const canWatch = room.phase === 'playing' && raceMode?.shared && typeof world !== 'undefined' && world?.shared;
+        $('results-watch').classList.toggle('hidden', !canWatch);
         const winner = room.players.find(p => p.id === room.winnerId);
         $('results-date').textContent = typeof day !== 'undefined' ? `${day}. ${MONTH_FULL_NAMES[month]}` : '';
         $('results-title').textContent = room.phase === 'finished'
@@ -395,6 +421,9 @@ const Net = (() => {
         list.innerHTML = room.players.filter(p => p.connected).map(p => `
             <div class="lobby-player${p.id === youId ? ' you' : ''}${p.ready ? ' ready' : ''}">
                 ${avatarHtml(p)}
+                ${p.id === youId && room.phase === 'lobby'
+                    ? `<button class="lobby-dot own" data-color="${(p.colorIndex + 1) % OilSim.PLAYER_COLORS.length}" style="background:${playerColorFor(p.id) || '#777'}" title="Změnit barvu"></button>`
+                    : `<span class="lobby-dot" style="background:${playerColorFor(p.id) || '#777'}"></span>`}
                 <div class="lobby-name">${escapeHtml(p.name)}${p.id === room.hostId ? ' <span class="badge">hostitel</span>' : ''}</div>
                 <div class="lobby-state">${p.ready && p.status === 'lobby' ? 'připraven' : STATUS_TEXT[p.status] || ''}</div>
             </div>`).join('');
@@ -480,10 +509,12 @@ const Net = (() => {
         bindAvatarFallbacks(el);
     }
 
+    // Barva hráče: ze světa (hraje se), jinak z místnosti (lobby)
     function playerColorFor(id) {
-        if (!raceMode?.shared || typeof world === 'undefined' || !world) return null;
-        const color = world.players[id]?.color;
-        return /^#[0-9a-f]{6}$/i.test(color || '') ? color : null;
+        const color = (raceMode?.shared && typeof world !== 'undefined' && world) ? world.players[id]?.color : null;
+        if (/^#[0-9a-f]{6}$/i.test(color || '')) return color;
+        const p = room?.players.find(x => x.id === id);
+        return p && Number.isInteger(p.colorIndex) ? OilSim.PLAYER_COLORS[p.colorIndex] : null;
     }
 
     // Vlastní řádek žebříčku se obnovuje i mezi zprávami serveru

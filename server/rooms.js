@@ -4,7 +4,7 @@
 const ROOM_IDLE_MS = 60_000;          // prázdná místnost se po minutě zahodí
 const STATE_THROTTLE_MS = 500;        // průběžné výsledky se rozesílají nejvýš 2× za sekundu
 const { SharedGame } = require('./shared');
-const { C: SIM } = require('../sim');
+const { C: SIM, PLAYER_COLORS } = require('../sim');
 
 const RACE_COUNTDOWN_MS = 4000;
 const MAX_PLAYERS = 12;
@@ -64,7 +64,8 @@ class Room {
         } else {
             player = {
                 id: user.id, name: user.name, avatar: user.avatar, ws, connected: true,
-                ready: false, status: this.phase === 'lobby' ? 'lobby' : 'spectating', progress: null
+                ready: false, status: this.phase === 'lobby' ? 'lobby' : 'spectating', progress: null,
+                colorIndex: this.freeColorIndex()
             };
             this.players.set(user.id, player);
         }
@@ -116,8 +117,16 @@ class Room {
                 if (this.shared && player.status === 'racing' && msg.raceId === this.raceId) this.shared.act(playerId, msg.action);
                 return;
             case 'start':
-                if (isHost && this.phase === 'lobby') this.startRace();
+                if (isHost && this.phase === 'lobby') this.startRace(msg.sameMap === true);
                 return;
+            case 'color': {
+                // Barva hráče: volná z palety, dokud se nehraje
+                const index = Number(msg.index);
+                if (this.phase !== 'lobby' || !Number.isInteger(index) || index < 0 || index >= PLAYER_COLORS.length) return;
+                if ([...this.players.values()].some(p => p !== player && p.connected && p.colorIndex === index)) return;
+                player.colorIndex = index;
+                break;
+            }
             case 'reset':
                 if (isHost && this.phase !== 'lobby') this.backToLobby();
                 break;
@@ -127,7 +136,15 @@ class Room {
         this.broadcastState();
     }
 
-    startRace() {
+    // První barva palety, kterou nemá nikdo připojený
+    freeColorIndex() {
+        const used = new Set([...this.players.values()].filter(p => p.connected).map(p => p.colorIndex));
+        for (let i = 0; i < PLAYER_COLORS.length; i++) if (!used.has(i)) return i;
+        return this.players.size % PLAYER_COLORS.length;
+    }
+
+    // sameMap: odveta na stejné mapě (seed minulého kola)
+    startRace(sameMap = false) {
         let racers = this.connectedPlayers().filter(p => p.status === 'lobby');
         if (!racers.length) return;
         const shared = this.settings.kind === 'shared';
@@ -135,7 +152,8 @@ class Room {
         if (shared) racers = racers.slice(0, SIM.MAX_SHARED_PLAYERS);
         this.phase = 'playing';
         this.raceId++;
-        this.seed = Math.floor(Math.random() * 2 ** 31);
+        this.seed = sameMap && this.lastSeed != null ? this.lastSeed : Math.floor(Math.random() * 2 ** 31);
+        this.lastSeed = this.seed;
         this.raceStartedAt = Date.now() + RACE_COUNTDOWN_MS;
         this.raceSize = racers.length;
         this.lastStandingSent = false;
@@ -229,7 +247,7 @@ class Room {
             settings: this.settings,
             winnerId: this.winnerId,
             players: [...this.players.values()].map(p => ({
-                id: p.id, name: p.name, avatar: p.avatar, ready: p.ready,
+                id: p.id, name: p.name, avatar: p.avatar, ready: p.ready, colorIndex: p.colorIndex,
                 status: p.status, connected: p.connected, progress: p.progress
             }))
         };
