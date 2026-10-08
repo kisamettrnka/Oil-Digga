@@ -1174,7 +1174,7 @@ function renderActiveNews() {
 }
 
 const TOAST_MS = 4500;
-const MAX_TOASTS = 3;
+const MAX_TOASTS = 2;
 
 // Oznámení vlevo nahoře; zároveň se zapíše do deníku událostí
 // --- Ikony (vlastní SVG, žádné emoji): tah currentColor, viewBox 24 ---
@@ -2375,39 +2375,67 @@ function drawOilPockets(groundLevel) {
 }
 
 // Štítek ložiska vpravo od něj: zbývající ropa a stav
+// --- Noční papír na plátně (stejná paleta jako --paper/--ink ve style.css) ---
+const PAPER_TOP = '#b09c74';
+const PAPER_BOTTOM = '#8f7b56';
+const INK = '#1a120b';
+const INK_SOFT = '#3a2c1d';
+const INK_RED = '#8a1c14';
+const INK_GREEN = '#1f5a2c';
+
+// Papírový štítek: zaoblený obdélník s přechodem, stínem a tmavším okrajem
+function fillPaper(x, y, w, h, r = 3, tilt = 0) {
+    ctx.save();
+    if (tilt) {
+        ctx.translate(x + w / 2, y + h / 2);
+        ctx.rotate(tilt);
+        ctx.translate(-(x + w / 2), -(y + h / 2));
+    }
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 3;
+    pathRoundRect(x, y, w, h, r);
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, PAPER_TOP);
+    g.addColorStop(1, PAPER_BOTTOM);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = 'rgba(40, 28, 16, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+}
+
 function drawPocketChip(pocket, pumping) {
     const w = 150, h = 38;
     const x = Math.min(pocket.x + pocket.width - 6, canvas.width - w - 8);
     const y = pocket.y + pocket.height * 0.5 - 18;
+    // Papírová cedulka přišpendlená k ložisku
+    fillPaper(x, y, w, h, 3, -0.02);
     ctx.save();
-    pathRoundRect(x, y, w, h, 6);
-    ctx.fillStyle = 'rgba(14, 10, 16, 0.78)';
-    ctx.fill();
-    ctx.strokeStyle = pumping ? 'rgba(255, 170, 80, 0.55)' : 'rgba(255, 255, 255, 0.14)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    // Ikona kapky v kroužku
-    ctx.fillStyle = pumping ? 'rgba(255, 150, 60, 0.25)' : 'rgba(255, 255, 255, 0.08)';
+    ctx.strokeStyle = pumping ? INK_RED : INK_SOFT;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(x + 17, y + h / 2, 11, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = pumping ? '#ffb45a' : '#e8d8c4';
+    ctx.arc(x + 17, y + h / 2, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = pumping ? INK_RED : INK;
     ctx.beginPath();
     ctx.moveTo(x + 17, y + h / 2 - 7);
     ctx.quadraticCurveTo(x + 24, y + h / 2 + 2, x + 17, y + h / 2 + 5);
     ctx.quadraticCurveTo(x + 10, y + h / 2 + 2, x + 17, y + h / 2 - 7);
     ctx.fill();
-    ctx.font = '600 9px "Barlow Condensed", system-ui, sans-serif';
-    ctx.fillStyle = 'rgba(255, 230, 200, 0.6)';
+    ctx.font = '700 9px "Barlow Condensed", system-ui, sans-serif';
+    ctx.fillStyle = INK_SOFT;
     ctx.fillText('ROPNÉ LOŽISKO', x + 34, y + 13);
-    ctx.font = '700 14px "Barlow Condensed", system-ui, sans-serif';
-    ctx.fillStyle = '#fff2df';
-    ctx.fillText(Math.floor(pocket.oil).toLocaleString('cs-CZ'), x + 34, y + 29);
-    ctx.font = '600 10px "Barlow Condensed", system-ui, sans-serif';
+    ctx.font = '700 14px "Courier Prime", monospace';
+    ctx.fillStyle = INK;
+    ctx.fillText(Math.floor(pocket.oil).toLocaleString('cs-CZ'), x + 34, y + 30);
+    ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillStyle = pocket.oil <= 0 ? '#ff8a70' : (pumping ? '#ffb45a' : '#9ad1ff');
+    ctx.fillStyle = pocket.oil <= 0 ? INK_RED : (pumping ? INK_RED : '#1b3a66');
     ctx.fillText(pocket.oil <= 0 ? 'Vyčerpáno' : (pumping ? 'Těží se' : 'Odhaleno'), x + w - 9, y + 29);
     ctx.restore();
 }
@@ -2565,27 +2593,28 @@ function drawStorageChip(x, y, network) {
     const blink = full && Math.sin(performance.now() / 200) > 0;
     const label = `${Math.floor(network.oilStored)} / ${network.oilCapacity}`;
     ctx.save();
-    ctx.font = '700 12px "Barlow Condensed", system-ui, sans-serif';
+    ctx.font = '700 12px "Courier Prime", monospace';
     const w = Math.max(74, ctx.measureText(label).width + 34);
     const h = 22;
     const bx = x - w / 2;
-    pathRoundRect(bx, y - h / 2, w, h, 11);
-    ctx.fillStyle = 'rgba(14, 10, 16, 0.8)';
-    ctx.fill();
-    ctx.strokeStyle = blink ? '#ff5a4a' : (full ? 'rgba(255, 90, 70, 0.6)' : 'rgba(255, 255, 255, 0.16)');
-    ctx.lineWidth = blink ? 2 : 1;
-    ctx.stroke();
+    fillPaper(bx, y - h / 2, w, h, 2);
+    if (blink || full) { // plný zásobník: červený rámeček inkoustem
+        ctx.strokeStyle = blink ? INK_RED : 'rgba(138, 28, 20, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(bx + 2, y - h / 2 + 2, w - 4, h - 4);
+    }
     // Ukazatel naplnění podél spodní hrany štítku
-    ctx.fillStyle = fillRatio > 0.8 ? '#ff7a5a' : '#ffb45a';
-    ctx.fillRect(bx + 8, y + h / 2 - 3, (w - 16) * fillRatio, 2);
+    ctx.fillStyle = fillRatio > 0.8 ? INK_RED : INK;
+    ctx.fillRect(bx + 8, y + h / 2 - 4, (w - 16) * fillRatio, 2);
     // Kapka ropy
-    ctx.fillStyle = '#ffb45a';
+    ctx.fillStyle = INK;
     ctx.beginPath();
     ctx.moveTo(bx + 13, y - 6);
     ctx.quadraticCurveTo(bx + 19, y + 1, bx + 13, y + 4);
     ctx.quadraticCurveTo(bx + 7, y + 1, bx + 13, y - 6);
     ctx.fill();
-    ctx.fillStyle = '#fff2df';
+    ctx.font = '700 12px "Courier Prime", monospace';
+    ctx.fillStyle = INK;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, bx + 23, y);
@@ -2596,7 +2625,10 @@ function drawStorageChip(x, y, network) {
     if (message) {
         ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillStyle = blink || network.blowout > 0 ? '#ff7a6a' : '#ffd0c8';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(10, 8, 6, 0.75)';
+        ctx.strokeText(message, x, y - h / 2 - 9);
+        ctx.fillStyle = blink || network.blowout > 0 ? '#ff7a6a' : '#f0d6a3';
         ctx.fillText(message, x, y - h / 2 - 9);
     }
     ctx.restore();
@@ -3001,39 +3033,32 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
     const assigned = side === 'left' ? trucksAssignedLeft : trucksAssignedRight;
     const driving = trucks.filter(t => t.state !== 'idle' && t.targetCompany === side).length;
 
+    // Ceník výkupce: papírový list s hlavičkou firmy, cenou a přidělením kamionů
+    fillPaper(x, y, w, h, 2);
     ctx.save();
-    if (hovered) {
-        ctx.shadowColor = `rgba(${buyer.accent}, 0.6)`;
-        ctx.shadowBlur = 18;
+    if (hovered) { // rámeček razítkem v barvě výkupce
+        ctx.strokeStyle = side === 'left' ? INK_RED : '#1b3a66';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
     }
-    pathRoundRect(x, y, w, h, 8);
-    const bg = ctx.createLinearGradient(0, y, 0, y + h);
-    bg.addColorStop(0, 'rgba(14, 14, 24, 0.94)');
-    bg.addColorStop(1, 'rgba(14, 14, 24, 0.82)');
-    ctx.fillStyle = bg;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = hovered ? `rgba(${buyer.accent}, 0.9)` : 'rgba(190, 200, 240, 0.16)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.fillStyle = `rgba(${buyer.accent}, 0.9)`; // barevný proužek výkupce
+    ctx.fillStyle = side === 'left' ? INK_RED : '#1b3a66'; // barevný proužek výkupce
     ctx.fillRect(x + 1, y + 8, 2.5, 22);
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = '#fff2df';
-    ctx.font = '800 11px "Barlow Condensed", system-ui, sans-serif';
-    ctx.fillText(buyer.name, x + 9, y + 17);
-    ctx.fillStyle = 'rgba(220, 220, 235, 0.55)';
-    ctx.font = '600 8.5px "Barlow Condensed", system-ui, sans-serif';
-    ctx.fillText(buyer.sub, x + 9, y + 28);
+    ctx.fillStyle = INK;
+    ctx.font = '13px "Rye", Georgia, serif';
+    ctx.fillText(buyer.name === 'RAFINERIE' ? 'Rafinerie' : 'Nádraží', x + 9, y + 18);
+    ctx.fillStyle = INK_SOFT;
+    ctx.font = 'italic 9px "Courier Prime", monospace';
+    ctx.fillText(buyer.sub, x + 9, y + 29);
 
-    ctx.fillStyle = '#ffd36b';
+    ctx.fillStyle = INK;
     ctx.font = '800 21px "Barlow Condensed", system-ui, sans-serif';
     const priceText = `$${price.toFixed(2)}`;
     ctx.fillText(priceText, x + 8, y + 55);
     const priceWidth = ctx.measureText(priceText).width;
-    ctx.fillStyle = trend >= 0 ? '#6ee39a' : '#ff7a6a';
+    ctx.fillStyle = trend >= 0 ? INK_GREEN : INK_RED;
     ctx.font = '10px sans-serif';
     ctx.fillText(trend >= 0 ? '▲' : '▼', x + 12 + priceWidth, y + 54);
     // Vliv mimořádných zpráv: ZAVŘENO, nebo o kolik zprávy cenu mění
@@ -3043,18 +3068,18 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
         const good = !effect.closed && effect.mult > 1;
         ctx.font = '800 7.5px "Barlow Condensed", system-ui, sans-serif';
         const lw = ctx.measureText(label).width + 8;
-        pathRoundRect(x + 7, y + 57, lw, 11, 5);
-        ctx.fillStyle = good ? 'rgba(110, 227, 154, 0.22)' : 'rgba(255, 110, 90, 0.25)';
-        ctx.fill();
-        ctx.fillStyle = good ? '#6ee39a' : '#ff8a70';
+        ctx.strokeStyle = good ? INK_GREEN : INK_RED; // razítko
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(x + 7, y + 57, lw, 11);
+        ctx.fillStyle = good ? INK_GREEN : INK_RED;
         ctx.fillText(label, x + 11, y + 65.5);
     } else {
-        ctx.fillStyle = 'rgba(220, 220, 235, 0.5)';
-        ctx.font = '600 7.5px "Barlow Condensed", system-ui, sans-serif';
+        ctx.fillStyle = INK_SOFT;
+        ctx.font = '700 7.5px "Barlow Condensed", system-ui, sans-serif';
         ctx.fillText('ZA BAREL', x + 9, y + 64);
     }
     if (effect.closed) { // přeškrtnutá cena
-        ctx.strokeStyle = 'rgba(255, 110, 90, 0.85)';
+        ctx.strokeStyle = INK_RED;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(x + 6, y + 49);
@@ -3064,7 +3089,7 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
 
     drawPriceChart(history, x + 8, y + 70, w - 16, 16);
 
-    ctx.fillStyle = 'rgba(190, 200, 240, 0.14)';
+    ctx.fillStyle = 'rgba(40, 28, 16, 0.35)';
     ctx.fillRect(x + 8, y + 92, w - 16, 1);
 
     const rowY = y + 99;
@@ -3073,14 +3098,14 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
     drawCardButton(minus, '−', buyer.accent);
     drawCardButton(plus, '+', buyer.accent);
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#fff2df';
-    ctx.font = '800 18px "Barlow Condensed", system-ui, sans-serif';
+    ctx.fillStyle = INK;
+    ctx.font = '700 18px "Courier Prime", monospace';
     ctx.fillText(String(assigned), x + w / 2, rowY + 17);
-    ctx.fillStyle = 'rgba(220, 220, 235, 0.55)';
-    ctx.font = '600 7.5px "Barlow Condensed", system-ui, sans-serif';
+    ctx.fillStyle = INK_SOFT;
+    ctx.font = '700 7.5px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillText('PŘIDĚLENO', x + w / 2, rowY + 31);
-    ctx.fillStyle = hovered ? `rgba(${buyer.accent}, 1)` : 'rgba(220, 220, 235, 0.7)';
-    ctx.font = '600 8.5px "Barlow Condensed", system-ui, sans-serif';
+    ctx.fillStyle = hovered ? INK_RED : INK_SOFT;
+    ctx.font = 'italic 8.5px "Courier Prime", monospace';
     ctx.fillText(hovered ? 'kolečko myši ±' : `${driving} ${driving === 1 ? 'kamion jede' : 'kamionů jede'}`, x + w / 2, y + h - 8);
     ctx.restore();
     return { minus, plus };
@@ -3089,13 +3114,13 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
 function drawCardButton(rect, label, accent) {
     const hovered = isPointNearRect(mousePos, rect, 2);
     ctx.save();
-    pathRoundRect(rect.x, rect.y, rect.width, rect.height, 6);
-    ctx.fillStyle = hovered ? `rgba(${accent}, 0.35)` : 'rgba(255, 255, 255, 0.06)';
-    ctx.fill();
-    ctx.strokeStyle = hovered ? `rgba(${accent}, 0.9)` : 'rgba(190, 200, 240, 0.2)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.fillStyle = '#fff2df';
+    // Tlačítko jako razítkové políčko vytištěné na ceníku
+    ctx.fillStyle = hovered ? 'rgba(138, 28, 20, 0.15)' : 'rgba(255, 245, 220, 0.18)';
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    ctx.strokeStyle = hovered ? INK_RED : INK;
+    ctx.lineWidth = hovered ? 2 : 1.2;
+    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
+    ctx.fillStyle = hovered ? INK_RED : INK;
     ctx.font = '700 15px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -3122,9 +3147,15 @@ function drawCompanyBuildings(groundLevel) {
 // Malý čárový graf cen. Osa Y se přizpůsobí, minimální rozsah 0,30 $, ať drobné změny nevypadají dramaticky.
 function drawPriceChart(history, x, y, w, h) {
     ctx.save();
-    pathRoundRect(x, y, w, h, 3);
-    ctx.fillStyle = 'rgba(14, 10, 16, 0.6)';
-    ctx.fill();
+    // Graf jako záznam zapisovače: tenká mřížka a čára inkoustem
+    ctx.strokeStyle = 'rgba(40, 60, 90, 0.25)';
+    ctx.lineWidth = 0.6;
+    for (let gy = y; gy <= y + h; gy += h / 3) {
+        ctx.beginPath();
+        ctx.moveTo(x, gy);
+        ctx.lineTo(x + w, gy);
+        ctx.stroke();
+    }
     if (history.length >= 2) {
         let min = Math.min(...history);
         let max = Math.max(...history);
@@ -3134,7 +3165,7 @@ function drawPriceChart(history, x, y, w, h) {
         const px = i => x + (i / (history.length - 1)) * w;
         const py = v => y + h - 2 - ((v - min) / (max - min)) * (h - 4);
         const rising = history[history.length - 1] >= history[0];
-        ctx.strokeStyle = rising ? '#5be38a' : '#ff6b5a';
+        ctx.strokeStyle = rising ? INK_GREEN : INK_RED;
         ctx.lineWidth = 1.5;
         ctx.lineJoin = 'round';
         ctx.beginPath();
@@ -3600,10 +3631,8 @@ function drawEffectsAndPreviews(groundLevel) {
                 ctx.textBaseline = 'middle';
                 const costLabel = `$${cost}`;
                 const lw = ctx.measureText(costLabel).width + 14;
-                pathRoundRect(mousePos.x + 10, mousePos.y - 26, lw, 20, 10);
-                ctx.fillStyle = 'rgba(14, 10, 16, 0.8)';
-                ctx.fill();
-                ctx.fillStyle = money >= cost ? '#ffd98a' : '#ff7a6a';
+                fillPaper(mousePos.x + 10, mousePos.y - 26, lw, 20, 2, -0.03);
+                ctx.fillStyle = money >= cost ? INK : INK_RED;
                 ctx.fillText(costLabel, mousePos.x + 17, mousePos.y - 16);
                 ctx.restore();
             }

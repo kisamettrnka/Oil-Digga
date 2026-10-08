@@ -127,14 +127,15 @@
     --hud-good: #6ee39a;
     --hud-bad: #ff7a6a;
     /* Tiskárna a telegraf: papír pod lampou, inkoust, razítka */
-    --paper: #e8ddc0;
-    --paper-dark: #d3c49c;
-    --ink: #2b2219;
-    --ink-soft: #66543f;
-    --rule: rgba(64, 98, 140, 0.28);
-    --stamp-red: #b02a20;
-    --stamp-green: #2e6a3b;
-    --stamp-blue: #27508c;
+    /* Noční papír: zestárlý, ve stínu, jen lehce chycený lampou (ladí s INK/PAPER v script.js) */
+    --paper: #b09c74;
+    --paper-dark: #8f7b56;
+    --ink: #1a120b;
+    --ink-soft: #3a2c1d;
+    --rule: rgba(30, 45, 70, 0.28);
+    --stamp-red: #8a1c14;
+    --stamp-green: #1f5a2c;
+    --stamp-blue: #1b3a66;
     --wood: #4a2f1e;
 }
 
@@ -194,15 +195,16 @@ canvas#turmoil-game {
     touch-action: none;
 }
 
-/* --- Společný vzhled panelů --- */
+/* --- Společný vzhled panelů: všechno je noční papír (listiny, ceníky, kalendář, objednací list) --- */
 .hud-panel {
     position: absolute;
-    background: linear-gradient(180deg, var(--hud-bg-solid), var(--hud-bg));
-    border: 1px solid var(--hud-border);
-    border-radius: 0.6em;
-    box-shadow: 0 0.4em 1.6em rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    color: var(--ink);
+    background:
+        radial-gradient(ellipse at 30% 20%, rgba(255, 236, 200, 0.26), transparent 60%),
+        repeating-linear-gradient(0deg, rgba(60, 40, 20, 0.05) 0 1px, transparent 1px 3px),
+        linear-gradient(180deg, var(--paper), var(--paper-dark));
+    border-radius: 0.15em;
+    box-shadow: 0 0.6em 1.4em rgba(0, 0, 0, 0.6), inset 0 0 2em rgba(40, 25, 10, 0.45);
 }
 
 button {
@@ -214,90 +216,91 @@ button:disabled {
     cursor: not-allowed;
 }
 
-/* --- Kalendář a čas (vlevo nahoře) --- */
+/* --- Trhací kalendář a čas (vlevo nahoře) --- */
 #hud-clock {
     top: 0.8em;
     left: 0.8em;
     display: flex;
     align-items: center;
-    gap: 0.7em;
-    padding: 0.4em 0.8em 0.4em 0.4em;
-    border-radius: 3em 0.6em 0.6em 3em;
+    gap: 0.6em;
+    padding: 0.35em 0.7em 0.35em 0.4em;
+    transform: rotate(-1deg);
 }
 
 #date-dial {
     --year: 0;
-    width: 4.6em;
-    height: 4.6em;
+    width: 4.4em;
+    height: 4.4em;
     border-radius: 50%;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    /* kruh průběhu roku tažený inkoustem přes papírový kotouč */
     background:
-        radial-gradient(circle, #121220 58%, transparent 60%),
-        conic-gradient(var(--hud-accent) calc(var(--year) * 1turn), rgba(255, 255, 255, 0.08) 0);
-    box-shadow: 0 0 1.2em rgba(255, 170, 80, 0.25);
+        radial-gradient(circle, #a8946c 58%, transparent 60%),
+        conic-gradient(var(--stamp-red) calc(var(--year) * 1turn), rgba(40, 28, 16, 0.18) 0);
+    box-shadow: inset 0 0 0 1px rgba(40, 28, 16, 0.45);
     font-variant-numeric: tabular-nums;
 }
 #date-dial #month {
     font-size: 0.8em;
-    font-weight: 700;
-    letter-spacing: 0.15em;
-    color: var(--hud-accent);
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--stamp-red);
 }
 #date-dial #day {
-    font-size: 1.7em;
-    font-weight: 800;
+    font-family: 'Rye', Georgia, serif;
+    font-size: 1.6em;
     line-height: 1;
 }
 
 .time-buttons {
     display: flex;
-    gap: 0.25em;
+    gap: 0.2em;
 }
 .time-btn {
     background: transparent;
-    border: 1px solid transparent;
-    border-radius: 0.4em;
-    color: var(--hud-muted);
+    border: 1.5px solid transparent;
+    color: var(--ink-soft);
     font-size: 0.85em;
     letter-spacing: -0.15em;
-    padding: 0.35em 0.6em 0.35em 0.45em;
+    padding: 0.3em 0.55em 0.3em 0.4em;
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
 }
-.time-btn:hover {
-    color: var(--hud-text);
-    background: rgba(255, 255, 255, 0.06);
+.time-btn:hover:not(:disabled) {
+    color: var(--ink);
+    border-color: rgba(40, 28, 16, 0.35);
 }
 .time-btn.active {
-    color: var(--hud-accent);
-    border-color: rgba(255, 180, 90, 0.4);
-    background: rgba(255, 180, 90, 0.12);
+    color: var(--stamp-red);
+    border-color: var(--stamp-red);
+}
+.time-btn:disabled {
+    opacity: 0.45;
 }
 
-/* --- Zdroje (nahoře uprostřed) --- */
+/* --- Zdroje: tištěný pruh nahoře uprostřed s natrženým spodkem --- */
 #hud-stats {
     top: 0;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     align-items: center;
-    padding: 0.55em 1.2em;
-    border-top: none;
-    border-radius: 0 0 0.9em 0.9em;
+    padding: 0.5em 1.2em 0.7em;
     font-variant-numeric: tabular-nums;
+    clip-path: polygon(0 0, 100% 0, 100% 86%, 96% 100%, 88% 90%, 79% 98%, 68% 89%, 57% 99%, 46% 90%, 35% 100%, 24% 91%, 13% 99%, 4% 90%, 0 97%);
 }
 .stat {
     display: flex;
     align-items: baseline;
-    gap: 0.4em;
-    padding: 0 1em;
-    font-size: 1.15em;
+    gap: 0.35em;
+    padding: 0 0.9em;
+    font-family: 'Courier Prime', monospace;
+    font-size: 1.05em;
     font-weight: 700;
     white-space: nowrap;
-    border-left: 1px solid var(--hud-border);
+    border-left: 1px dashed rgba(40, 28, 16, 0.45);
 }
 .stat:first-child {
     border-left: none;
@@ -305,27 +308,30 @@ button:disabled {
 .stat svg {
     width: 1.05em;
     height: 1.05em;
-    fill: var(--hud-cool);
+    fill: var(--ink);
     align-self: center;
 }
 .stat .rate {
     font-size: 0.72em;
-    font-weight: 600;
-    color: var(--hud-good);
+    font-weight: 700;
+    color: var(--stamp-green);
 }
 .stat .rate.negative {
-    color: var(--hud-bad);
+    color: var(--stamp-red);
 }
 .stat.money {
-    color: var(--hud-gold);
-    font-size: 1.35em;
-    text-shadow: 0 0 0.8em rgba(255, 190, 80, 0.4);
+    font-family: 'Rye', Georgia, serif;
+    font-weight: 400;
+    font-size: 1.3em;
+}
+.stat.money .rate {
+    font-family: 'Courier Prime', monospace;
 }
 .stat.money svg {
-    fill: var(--hud-gold);
+    fill: #6b4c12;
 }
 
-/* --- Roh vpravo nahoře --- */
+/* --- Roh vpravo nahoře: papírové štítky --- */
 #hud-corner {
     position: absolute;
     top: 0.8em;
@@ -334,45 +340,50 @@ button:disabled {
     gap: 0.4em;
 }
 .hud-icon-btn {
-    width: 2.6em;
-    height: 2.6em;
-    border-radius: 0.5em;
-    border: 1px solid var(--hud-border);
-    background: var(--hud-bg-solid);
-    color: var(--hud-text);
+    display: grid;
+    place-items: center;
+    width: 2.5em;
+    height: 2.5em;
+    color: var(--ink);
+    background: linear-gradient(180deg, var(--paper), var(--paper-dark));
+    border: none;
+    border-radius: 0.15em;
+    box-shadow: 0 0.35em 0.8em rgba(0, 0, 0, 0.55), inset 0 0 0.8em rgba(40, 25, 10, 0.4);
     cursor: pointer;
     font-size: 1em;
     font-weight: 700;
+    transform: rotate(-1.5deg);
+}
+.hud-icon-btn:nth-child(even) {
+    transform: rotate(1.5deg);
 }
 .hud-icon-btn:hover {
-    border-color: rgba(255, 190, 110, 0.6);
+    color: var(--stamp-red);
 }
 .hud-icon-btn.muted {
-    opacity: 0.55;
+    color: var(--ink-soft);
+    opacity: 0.7;
 }
 
-/* --- Panel nástrojů (dole uprostřed) --- */
+/* --- Objednací list: nástroje a stavby (dole uprostřed) --- */
 #hud-toolbar {
     bottom: 0;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     gap: 0.6em;
-    padding: 0.4em 0.6em 0.6em;
-    border-bottom: none;
-    border-radius: 0.9em 0.9em 0 0;
+    padding: 0.45em 0.7em 0.6em;
+    clip-path: polygon(0 4%, 6% 0, 17% 5%, 29% 0, 41% 4%, 53% 0, 65% 5%, 77% 0, 89% 4%, 100% 1%, 100% 100%, 0 100%);
 }
 .tool-group + .tool-group {
-    border-left: 1px solid var(--hud-border);
+    border-left: 1px dashed rgba(40, 28, 16, 0.45);
     padding-left: 0.6em;
 }
 .group-label {
-    font-size: 0.68em;
-    font-weight: 700;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--hud-muted);
-    margin: 0 0 0.35em 0.3em;
+    font-family: 'Rye', Georgia, serif;
+    font-size: 0.85em;
+    color: var(--ink);
+    margin: 0.1em 0 0.3em 0.3em;
 }
 .group-buttons {
     display: flex;
@@ -381,86 +392,68 @@ button:disabled {
 .tool-btn {
     position: relative;
     width: 6.4em;
-    padding: 0.45em 0.3em 0.35em;
+    padding: 0.4em 0.3em 0.35em;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 0.15em;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
-    border: 1px solid var(--hud-border);
-    border-radius: 0.5em;
+    color: var(--ink);
+    background: transparent;
+    border: 1px dashed rgba(40, 28, 16, 0.35);
     cursor: pointer;
     user-select: none;
-    transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s, background 0.15s;
+    transition: background 0.15s, transform 0.1s;
 }
 .tool-btn:hover:not(:disabled) {
-    border-color: rgba(255, 190, 110, 0.6);
-    box-shadow: 0 0 1em rgba(255, 160, 80, 0.25);
+    background: rgba(255, 236, 200, 0.14);
     transform: translateY(-2px);
 }
 .tool-btn .icon {
-    height: 2.8em;
+    height: 2.6em;
     display: flex;
     align-items: center;
     justify-content: center;
     pointer-events: none;
 }
 .tool-btn .icon svg {
-    width: 2.5em;
-    height: 2.5em;
-    padding: 0.35em;
+    width: 2.4em;
+    height: 2.4em;
+    padding: 0.25em;
     fill: none;
-    stroke: #e9e4f2;
+    stroke: var(--ink);
     stroke-width: 1.8;
     stroke-linecap: round;
     stroke-linejoin: round;
-    background: radial-gradient(circle at 50% 30%, rgba(160, 175, 230, 0.22), rgba(20, 20, 32, 0.6));
-    border: 1px solid rgba(190, 200, 240, 0.18);
-    border-radius: 0.6em;
 }
 .tool-btn .icon svg .accent {
-    stroke: var(--hud-accent);
-}
-.tool-btn:hover:not(:disabled) .icon svg {
-    stroke: #fff;
-    filter: drop-shadow(0 0 0.35em rgba(255, 180, 90, 0.6));
-}
-.tool-btn.active-build-mode .icon svg {
-    stroke: var(--hud-accent);
-    border-color: var(--hud-accent);
+    stroke: var(--stamp-red);
 }
 .tool-btn .label {
-    font-size: 0.72em;
-    font-weight: 700;
-    letter-spacing: 0.1em;
+    font-size: 0.78em;
+    font-weight: 800;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     pointer-events: none;
 }
 .tool-btn .price {
+    font-family: 'Courier Prime', monospace;
     font-size: 0.8em;
     font-weight: 700;
-    color: var(--hud-gold);
+    color: var(--stamp-red);
     font-variant-numeric: tabular-nums;
     pointer-events: none;
 }
+/* Vybraný nástroj = orazítkovaná položka */
 .tool-btn.active-build-mode {
-    background: linear-gradient(180deg, rgba(255, 170, 80, 0.28), rgba(255, 170, 80, 0.08));
-    border-color: var(--hud-accent);
-    box-shadow: inset 0 0 0 1px var(--hud-accent), 0 0 1.2em rgba(255, 170, 80, 0.45);
+    border: 2px solid var(--stamp-red);
+    background: rgba(138, 28, 20, 0.1);
+    transform: rotate(-1.5deg);
 }
-.tool-btn.active-build-mode::after {
-    content: '';
-    position: absolute;
-    left: 20%;
-    right: 20%;
-    bottom: -1px;
-    height: 2px;
-    background: var(--hud-accent);
-    box-shadow: 0 0 0.6em var(--hud-accent);
+.tool-btn.active-build-mode .icon svg {
+    stroke: var(--stamp-red);
 }
 .tool-btn:disabled {
     opacity: 0.4;
-    filter: grayscale(0.7);
 }
 
 /* --- Malá scéna (Discord v menším okně): kompaktní HUD, ať nezakrývá hrací plochu --- */
@@ -515,12 +508,12 @@ button:disabled {
 #hud-log {
     color: var(--ink);
     background:
-        radial-gradient(ellipse at 30% 20%, rgba(255, 248, 225, 0.55), transparent 60%),
+        radial-gradient(ellipse at 30% 20%, rgba(255, 236, 200, 0.26), transparent 60%),
         radial-gradient(ellipse at 90% 100%, rgba(110, 78, 40, 0.22), transparent 55%),
         repeating-linear-gradient(0deg, rgba(90, 70, 40, 0.035) 0 1px, transparent 1px 3px),
         repeating-linear-gradient(90deg, rgba(90, 70, 40, 0.025) 0 1px, transparent 1px 4px),
         linear-gradient(180deg, var(--paper), var(--paper-dark));
-    box-shadow: 0 0.7em 1.6em rgba(0, 0, 0, 0.55), inset 0 0 2.6em rgba(100, 70, 35, 0.28);
+    box-shadow: 0 0.7em 1.6em rgba(0, 0, 0, 0.6), inset 0 0 2.6em rgba(40, 25, 10, 0.45);
 }
 
 .typed {
@@ -534,7 +527,8 @@ button:disabled {
     position: absolute;
     top: 7.2em;
     left: 7.6%;
-    width: 21em;
+    width: 19em;
+    font-size: 0.92em;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -624,7 +618,7 @@ button:disabled {
     width: 18.5em;
     background-image:
         linear-gradient(90deg, transparent 1.6em, rgba(176, 42, 32, 0.5) 1.6em, rgba(176, 42, 32, 0.5) 1.7em, transparent 1.7em),
-        radial-gradient(ellipse at 30% 20%, rgba(255, 248, 225, 0.55), transparent 60%),
+        radial-gradient(ellipse at 30% 20%, rgba(255, 236, 200, 0.26), transparent 60%),
         linear-gradient(180deg, var(--paper), var(--paper-dark));
 }
 #hud-race {
@@ -796,8 +790,8 @@ button:disabled {
     justify-content: center;
     font-family: 'Rye', Georgia, serif;
     font-size: 0.85em;
-    color: #f4e9cf;
-    background: hsl(var(--hue), 35%, 32%);
+    color: #e9dcbc;
+    background: hsl(var(--hue), 30%, 26%);
     filter: none;
 }
 
@@ -1270,7 +1264,7 @@ button:disabled {
     font-family: 'Rye', Georgia, serif;
     font-size: 1.25em;
     color: var(--stamp);
-    background: rgba(232, 221, 192, 0.92);
+    background: linear-gradient(180deg, var(--paper), var(--paper-dark));
     border: 3px double var(--stamp);
     border-radius: 0.3em;
     box-shadow: 0 0.3em 0.8em rgba(0, 0, 0, 0.45);
@@ -1287,7 +1281,7 @@ button:disabled {
 }
 .stamp-btn.active {
     --stamp: var(--stamp-green);
-    color: #f1ead6;
+    color: #e9dcbc;
     background: var(--stamp-green);
 }
 .stamp-btn.start {
@@ -1308,7 +1302,7 @@ button:disabled {
     font-weight: 700;
     font-size: 0.85em;
     color: var(--ink);
-    background: linear-gradient(180deg, #e2d4ad, #cdbb8d);
+    background: linear-gradient(180deg, var(--paper), var(--paper-dark));
     border: none;
     clip-path: polygon(0.7em 0, 100% 0, 100% 100%, 0.7em 100%, 0 50%);
     cursor: pointer;
@@ -1326,7 +1320,7 @@ button:disabled {
     background: #3f281a;
 }
 .tag-btn:hover {
-    background: linear-gradient(180deg, #ecdfba, #d7c597);
+    background: linear-gradient(180deg, #bca880, #9a8660);
 }
 
 /* --- Výsledky: titulní strana --- */
@@ -1409,4 +1403,14 @@ button:disabled {
     border-radius: 0.15em;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+}
+
+/* Úzká účetní kniha: dlouhý název cíle se zkrátí, částka zůstane celá */
+#hud-goals .goal-name span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#hud-goals .goal-name .value {
+    flex-shrink: 0;
 }
