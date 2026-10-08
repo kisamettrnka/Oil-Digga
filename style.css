@@ -1442,11 +1442,11 @@ button:disabled {
     position: absolute;
     left: 0.8em;
     bottom: 0.8em;
-    width: 19.5em;
-    padding: 0.6em 0.85em 0.7em;
+    width: 22em;
+    padding: 0.65em 0.9em 0.75em;
     transform: rotate(0.6deg);
     border-radius: 0.15em;
-    font-size: 0.9em;
+    font-size: 1.12em;
 }
 #hud-rig .rig-head {
     display: flex;
@@ -1497,9 +1497,9 @@ button:disabled {
 #hud-rig .rig-rows {
     display: grid;
     grid-template-columns: auto 1fr;
-    gap: 0.12em 0.8em;
+    gap: 0.16em 0.8em;
     margin: 0;
-    font-size: 0.85em;
+    font-size: 0.95em;
 }
 #hud-rig dt {
     font: 700 0.95em 'Barlow Condensed', system-ui, sans-serif;
@@ -1563,13 +1563,13 @@ button:disabled {
 #hud-rig .rig-hint {
     margin-top: 0.45em;
     font-family: 'Courier Prime', monospace;
-    font-size: 0.75em;
+    font-size: 0.82em;
     color: var(--ink-soft);
 }
 @container (max-width: 1200px) {
     #hud-rig {
-        width: 16em;
-        font-size: 0.8em;
+        width: 18em;
+        font-size: 0.95em;
     }
     #hud-rig .rig-hint {
         display: none;
@@ -1581,11 +1581,11 @@ button:disabled {
     position: absolute;
     top: 19.6em;
     right: 7.6%;
-    width: 18.5em;
+    width: 20em;
     padding: 0.55em 0.8em 0.6em;
     transform: rotate(-0.5deg);
     border-radius: 0.15em;
-    font-size: 0.88em;
+    font-size: 1em;
 }
 #hud-contracts .ct-title {
     font-family: 'Rye', Georgia, serif;
@@ -1693,11 +1693,11 @@ button:disabled {
     position: absolute;
     left: 0.8em;
     top: 24.5em;
-    width: 19em;
+    width: 20em;
     padding: 0.55em 0.8em 0.6em;
     transform: rotate(-0.4deg);
     border-radius: 0.15em;
-    font-size: 0.88em;
+    font-size: 1em;
 }
 #hud-players .pl-title {
     font-family: 'Rye', Georgia, serif;
@@ -1785,11 +1785,11 @@ button:disabled {
     position: absolute;
     bottom: 8em;
     left: 50%;
-    width: 27em;
+    width: 28em;
     padding: 0.55em 0.9em 0.6em;
     transform: translateX(-50%) rotate(-0.5deg);
     border-radius: 0.15em;
-    font-size: 0.9em;
+    font-size: 1.02em;
     pointer-events: none;
 }
 #hud-guide .guide-head {

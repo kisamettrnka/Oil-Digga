@@ -5,6 +5,7 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 ## Nevydáno
 
 ### Volba kupce, kalendář v multiplayeru, kratší dražby
+- Vrtný protokol, Zakázky, Soupeři a průvodce jsou větší a čitelnější.
 - Na každém ceníku je razítko „Vozit sem“: všechny tvé vozy pak jezdí k tomu kupci (dokud nezavře), další klik to zruší a vozy si zase vybírají podle ceny.
 - V závodě a na sdílené mapě zmizelo ovládání času, zůstal jen kalendář; čas tam řídí server.
 - Dražba claimu končí 1,5 dne po posledním příhozu (bylo 2).
