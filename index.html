@@ -126,6 +126,16 @@
                         </button>
                     </div>
                 </div>
+                <div class="tool-group">
+                    <div class="group-label">Kancelář</div>
+                    <div class="group-buttons">
+                        <button id="perks-btn" class="tool-btn" title="Vylepšení na celou hru: automatika, korunky, vozy, obchod (U)">
+                            <div class="icon"><svg viewBox="0 0 32 32"><path d="M8 5h16v22l-8-5-8 5z"/><path d="M12 11h8M12 16h8" class="accent"/></svg></div>
+                            <div class="label">Vylepšení</div>
+                            <div class="price" id="perks-count">0/5</div>
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <!-- Nahoře uprostřed: průvodce první hrou (lístek s radou, js/hud.js renderGuide) -->
@@ -195,6 +205,15 @@
                     <div id="prefs-fields"></div>
                     <div class="fine-print">Platí jen pro tebe a v tomhle prohlížeči. Klávesa O formulář otevře i zavře.</div>
                     <div class="board-actions"><button id="prefs-close" class="stamp-btn">Hotovo</button></div>
+                </section>
+            </div>
+            <!-- Vylepšení: list z kanceláře, každé jde koupit jednou za hru (js/hud.js renderPerks) -->
+            <div id="perks" class="overlay hidden">
+                <section class="sheet form prefs-sheet perks-sheet">
+                    <header class="sheet-head">Vylepšení podniku</header>
+                    <div id="perks-list"></div>
+                    <div class="fine-print">Platí do konce hry. Klávesa U list otevře i zavře.</div>
+                    <div class="board-actions"><button id="perks-close" class="stamp-btn">Hotovo</button></div>
                 </section>
             </div>
             <div id="race-countdown" class="hidden"></div>

@@ -1885,3 +1885,57 @@ button:disabled {
 .np-footer .stamp-btn.start {
     margin-right: 0.6em;
 }
+
+/* --- Vylepšení: řádky na listu, koupené s razítkem --- */
+.perks-sheet {
+    width: min(34em, 92%);
+}
+.perk-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.2em 1em;
+    align-items: center;
+    padding: 0.5em 0;
+    border-bottom: 1px dashed rgba(26, 18, 11, 0.35);
+}
+.perk-row:last-child {
+    border-bottom: none;
+}
+.perk-name {
+    font-family: 'Rye', Georgia, serif;
+    font-size: 1.02em;
+}
+.perk-desc {
+    grid-column: 1;
+    font-family: 'Courier Prime', monospace;
+    font-size: 0.78em;
+    color: var(--ink-soft);
+}
+.perk-buy {
+    grid-row: 1 / span 2;
+    --stamp: var(--stamp-green);
+    padding: 0.2em 0.7em 0.15em;
+    font: 700 0.95em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    background: rgba(255, 240, 210, 0.12);
+    border: 3px double var(--stamp);
+    border-radius: 0.2em;
+    cursor: pointer;
+    transform: rotate(-2deg);
+}
+.perk-buy:hover:not(:disabled) { background: rgba(255, 240, 210, 0.3); }
+.perk-buy:disabled { opacity: 0.45; cursor: default; }
+.perk-owned {
+    grid-row: 1 / span 2;
+    padding: 0.1em 0.6em;
+    font: 700 0.9em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--stamp-red);
+    border: 2px solid var(--stamp-red);
+    border-radius: 0.2em;
+    transform: rotate(-6deg);
+    opacity: 0.85;
+}

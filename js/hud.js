@@ -142,7 +142,9 @@ function renderRigPanel() {
                 });
             }
         }
-        hint = network.link
+        hint = pocket && pocket.oil <= 0
+            ? 'Ložisko je prázdné. Klikni do podzemí a vrtej z tohoto vrtu dál k dalšímu.'
+            : network.link
             ? (network.link.kind === 'siding' ? 'Vlečka odváží ropu na nádraží sama, vozy berou jen přebytek.' : 'Ropovod teče sám, ale pomalu; vozy berou přebytek.')
             : network.injecting
                 ? 'Vtláčení zvedá tlak celého ložiska pro ostatní vrty, ale zavodňuje ho.'
@@ -649,6 +651,37 @@ function handleMapClick(event) {
         toggleSurveyMap(false);
         updateUI();
     }
+}
+
+// --- Vylepšení (perky): list z kanceláře ---
+let perksOpen = false;
+
+function togglePerks(force) {
+    perksOpen = force ?? !perksOpen;
+    document.getElementById('perks')?.classList.toggle('hidden', !perksOpen);
+    if (perksOpen) renderPerks();
+}
+
+function renderPerks() {
+    const list = document.getElementById('perks-list');
+    if (!list || !world) return;
+    const me = world.players[myId];
+    const owned = me?.perks || {};
+    list.innerHTML = Object.entries(OilSim.PERKS).map(([key, p]) => `
+        <div class="perk-row">
+            <div class="perk-name">${p.name}</div>
+            ${owned[key] ? '<span class="perk-owned">Koupeno</span>' : `<button class="perk-buy" data-perk="${key}"${money < p.cost ? ' disabled' : ''}>$${p.cost.toLocaleString('cs-CZ')}</button>`}
+            <div class="perk-desc">${p.desc}</div>
+        </div>`).join('');
+    const count = document.getElementById('perks-count');
+    if (count) count.textContent = `${Object.keys(owned).length}/${Object.keys(OilSim.PERKS).length}`;
+}
+
+function handlePerksClick(event) {
+    const button = event.target.closest('[data-perk]');
+    if (!button || button.disabled) return;
+    doAction({ type: 'buyPerk', perk: button.dataset.perk });
+    renderPerks();
 }
 
 // --- Zakázky ---

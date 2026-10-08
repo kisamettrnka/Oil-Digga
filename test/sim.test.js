@@ -684,5 +684,59 @@ t('route: trucks go to the chosen buyer, automatic again when cleared', () => {
     assert.strictEqual(truck.targetCompany, 'lamps', 'best price again');
 });
 
+t('perks: autovent prevents blowouts, autobop handles kicks, broker pays more', () => {
+    const w = plainWorld(91);
+    assert.strictEqual(Sim.act(w, 'player', { type: 'buyPerk', perk: 'nope' }).reason, 'perk');
+    assert.ok(Sim.act(w, 'player', { type: 'buyPerk', perk: 'autovent' }).ok);
+    assert.strictEqual(Sim.act(w, 'player', { type: 'buyPerk', perk: 'autovent' }).reason, 'owned');
+    const pk = w.oilPockets[0];
+    w.oilPockets = [pk];
+    w.plots[3].x = pocketCenter(pk).x - w.plots[3].width / 2;
+    assert.ok(drillTo(w, 'player', 3, pocketCenter(pk)).struck);
+    for (let i = 0; i < 3000; i++) Sim.step(w, 16); // bez vozů by přišla erupce
+    assert.ok(w.events.some(e => e.type === 'vent' && e.auto), 'auto vent happened');
+    assert.ok(!w.events.some(e => e.type === 'blowout'), 'no blowout');
+    // Automatický preventer: kopanec rovnou přejde do hoření
+    const g = plainWorld(92);
+    g.oilPockets = [];
+    Sim.act(g, 'player', { type: 'buyPerk', perk: 'autobop' });
+    g.hazards = [{ id: 0, kind: 'gas', x: rigX(g), y: C.GROUND_LEVEL + 60, r: 15, hit: false, revealedBy: [] }];
+    Sim.act(g, 'player', { type: 'drill', plotId: 3, x: rigX(g), y: C.GROUND_LEVEL + 200 });
+    const gn = Sim.getNetworkForPlot(g, 3);
+    for (let i = 0; i < 200 && gn.drillState === 'drilling'; i++) Sim.step(g, 16);
+    assert.strictEqual(gn.drillState, 'shut');
+    assert.ok(g.events.some(e => e.type === 'kick' && e.auto));
+    // Obchodní zástupce: +5 % z prodeje
+    const b = Sim.createWorld({ seed: 93 });
+    b.time.started = true;
+    const price = b.market.left.quote;
+    const sell = (world) => { const t = { id: 1, owner: 'player', x: 51, state: 'to_company', oil: 100, targetCompany: 'left', facing: -1 }; world.trucks.push(t); const m = world.players.player.money; Sim.step(world, 16); return world.players.player.money - m; };
+    const plain = sell(b);
+    const b2 = Sim.createWorld({ seed: 93 });
+    b2.time.started = true;
+    b2.players.player.perks.broker = true;
+    const boosted = sell(b2);
+    assert.ok(Math.abs(boosted - plain * 1.05) < 0.01, `${boosted} vs ${plain}`);
+});
+
+t('drilling: a well on an exhausted pocket can drill on to the next one', () => {
+    const w = plainWorld(94);
+    const [a, b] = w.oilPockets;
+    w.oilPockets = [a, b];
+    w.links = [];
+    const x = pocketCenter(a).x;
+    w.plots[3].x = x - w.plots[3].width / 2;
+    assert.ok(drillTo(w, 'player', 3, pocketCenter(a)).struck);
+    const n = Sim.getNetworkForPlot(w, 3);
+    assert.strictEqual(Sim.act(w, 'player', { type: 'drill', plotId: 3, x, y: C.WORLD_H - 150 }).reason, 'pumping', 'flowing pocket blocks drilling');
+    a.oil = 0;
+    Sim.step(w, 16);
+    assert.ok(!n.isPumping);
+    const target = { x: pocketCenter(b).x, y: Math.max(pocketCenter(b).y, pocketCenter(a).y + 10) };
+    assert.ok(Sim.act(w, 'player', { type: 'drill', plotId: 3, x: target.x, y: target.y }).ok, 'exhausted pocket lets the drill go on');
+    assert.strictEqual(n.pocket, -1);
+    assert.strictEqual(n.drillState, 'drilling');
+});
+
 console.log(out.join('\n'));
 process.exit(out.some(l => l.startsWith('FAIL')) ? 1 : 0);

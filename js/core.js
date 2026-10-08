@@ -213,6 +213,7 @@ function resetLocalUi() {
     document.getElementById('hud-toasts').innerHTML = '';
     document.getElementById('news-flash')?.classList.add('hidden');
     toggleSurveyMap(false);
+    if (typeof togglePerks === 'function') togglePerks(false);
     resetGuide();
 }
 
@@ -440,7 +441,8 @@ function handleWorldEvents(events) {
                 focusCameraOnPlot(e.plotId);
                 shakeCamera(7);
                 playSound('warn');
-                notify('Plynový kopanec!', `Pozemek ${e.plotId + 1}: klikni na vrt a zavři preventer, máš ${Math.round(KICK_MS / 1000)} s`, 'bad', 'warning');
+                if (e.auto) notify('Plynový kopanec', `Pozemek ${e.plotId + 1}: preventer se zavřel sám, plyn hoří na fléře`, 'cool', 'warning');
+                else notify('Plynový kopanec!', `Pozemek ${e.plotId + 1}: klikni na vrt a zavři preventer, máš ${Math.round(KICK_MS / 1000)} s`, 'bad', 'warning');
                 break;
             case 'bop':
                 if (!mine) break;
@@ -490,7 +492,12 @@ function handleWorldEvents(events) {
             case 'vent':
                 if (!mine) break;
                 playSound('vent');
-                logEvent(`Ventil odpuštěn na pozemku ${e.plotId + 1}.`);
+                logEvent(e.auto ? `Automatický ventil odpustil tlak na pozemku ${e.plotId + 1}.` : `Ventil odpuštěn na pozemku ${e.plotId + 1}.`);
+                break;
+            case 'perk':
+                if (!mine) break;
+                playSound('build');
+                notify('Vylepšení koupeno', `${e.name} za $${e.cost.toLocaleString('cs-CZ')}`, 'good', 'flag');
                 break;
             case 'warn':
                 if (!mine) break;
@@ -674,6 +681,13 @@ function handlePrefsClick(event) {
     if (option) setPref(field.key, option[0]);
 }
 
+// Vrt jde prodloužit, dokud není napojený na ložisko, které ještě teče
+function canExtendRig(network) {
+    if (!network || network.pocket < 0) return true;
+    const pocket = oilPockets[network.pocket];
+    return !pocket || pocket.oil <= 0;
+}
+
 // Odhad vrtání k bodu pod kurzorem: horniny po cestě dávají cenu a čas, strmé stoupání nejde
 function estimateDrill(from, to) {
     const len = Math.hypot(to.x - from.x, to.y - from.y);
@@ -751,8 +765,8 @@ function drawEffectsAndPreviews(groundLevel) {
     } else if (selectedDerrickPlotId !== null) {
         const network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
         const startPlot = plots.find(p => p.id === selectedDerrickPlotId);
-        newCursor = network && network.pocket >= 0 ? 'default' : 'crosshair';
-        if (startPlot && !(network && network.pocket >= 0)) {
+        newCursor = canExtendRig(network) ? 'crosshair' : 'default';
+        if (startPlot && canExtendRig(network)) {
             const lastPoint = network?.path[network.path.length - 1] || {
                 x: startPlot.x + startPlot.width / 2,
                 y: groundLevel

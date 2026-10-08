@@ -882,6 +882,9 @@ function updateUI() {
     renderContracts();
     renderPlayersPanel();
     renderGuide();
+    const perkCount = document.getElementById('perks-count');
+    if (perkCount && world) perkCount.textContent = `${Object.keys(world.players[myId]?.perks || {}).length}/${Object.keys(OilSim.PERKS).length}`;
+    if (perksOpen) renderPerks();
 
     // Tlačítka
     const buttons = [

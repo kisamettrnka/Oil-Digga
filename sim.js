@@ -128,6 +128,15 @@
 
     const PLAYER_COLORS = ['#ffb45a', '#6ec6ff', '#7ee08a', '#ff7aa8'];
 
+    // Vylepšení (perky): jednorázová koupě na celou hru, každé mění jedno pravidlo
+    const PERKS = {
+        autovent: { name: 'Automatický ventil', desc: 'Vrty odpouštějí přetlak samy, erupce z plného zásobníku nehrozí.', cost: 2000 },
+        autobop: { name: 'Automatický preventer', desc: 'Při plynovém kopanci se preventer zavře sám.', cost: 1500 },
+        hardbits: { name: 'Tvrzené korunky', desc: 'Korunky se tupí o polovinu pomaleji a mění za polovinu času.', cost: 1200 },
+        fastfleet: { name: 'Rychlé vozy', desc: 'Povozy i kamiony jezdí o 25 % rychleji.', cost: 1800 },
+        broker: { name: 'Obchodní zástupce', desc: 'Všichni kupci platí o 5 % víc.', cost: 2500 }
+    };
+
     // Terén claimu: kopec zdražuje stavby, řeka zlevňuje vtláčení vody, skála má pod povrchem žulu
     // (pomalý a drahý začátek vrtu), rovina nic. Cena pozemku to zohledňuje.
     const TERRAIN = {
@@ -254,6 +263,7 @@
                 lastDayIncome: 0,
                 strikeMs: 0,         // podplacená stávka: vozy stojí
                 route: null,         // kupec, ke kterému mají jezdit všechny vozy (null = sám podle ceny)
+                perks: {},           // koupená vylepšení (klíč PERKS -> true)
                 over: false,
                 reason: null
             };
@@ -704,6 +714,7 @@
             case 'buyTruck': return buyTruck(world, player);
             case 'acceptContract': return acceptContract(world, player, action.id);
             case 'setRoute': return setRoute(world, player, action.buyer);
+            case 'buyPerk': return buyPerk(world, player, action.perk);
             case 'bid': return placeBid(world, player, action.plotId, action.amount);
             case 'offerDeal': return offerDeal(world, player, action.to, action.oil, action.price);
             case 'acceptDeal': return answerDeal(world, player, action.id, true);
@@ -803,6 +814,21 @@
         return { ok: true };
     }
 
+    function hasPerk(world, playerId, perk) {
+        return !!world.players[playerId]?.perks?.[perk];
+    }
+
+    function buyPerk(world, player, perk) {
+        const def = PERKS[perk];
+        if (!def) return fail('perk');
+        if (player.perks[perk]) return fail('owned');
+        if (player.money < def.cost) return fail('money');
+        player.money -= def.cost;
+        player.perks[perk] = true;
+        emit(world, { type: 'perk', playerId: player.id, perk, name: def.name, cost: def.cost });
+        return { ok: true };
+    }
+
     // Vozy jezdí k vybranému kupci (razítko na ceníku); null = samy k nejlepší ceně
     function setRoute(world, player, buyer) {
         if (buyer != null && !world.market[buyer]) return fail('buyer');
@@ -849,7 +875,7 @@
             const oil = Math.min(link.rate * dt / 1000, network.oilStored);
             network.oilStored -= oil;
             const contract = applyContract(world, network.owner, buyer.id, oil);
-            const sale = contract.paid + (oil - contract.part) * buyer.quote * C.LINK_PRICE_BONUS;
+            const sale = contract.paid + (oil - contract.part) * buyer.quote * C.LINK_PRICE_BONUS * (hasPerk(world, network.owner, 'broker') ? 1.05 : 1);
             player.money += sale;
             player.revenue += sale;
             player.sold += oil;
@@ -1037,7 +1063,16 @@
         if (!Number.isFinite(x) || !Number.isFinite(y)) return fail('point');
         if (y <= C.GROUND_LEVEL || y > C.WORLD_H || x < 0 || x > C.WORLD_W) return fail('point');
         let network = getNetworkForPlot(world, plot.id);
-        if (network && network.pocket >= 0) return fail('pumping');
+        if (network && network.pocket >= 0) {
+            // Napojené ložisko: dokud teče, vrtat dál nejde; vyčerpané se opustí a vrtá se dál
+            const pocket = world.oilPockets[network.pocket];
+            if (pocket && pocket.oil > 0) return fail('pumping');
+            network.pocket = -1;
+            network.isPumping = false;
+            network.injecting = false;
+            network.pressure = 0;
+            network.drillState = 'drilling';
+        }
         const lastPoint = network
             ? network.path[network.path.length - 1]
             : { x: plotCenterX(plot), y: C.GROUND_LEVEL };
@@ -1106,7 +1141,7 @@
         if (player.money < C.BIT_COST) return fail('money');
         player.money -= C.BIT_COST;
         network.drillState = 'swap';
-        network.drillTimer = C.BIT_SWAP_MS;
+        network.drillTimer = C.BIT_SWAP_MS * (hasPerk(world, player.id, 'hardbits') ? 0.5 : 1);
         emit(world, { type: 'bit_swap', playerId: player.id, plotId });
         return { ok: true };
     }
@@ -1451,7 +1486,7 @@
         player.money -= cost;
         network.drillCost += cost;
         network.drilled += px;
-        network.bit = Math.max(0, network.bit - px * C.BIT_WEAR_PER_PX * rock.wear);
+        network.bit = Math.max(0, network.bit - px * C.BIT_WEAR_PER_PX * rock.wear * (hasPerk(world, player.id, 'hardbits') ? 0.5 : 1));
         const to = drillHead(network);
 
         network.hits = network.hits || [];
@@ -1461,9 +1496,10 @@
             hazard.hit = true;
             if (hazard.kind === 'gas') {
                 hazard.spent = true; // kapsa se kopancem vyprázdní
-                network.drillState = 'kick';
-                network.drillTimer = C.KICK_MS;
-                emit(world, { type: 'kick', playerId: player.id, plotId: network.derrickId, x: to.x, y: to.y });
+                const auto = hasPerk(world, player.id, 'autobop');
+                network.drillState = auto ? 'shut' : 'kick';
+                network.drillTimer = auto ? C.KICK_SHUT_MS : C.KICK_MS;
+                emit(world, { type: 'kick', playerId: player.id, plotId: network.derrickId, x: to.x, y: to.y, auto });
                 return;
             }
             network.waterCut = Math.min(C.MAX_WATER_CUT, network.waterCut + C.WATER_CUT_HIT);
@@ -1576,6 +1612,13 @@
             network.pressure = full
                 ? Math.min(1, pressure + dt / rules.pressureBuildMs)
                 : Math.max(0, pressure - dt / C.PRESSURE_RELIEF_MS);
+            if (network.pressure >= C.PRESSURE_WARN && hasPerk(world, network.owner, 'autovent') && canVentRig(network)) {
+                network.pressure = 0;
+                network.vent = C.VENT_MS;
+                network.warned = false;
+                emit(world, { type: 'vent', playerId: network.owner, plotId: network.derrickId, auto: true });
+                return;
+            }
             if (network.pressure >= C.PRESSURE_WARN && !network.warned) {
                 network.warned = true;
                 emit(world, { type: 'warn', playerId: network.owner, plotId: network.derrickId });
@@ -1706,7 +1749,7 @@
         const buyer = world.market[truck.targetCompany];
         const player = world.players[truck.owner];
         const contract = applyContract(world, truck.owner, buyer.id, truck.oil);
-        const sale = contract.paid + (truck.oil - contract.part) * buyer.quote;
+        const sale = contract.paid + (truck.oil - contract.part) * buyer.quote * (hasPerk(world, truck.owner, 'broker') ? 1.05 : 1);
         if (player) {
             player.money += sale;
             player.revenue += sale;
@@ -1728,12 +1771,13 @@
     }
 
     function stepTrucks(world, dt) {
-        const speed = truckSpeed(world) * (dt / 1000);
+        const baseSpeed = truckSpeed(world) * (dt / 1000);
         world.trucks.filter(t => t.state === 'idle').forEach(truck => dispatchIdleTruck(world, truck));
 
         world.trucks.forEach(truck => {
             if (truck.state === 'idle') return;
             if ((world.players[truck.owner]?.strikeMs || 0) > 0) return; // stávka: vůz stojí, kde je
+            const speed = baseSpeed * (hasPerk(world, truck.owner, 'fastfleet') ? 1.25 : 1);
             const network = world.pipeNetworks.find(n => n.id === truck.homeNetworkId) || null;
             switch (truck.state) {
                 case 'waiting_at_rig': {
@@ -1836,7 +1880,7 @@
     }
 
     return {
-        C, RULES, PLAYER_COLORS, NEWS, ROCKS, ERAS, BUYERS, BUYER_IDS, TERRAIN,
+        C, RULES, PLAYER_COLORS, NEWS, ROCKS, ERAS, BUYERS, BUYER_IDS, TERRAIN, PERKS,
         seededRandom, createWorld, act, step, serialize,
         getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
         isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll,

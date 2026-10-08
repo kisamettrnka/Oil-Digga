@@ -21,6 +21,9 @@ function addEventListeners() {
     document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
     document.getElementById('hud-players')?.addEventListener('click', handlePlayersClick);
     document.getElementById('players-btn')?.addEventListener('click', () => togglePlayersPanel());
+    document.getElementById('perks-btn')?.addEventListener('click', () => togglePerks());
+    document.getElementById('perks-close')?.addEventListener('click', () => togglePerks(false));
+    document.getElementById('perks-list')?.addEventListener('click', handlePerksClick);
     document.getElementById('hud-guide')?.addEventListener('click', handleGuideClick);
     document.getElementById('map-btn')?.addEventListener('click', () => toggleSurveyMap());
     document.getElementById('map-close')?.addEventListener('click', () => toggleSurveyMap(false));
@@ -137,11 +140,13 @@ function addEventListeners() {
         if (event.key === 'o' || event.key === 'O') togglePrefs();
         if (event.key === 'Escape') {
             if (!document.getElementById('prefs')?.classList.contains('hidden')) togglePrefs(false);
+            else if (perksOpen) togglePerks(false);
             else if (mapOpen) toggleSurveyMap(false);
             else cancelBuildMode();
         }
         if ((event.key === 'g' || event.key === 'G') && !event.repeat) toggleSurveyMap();
         if ((event.key === 'p' || event.key === 'P') && !event.repeat && sharedMode) togglePlayersPanel();
+        if ((event.key === 'u' || event.key === 'U') && !event.repeat) togglePerks();
         handleCameraKey(event);
     });
 
@@ -268,7 +273,7 @@ function handlePipePlacementClick(clickPos, groundLevel) {
         return;
     }
     const network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
-    if (network && network.pocket >= 0) return;
+    if (!canExtendRig(network)) return;
     const result = doAction({ type: 'drill', plotId: selectedDerrickPlotId, x: clickPos.x, y: clickPos.y });
     if (result.reason === 'angle') notify('Tudy ne', 'Vrták neumí stoupat strmě vzhůru', 'bad', 'derrick');
 }
