@@ -270,6 +270,7 @@ function doAction(action) {
         if (typeof Net !== 'undefined') Net.sendAction(action);
         return { ok: true, pending: true };
     }
+    uiDirty = true;
     const result = OilSim.act(world, myId, action);
     // Sólo: herní čas se rozběhne první koupí pozemku
     if (result.ok && action.type === 'buyPlot' && !raceMode) startGameLoop();
@@ -316,6 +317,7 @@ function endLocalGame(reason) {
 
 // Události ze světa: zvuky, oznámení, částice. Na sdílené mapě chodí od serveru.
 function handleWorldEvents(events) {
+    if (events.length) uiDirty = true;
     const groundLevel = getGroundLevel();
     events.forEach(e => {
         const mine = !e.playerId || e.playerId === myId;
@@ -1273,6 +1275,32 @@ function handleCameraKey(event) {
 
 let lastFrameTime = 0;
 
+// Výkon: při pauze a otevřené mapě se kreslí jen 10× za sekundu; čas snímku se měří a když
+// kreslení dlouhodobě nestíhá, sníží se rozlišení plátna (perfCap), při rezervě zase zvedne
+const IDLE_DRAW_MS = 100;
+const FRAME_SLOW_MS = 24;       // pod ~40 fps
+const FRAME_FAST_MS = 9;
+let lastDrawAt = 0;
+const UI_INTERVAL_MS = 250;
+let lastUiAt = 0;
+let uiDirty = true;
+let frameAvg = 8;               // klouzavý průměr času kreslení
+let frameJudgeAt = 0;
+let perfCap = 2;
+
+function judgePerformance(timestamp, drawMs) {
+    frameAvg += (drawMs - frameAvg) * 0.05;
+    if (timestamp - frameJudgeAt < 3000) return;
+    frameJudgeAt = timestamp;
+    if (frameAvg > FRAME_SLOW_MS && perfCap > 0.75) {
+        perfCap = perfCap > 1.5 ? 1.5 : perfCap > 1 ? 1 : 0.75;
+        resizeCanvasBacking(true);
+    } else if (frameAvg < FRAME_FAST_MS && perfCap < 2) {
+        perfCap = perfCap < 1 ? 1 : perfCap < 1.5 ? 1.5 : 2;
+        resizeCanvasBacking(true);
+    }
+}
+
 function gameLoop(timestamp) {
     // Kamera, kulisy a průzkumné nástroje běží i před koupí prvního pozemku
     const frameMs = Math.min(timestamp - (lastFrameTime || timestamp), MAX_FRAME_MS);
@@ -1284,8 +1312,14 @@ function gameLoop(timestamp) {
         if (frameMs > 0) update(frameMs * (sharedMode ? 1 : gameSpeed));
     }
 
-    if (isGameOver) drawGameOver();
-    else draw();
+    const idle = isPaused || mapOpen;
+    if (!idle || timestamp - lastDrawAt >= IDLE_DRAW_MS) {
+        lastDrawAt = timestamp;
+        const t0 = performance.now();
+        if (isGameOver) drawGameOver();
+        else draw();
+        if (!idle) judgePerformance(timestamp, performance.now() - t0);
+    }
     requestAnimationFrame(gameLoop);
 }
 
@@ -1368,8 +1402,13 @@ function draw() {
     // Mapa průzkumu se překresluje, dokud je otevřená (ceny, vrták, nové nálezy)
     if (mapOpen && performance.now() - mapLastPaint > 400) paintSurveyMap();
 
-    // Aktualizace HTML UI
-    updateUI();
+    // HTML HUD stačí 4× za sekundu, nebo hned po akci či události (uiDirty)
+    const now = performance.now();
+    if (uiDirty || now - lastUiAt >= UI_INTERVAL_MS) {
+        lastUiAt = now;
+        uiDirty = false;
+        updateUI();
+    }
 
     // Pauza overlay
     if (isPaused) drawPauseScreen();
@@ -2550,13 +2589,13 @@ function traceSlabQuad(x0, x1, groundLevel, frontY = groundLevel, backY = getSla
 
 // Pixely plátna podle velikosti na obrazovce a hustoty displeje (nejvýš 2×); při změně se
 // vrstvy překreslí, aby byly stejně ostré
-function resizeCanvasBacking() {
+function resizeCanvasBacking(force = false) {
     if (!canvas) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const rect = canvas.getBoundingClientRect();
     const cssW = Math.min(rect.width, rect.height * VIEW_W / VIEW_H) || VIEW_W;
-    const scale = Math.max(0.4, Math.min(2, cssW * dpr / VIEW_W));
-    if (canvas.width && Math.abs(scale - viewScale) < 0.02) return;
+    const scale = Math.max(0.4, Math.min(perfCap, cssW * dpr / VIEW_W));
+    if (!force && canvas.width && Math.abs(scale - viewScale) < 0.02) return;
     viewScale = scale;
     canvas.width = Math.round(VIEW_W * scale);
     canvas.height = Math.round(VIEW_H * scale);
@@ -3801,16 +3840,36 @@ function drawAmbientDust() {
 }
 
 // Měkká záře (aditivní), pro lampy, okna, světla aut a ložiska
+// Záře: jeden předkreslený kotouč na barvu (radiální gradient je drahý), kreslí se s globalAlpha
+const GLOW_SPRITE_SIZE = 128;
+const glowSprites = new Map();
+
+function getGlowSprite(color) {
+    let sprite = glowSprites.get(color);
+    if (!sprite) {
+        sprite = document.createElement('canvas');
+        sprite.width = sprite.height = GLOW_SPRITE_SIZE;
+        const sctx = sprite.getContext('2d');
+        const half = GLOW_SPRITE_SIZE / 2;
+        const g = sctx.createRadialGradient(half, half, 0, half, half, half);
+        g.addColorStop(0, `rgba(${color}, 1)`);
+        g.addColorStop(1, `rgba(${color}, 0)`);
+        sctx.fillStyle = g;
+        sctx.fillRect(0, 0, GLOW_SPRITE_SIZE, GLOW_SPRITE_SIZE);
+        glowSprites.set(color, sprite);
+    }
+    return sprite;
+}
+
 function drawGlow(x, y, radius, color, alpha) {
     if (alpha <= 0 || radius <= 0) return;
-    ctx.save();
+    const prevOp = ctx.globalCompositeOperation;
+    const prevAlpha = ctx.globalAlpha;
     ctx.globalCompositeOperation = 'lighter';
-    const g = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    g.addColorStop(0, `rgba(${color}, ${alpha})`);
-    g.addColorStop(1, `rgba(${color}, 0)`);
-    ctx.fillStyle = g;
-    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-    ctx.restore();
+    ctx.globalAlpha = prevAlpha * Math.min(1, alpha);
+    ctx.drawImage(getGlowSprite(color), x - radius, y - radius, radius * 2, radius * 2);
+    ctx.globalAlpha = prevAlpha;
+    ctx.globalCompositeOperation = prevOp;
 }
 
 // Přidám globální pole pro hitboxy cedulí
@@ -6239,6 +6298,7 @@ function getNetworkPickupX(network) {
 }
 
 function cancelBuildMode(clearDerrick = true) {
+    uiDirty = true;
     currentBuildMode = null;
     if (clearDerrick) selectedDerrickPlotId = null;
     updateUI();
