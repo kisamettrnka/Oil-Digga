@@ -1,5 +1,5 @@
 // Balanční simulace: boti hrají celé hry, měří se ekonomika, kupci, éry, zakázky.
-// npm run balance [solo|small|big|nocontracts|allcontracts|race3|race1|shared2|shared4|all]
+// npm run balance [solo|small|big|nocontracts|allcontracts|links|race3|race1|shared2|shared4|all]
 const Sim = require('../sim');
 const C = Sim.C;
 const DT = 50;
@@ -7,7 +7,8 @@ const DT = 50;
 // Bot: rozšiřuje se, když má rezervu; vrtá k nejbližšímu ložisku (zná mapu, ale platí seismiku);
 // obsluhuje kopance, korunky, ventil; zakázky bere podle strategie.
 function makeBot(w, pid, opts) {
-    const o = Object.assign({ maxWells: 6, reserve: 900, contracts: 'smart', trucksPerWell: 1.5, inject: false, silos: 1 }, opts);
+    // links: ropovody a vlečky jsou pohodlí (bez vozů a stávek), ne zisk navíc; výchozí bot je nestaví
+    const o = Object.assign({ maxWells: 6, reserve: 900, contracts: 'smart', trucksPerWell: 1.5, inject: false, silos: 1, links: false }, opts);
     const st = { wells: [], contractsTaken: 0 };
     function myPlots() { return w.plots.filter(p => p.owner === pid); }
     function expand() {
@@ -65,6 +66,23 @@ function makeBot(w, pid, opts) {
             if (Sim.canVentRig(n)) Sim.act(w, pid, { type: 'vent', plotId: n.derrickId });
             if (n.waterCut > 0.3 && p.money > 2000) Sim.act(w, pid, { type: 'cement', plotId: n.derrickId });
         });
+        // Odbyt: vlečka od Železnice, jinak ropovod k nejlépe platícímu kupci (když je na to)
+        if (o.links) {
+            w.pipeNetworks.filter(n => n.owner === pid && n.pocket >= 0 && !n.link).forEach(n => {
+                const plot = w.plots[n.derrickId];
+                const era = w.town.era;
+                const cushion = o.reserve + 1500; // odbyt je luxus: až když je z čeho
+                // vlečka až když vozy nestačí (plná flotila), ropovod k nejlépe platícímu kupci,
+                // který denně spotřebuje aspoň to, co ropovod přivede
+                if (era >= C.SIDING_ERA && p.trucksOwned >= C.MAX_TRUCKS && p.money > C.SIDING_COST + cushion) Sim.act(w, pid, { type: 'siding', plotId: plot.id });
+                else if (era >= C.PIPELINE_ERA) {
+                    const perDay = C.PIPELINE_RATE * C.MS_PER_DAY / 1000;
+                    // jen tam, kde ropovod vydělá víc než vozy: kupec platí nad základ a nezaplaví se
+                    const best = w.market.order.map(id => w.market[id]).filter(b => b.open && b.id !== 'right' && b.demand >= perDay && b.quote > b.base * 1.1).sort((a, b) => b.quote - a.quote)[0];
+                    if (best && p.money > Sim.linkCost(w, plot, 'pipeline', best.id) + cushion) Sim.act(w, pid, { type: 'pipeline', plotId: plot.id, buyer: best.id });
+                }
+            });
+        }
         const pumping = w.pipeNetworks.filter(n => n.owner === pid && n.pocket >= 0).length;
         const want = Math.min(C.MAX_TRUCKS, Math.ceil(Math.max(1, pumping) * o.trucksPerWell));
         if (p.trucksOwned < want && p.money > C.TRUCK_COST + o.reserve / 2) Sim.act(w, pid, { type: 'buyTruck' });
@@ -86,7 +104,8 @@ function makeBot(w, pid, opts) {
         w.contracts.offers.forEach(of => {
             if (o.contracts === 'all') { if (Sim.act(w, pid, { type: 'acceptContract', id: of.id }).ok) st.contractsTaken++; return; }
             // smart: vlastní denní těžba × dny × 0,6 musí pokrýt zakázku (mínus už běžící)
-            const rate = w.pipeNetworks.filter(n => n.owner === pid).reduce((s, n) => s + Sim.wellRate(w, n), 0) * C.MS_PER_DAY / 1000;
+            // jen těžba, která může k tomu kupci dojet: vrty bez odbytu nebo s odbytem právě k němu
+            const rate = w.pipeNetworks.filter(n => n.owner === pid).reduce((s, n) => s + Math.max(0, Sim.wellRate(w, n) - (n.link && n.link.buyer !== of.buyer ? n.link.rate : 0)), 0) * C.MS_PER_DAY / 1000;
             const busy = w.contracts.active.filter(a => a.owner === pid).reduce((s, a) => s + a.amount - a.delivered, 0);
             if (rate * of.days * 0.6 - busy >= of.amount && Sim.act(w, pid, { type: 'acceptContract', id: of.id }).ok) st.contractsTaken++;
         });
@@ -158,6 +177,7 @@ const scen = {
     small: () => report('solo rok, malý těžař (max 2 vrty)', { bot: { maxWells: 2 } }),
     big: () => report('solo rok, velký (max 8 vrtů, malá rezerva)', { bot: { maxWells: 8, reserve: 300 } }),
     nocontracts: () => report('solo rok bez zakázek', { bot: { contracts: 'none' } }),
+    links: () => report('solo rok, bot staví ropovody a vlečky', { bot: { links: true } }),
     allcontracts: () => report('solo rok, bere všechny zakázky', { bot: { contracts: 'all' } }),
     race3: () => report('závod 3 měsíce (race pravidla)', { days: 93, race: { months: 3, mode: 'richest' }, bot: { reserve: 150, silos: 0, trucksPerWell: 1 } }),
     race1: () => report('závod 1 měsíc', { days: 31, race: { months: 1, mode: 'richest' }, bot: { reserve: 150, silos: 0, trucksPerWell: 1 } }),

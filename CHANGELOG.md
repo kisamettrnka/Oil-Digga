@@ -4,6 +4,10 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Ropovod a vlečka
+- Vrt může mít vlastní odbyt bez vozů: od Boomtownu ropovod k libovolnému kupci (cena podle vzdálenosti, 40 bbl/den), od Železnice vlečka na nádraží ($700, 100 bbl/den). Staví se z Vrtného protokolu, kupec platí za stálý odběr o 8 % víc a stávka na něj nemá vliv.
+- Ropovod se zastaví, když má kupec zásobu na den a víc, aby mu nesrazil cenu (zásoba na půl dne); vozy mezitím odvezou zbytek jinam.
+
 ### Sdílená mapa: dražby, obchod, kartel a sabotáž
 - Claim na sdílené mapě se nekupuje, ale draží: první zájemce přihodí cenu, ostatní mohou přihazovat, dražba končí 2 dny po posledním příhozu. Kdo na konci nemá peníze, o claim přijde.
 - Panel Soupeři: nabídni jinému hráči ropu ze svých zásobníků za pevnou cenu (přelije se mu do nádrží), navrhni kartel, nebo zaplať stávku jeho řidičů.

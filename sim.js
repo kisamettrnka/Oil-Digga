@@ -96,6 +96,17 @@
         STOCK_DAYS: 2,               // při zásobě na tolik dní je cena základní × 0,65
         SHARED_DEMAND_PER_PLAYER: 0.4, // sdílená mapa: poptávka roste s počtem hráčů (míň než hráčů, ať si konkurují)
         WAGON_SPEED_MULT: 0.72,      // povozy do éry železnice jezdí pomaleji než kamiony
+        // Odbyt bez vozů: ropovod (od Boomtownu, ke každému kupci, průtok omezený) a vlečka
+        // (od Železnice, jen na nádraží, velký průtok). Jeden odbyt na vrt.
+        PIPELINE_COST_PER_PX: 0.6,
+        PIPELINE_RATE: 4,            // bbl/s
+        PIPELINE_ERA: 1,
+        SIDING_COST: 700,
+        SIDING_RATE: 10,
+        SIDING_ERA: 2,
+        LINK_SALE_BATCH: 100,        // událost prodeje po tolika barelech
+        LINK_STOCK_DAYS: 0.5,        // ropovod stojí, když má kupec zásobu na půl dne (cena blízko základu)
+        LINK_PRICE_BONUS: 1.08,      // stálý odběr potrubím platí kupec o kousek líp
         // Zakázky telegramem
         CONTRACT_FIRST_DAY: 4,
         CONTRACT_GAP_MIN: 5,
@@ -702,6 +713,8 @@
             case 'bit': return replaceBit(world, player, action.plotId);
             case 'cement': return cementWell(world, player, action.plotId);
             case 'inject': return toggleInjection(world, player, action.plotId);
+            case 'pipeline': return buildLink(world, player, action.plotId, 'pipeline', action.buyer);
+            case 'siding': return buildLink(world, player, action.plotId, 'siding', 'right');
             case 'vent': return vent(world, player, action.plotId);
             case 'seismic': return fireSeismic(world, player, action.plotId, action.x);
             case 'drone': return launchDrone(world, player);
@@ -784,6 +797,63 @@
         c.active.push(contract);
         emit(world, { type: 'contract_taken', playerId: player.id, id: offer.id, buyer: offer.buyer, amount: offer.amount, price: offer.price, days: offer.days });
         return { ok: true };
+    }
+
+    // --- Odbyt vrtu: ropovod nebo vlečka ---
+    function linkCost(world, plot, kind, buyerId) {
+        if (kind === 'siding') return C.SIDING_COST;
+        const buyer = world.market[buyerId];
+        return buyer ? Math.ceil(Math.abs(buyer.x - plotCenterX(plot)) * C.PIPELINE_COST_PER_PX) : Infinity;
+    }
+
+    function buildLink(world, player, plotId, kind, buyerId) {
+        const plot = ownedPlot(world, player, plotId);
+        const network = plot && getNetworkForPlot(world, plot.id);
+        if (!network || network.link) return fail('plot');
+        const era = world.town?.era || 0;
+        const buyer = world.market[buyerId];
+        if (!buyer || !buyer.open) return fail('buyer');
+        if (era < (kind === 'siding' ? C.SIDING_ERA : C.PIPELINE_ERA)) return fail('era');
+        if (kind !== 'siding' && kind !== 'pipeline') return fail('kind');
+        const cost = linkCost(world, plot, kind, buyerId);
+        if (player.money < cost) return fail('money');
+        player.money -= cost;
+        network.link = { kind, buyer: buyerId, rate: kind === 'siding' ? C.SIDING_RATE : C.PIPELINE_RATE, sold: 0, money: 0 };
+        emit(world, { type: 'link_built', playerId: player.id, plotId: plot.id, kind, buyer: buyerId, name: buyer.name, cost });
+        return { ok: true };
+    }
+
+    // Ropa teče ze zásobníku rovnou kupci; prodej se hlásí po dávkách, ať nelétá částice každý snímek
+    function stepLinks(world, dt) {
+        let sold = false;
+        world.pipeNetworks.forEach(network => {
+            const link = network.link;
+            if (!link || network.oilStored <= 0) return;
+            const buyer = world.market[link.buyer];
+            const player = world.players[network.owner];
+            if (!buyer || buyer.closed || !player || player.over) return;
+            // Zásoba na den a víc: ropovod stojí, ať nesráží cenu pod základ (vozy mohou jinam)
+            if (buyer.stock >= buyer.demand * C.LINK_STOCK_DAYS) return;
+            const oil = Math.min(link.rate * dt / 1000, network.oilStored);
+            network.oilStored -= oil;
+            const contract = applyContract(world, network.owner, buyer.id, oil);
+            const sale = contract.paid + (oil - contract.part) * buyer.quote * C.LINK_PRICE_BONUS;
+            player.money += sale;
+            player.revenue += sale;
+            player.sold += oil;
+            buyer.stock += oil;
+            growTown(world, oil);
+            checkCartelBreach(world, network.owner, buyer.id);
+            link.sold += oil;
+            link.money += sale;
+            if (link.sold >= C.LINK_SALE_BATCH) {
+                emit(world, { type: 'sale', playerId: network.owner, amount: Math.round(link.money), x: buyer.x, company: buyer.id, link: link.kind });
+                link.sold = 0;
+                link.money = 0;
+            }
+            sold = true;
+        });
+        if (sold) updateQuotes(world);
     }
 
     // --- Sdílená mapa: dražby, obchod, kartel, sabotáž ---
@@ -931,7 +1001,7 @@
         target.strikeMs = C.STRIKE_MS;
         const rnd = world._market || Math.random;
         const traced = rnd() < C.STRIKE_TRACE_CHANCE;
-        emit(world, { type: 'strike', playerId: target.id, by: traced ? player.id : null, ms: C.STRIKE_MS });
+        emit(world, { type: 'sabotage', playerId: target.id, by: traced ? player.id : null, ms: C.STRIKE_MS });
         return { ok: true };
     }
 
@@ -940,7 +1010,7 @@
             const p = world.players[id];
             if (p.strikeMs > 0) {
                 p.strikeMs = Math.max(0, p.strikeMs - dt);
-                if (p.strikeMs === 0) emit(world, { type: 'strike_over', playerId: id });
+                if (p.strikeMs === 0) emit(world, { type: 'sabotage_over', playerId: id });
             }
         });
     }
@@ -1124,6 +1194,7 @@
         stepDrilling(world, dt);
         stepReservoir(world, dt);
         stepPumping(world, dt);
+        stepLinks(world, dt);
         stepPressure(world, dt);
         stepTrucks(world, dt);
     }
@@ -1753,6 +1824,6 @@
         seededRandom, createWorld, act, step, serialize,
         getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
         isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll,
-        eraThreshold, truckSpeed, quoteAtStock, storedOil, plotAtX, terrainOf, plotCenterX, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
+        eraThreshold, truckSpeed, quoteAtStock, storedOil, linkCost, plotAtX, terrainOf, plotCenterX, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
     };
 });

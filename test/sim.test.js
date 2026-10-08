@@ -606,13 +606,65 @@ t('shared: a bribed strike stops the rival trucks for a while', () => {
     assert.ok(Sim.act(w, 'a', { type: 'sabotage', target: 'b' }).ok);
     assert.strictEqual(Sim.act(w, 'a', { type: 'sabotage', target: 'b' }).reason, 'busy');
     assert.strictEqual(money - w.players.a.money, C.STRIKE_COST);
-    assert.ok(w.events.some(e => e.type === 'strike' && e.playerId === 'b'));
+    assert.ok(w.events.some(e => e.type === 'sabotage' && e.playerId === 'b'));
     Sim.step(w, 1000);
     assert.strictEqual(truck.x, 800, 'truck stands still');
     Sim.step(w, C.STRIKE_MS);
     Sim.step(w, 1000);
     assert.ok(truck.x < 800, 'truck moves again');
-    assert.ok(w.events.some(e => e.type === 'strike_over'));
+    assert.ok(w.events.some(e => e.type === 'sabotage_over'));
+});
+
+t('transport: a pipeline sells oil without trucks, a siding needs the rail era', () => {
+    const w = plainWorld(71);
+    const pk = w.oilPockets[0];
+    w.oilPockets = [pk];
+    w.plots[3].x = pocketCenter(pk).x - w.plots[3].width / 2;
+    assert.ok(drillTo(w, 'player', 3, pocketCenter(pk)).struck);
+    assert.strictEqual(Sim.act(w, 'player', { type: 'pipeline', plotId: 3, buyer: 'lamps' }).reason, 'era', 'camp has no pipelines');
+    w.town.era = 1;
+    assert.strictEqual(Sim.act(w, 'player', { type: 'siding', plotId: 3 }).reason, 'buyer', 'no rail depot yet');
+    const cost = Sim.linkCost(w, w.plots[3], 'pipeline', 'lamps');
+    const money = w.players.player.money;
+    assert.ok(Sim.act(w, 'player', { type: 'pipeline', plotId: 3, buyer: 'lamps' }).ok);
+    assert.strictEqual(money - w.players.player.money, cost);
+    assert.strictEqual(Sim.act(w, 'player', { type: 'pipeline', plotId: 3, buyer: 'left' }).reason, 'plot', 'one link per rig');
+    const n = Sim.getNetworkForPlot(w, 3);
+    n.oilStored = 300;
+    for (let i = 0; i < 600; i++) Sim.step(w, 50);
+    assert.ok(n.oilStored < 300, 'oil left the tank');
+    assert.ok(w.players.player.sold > 0, 'and was sold');
+    assert.ok(w.events.some(e => e.type === 'sale' && e.link === 'pipeline'), 'batched sale event');
+    // Zásoba na den a víc: ropovod stojí
+    w.market.lamps.stock = w.market.lamps.demand * 3;
+    const held = n.oilStored;
+    Sim.step(w, 500);
+    assert.strictEqual(n.oilStored, held, 'pipeline waits for a full warehouse');
+    // Vlečka: od éry Železnice, nahradit ropovod nejde (jeden odbyt na vrt)
+    w.town.era = 2;
+    Sim.step(w, 16);
+    assert.strictEqual(Sim.act(w, 'player', { type: 'siding', plotId: 3 }).reason, 'plot');
+    Sim.act(w, 'player', { type: 'buyPlot', plotId: 4 });
+    Sim.act(w, 'player', { type: 'buildDerrick', plotId: 4 });
+    Sim.act(w, 'player', { type: 'drill', plotId: 4, x: w.plots[4].x + 10, y: C.GROUND_LEVEL + 40 });
+    assert.ok(Sim.act(w, 'player', { type: 'siding', plotId: 4 }).ok);
+    assert.strictEqual(Sim.getNetworkForPlot(w, 4).link.buyer, 'right');
+});
+
+t('transport: pipeline delivery breaks a cartel too', () => {
+    const w = sharedWorld(72);
+    w.town.era = 1;
+    Sim.step(w, 16);
+    claim(w, 'a', 2); Sim.act(w, 'a', { type: 'buildDerrick', plotId: 2 });
+    Sim.act(w, 'a', { type: 'drill', plotId: 2, x: w.plots[2].x + 10, y: C.GROUND_LEVEL + 40 });
+    assert.ok(Sim.act(w, 'a', { type: 'pipeline', plotId: 2, buyer: 'left' }).ok);
+    Sim.act(w, 'b', { type: 'proposeCartel', buyer: 'left', days: 5 });
+    Sim.act(w, 'a', { type: 'joinCartel' });
+    assert.ok(w.cartel.active);
+    Sim.getNetworkForPlot(w, 2).oilStored = 50;
+    Sim.step(w, 100);
+    assert.strictEqual(w.cartel, null);
+    assert.ok(w.events.some(e => e.type === 'cartel_broken' && e.playerId === 'a'));
 });
 
 console.log(out.join('\n'));

@@ -33,7 +33,7 @@ Místo okamžitě nakreslené trubky jede vrták reálným časem po trase, kter
 
 ## Fáze 3: město jako trh (a město, které roste)
 
-Hotovo: kupci ve městě se skladem a poptávkou podle éry, éry podle dodané ropy, zakázky telegramem, povozy → kamiony, město se rozrůstá a přestavuje. Zbývá vlastní potrubí a železniční vlečka (doprava).
+Hotovo: kupci ve městě se skladem a poptávkou podle éry, éry podle dodané ropy, zakázky telegramem, povozy → kamiony, město se rozrůstá a přestavuje. Vlastní ropovod a železniční vlečka přibyly jako odbyt vrtu (viz CHANGELOG).
 
 - Místo dvou výkupců vlevo a vpravo kupují podniky ve městě. Poptávka se mění podle **éry**:
 

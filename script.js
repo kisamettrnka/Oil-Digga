@@ -370,14 +370,14 @@ function handleWorldEvents(events) {
             case 'cartel_expired':
                 logEvent(`Návrh kartelu proti kupci ${e.name} vypršel.`);
                 break;
-            case 'strike':
+            case 'sabotage':
                 if (mine) {
                     playSound('warn');
                     notify('Stávka řidičů!', e.by ? `Vozy stojí. Zaplatil ji ${playerName(e.by)}.` : 'Vozy stojí 1,5 dne. Kdo za tím je, se neví.', 'bad', 'warning');
                 } else if (e.by === myId) logEvent(`Stávka u hráče ${playerName(e.playerId)} zaplacena.`);
                 else logEvent(`U hráče ${playerName(e.playerId)} stávkují řidiči.`);
                 break;
-            case 'strike_over':
+            case 'sabotage_over':
                 if (mine) notify('Stávka skončila', 'Vozy zase jezdí', 'good', 'wire');
                 break;
             case 'derrick_built':
@@ -437,6 +437,11 @@ function handleWorldEvents(events) {
                 break;
             case 'drill_stalled':
                 if (mine) notify('Vrták stojí', 'Došly peníze na vrtání, pojede dál, až přibydou', 'bad', 'derrick');
+                break;
+            case 'link_built':
+                if (!mine) break;
+                playSound('build');
+                notify(e.kind === 'siding' ? 'Vlečka postavena' : 'Ropovod postaven', `Pozemek ${e.plotId + 1} → ${e.name} za $${e.cost}`, 'good', e.kind === 'siding' ? 'rail' : 'pipe');
                 break;
             case 'cement':
                 if (!mine) break;
@@ -1221,6 +1226,7 @@ function draw() {
     drawPlots(groundLevel);
 
     const structureY = groundLevel - STRUCTURE_BASE_OFFSET;
+    drawTransportLinks(groundLevel);
     plots.forEach(plot => {
         const centerX = plot.x + plot.width / 2;
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
@@ -1486,15 +1492,32 @@ function renderRigPanel() {
         rows.push(['Voda', rigScale(water, 'water') + `${Math.round(water * 100)} %`]);
         rows.push(['Ložisko', `${Math.floor(pocket ? pocket.oil : 0).toLocaleString('cs-CZ')} bbl`]);
         if (pocket && (world.links || []).some(l => l.includes(pocket.id))) rows.push(['Pole', 'propojené se sousedním']);
+        if (network.link) {
+            rows.push(['Odbyt', `${network.link.kind === 'siding' ? 'vlečka' : 'ropovod'} → ${buyerName(network.link.buyer)}, ${Math.round(network.link.rate * MS_PER_DAY / 1000)} bbl/den`]);
+        }
         if (canVentRig(network)) actions.push({ act: 'vent', label: 'Odpustit ventil', cls: 'bad' });
         if (pocket && pocket.oil > 0) {
             actions.push(network.injecting
                 ? { act: 'inject', label: 'Zpět na těžbu' }
                 : { act: 'inject', label: `Vtláčet vodu $${INJECT_COST_PER_S * MS_PER_DAY / 1000}/den`, cls: 'water' });
         }
-        hint = network.injecting
-            ? 'Vtláčení zvedá tlak celého ložiska pro ostatní vrty, ale zavodňuje ho.'
-            : 'Průtok klesá s tlakem ložiska. Druhý vrt může vtláčet vodu.';
+        // Odbyt bez vozů: ropovod ke kupci (od Boomtownu), vlečka na nádraží (od Železnice)
+        if (!network.link) {
+            if (townEra >= OilSim.C.SIDING_ERA && world.market.right.open) {
+                actions.push({ act: 'siding', label: `Vlečka na nádraží $${OilSim.C.SIDING_COST}`, disabled: money < OilSim.C.SIDING_COST, cls: 'water' });
+            }
+            if (townEra >= OilSim.C.PIPELINE_ERA) {
+                world.market.order.map(id => world.market[id]).filter(b => b.open && b.id !== 'right').forEach(b => {
+                    const cost = OilSim.linkCost(world, plot, 'pipeline', b.id);
+                    actions.push({ act: 'pipeline', buyer: b.id, label: `Ropovod → ${b.name} $${cost}`, disabled: money < cost, key: 'pipe' + b.id });
+                });
+            }
+        }
+        hint = network.link
+            ? (network.link.kind === 'siding' ? 'Vlečka odváží ropu na nádraží sama, vozy berou jen přebytek.' : 'Ropovod teče sám, ale pomalu; vozy berou přebytek.')
+            : network.injecting
+                ? 'Vtláčení zvedá tlak celého ložiska pro ostatní vrty, ale zavodňuje ho.'
+                : (townEra >= OilSim.C.PIPELINE_ERA ? 'Ropovod nebo vlečka odvádí ropu bez vozů a stávek.' : 'Průtok klesá s tlakem ložiska. Druhý vrt může vtláčet vodu.');
     }
     if (network && network.waterCut > 0) actions.push({ act: 'cement', label: `Zacementovat $${CEMENT_COST}`, disabled: money < CEMENT_COST, cls: 'water' });
 
@@ -1507,7 +1530,7 @@ function renderRigPanel() {
             `<button class="rig-close" data-act="close" title="Zavřít (Esc)">×</button></div>` +
             `<div class="rig-stamp ${stampCls}">${stampText}</div>` +
             (rows.length ? `<dl class="rig-rows">${rows.map((r, i) => `<dt>${r[0]}</dt><dd data-row="${i}"></dd>`).join('')}</dl>` : '') +
-            (actions.length ? `<div class="rig-actions">${actions.map((a, i) => `<button class="rig-btn ${a.cls || ''}" data-act="${a.act}" data-btn="${i}"${a.disabled ? ' disabled' : ''}></button>`).join('')}</div>` : '') +
+            (actions.length ? `<div class="rig-actions">${actions.map((a, i) => `<button class="rig-btn ${a.cls || ''}" data-act="${a.act}"${a.buyer ? ` data-buyer="${a.buyer}"` : ''} data-btn="${i}"${a.disabled ? ' disabled' : ''}></button>`).join('')}</div>` : '') +
             (hint ? `<div class="rig-hint">${hint}</div>` : '');
     }
     rows.forEach((r, i) => {
@@ -1528,7 +1551,9 @@ function handleRigPanelClick(event) {
         updateUI();
         return;
     }
-    doAction({ type: button.dataset.act, plotId: selectedDerrickPlotId });
+    const action = { type: button.dataset.act, plotId: selectedDerrickPlotId };
+    if (button.dataset.buyer) action.buyer = button.dataset.buyer;
+    doAction(action);
 }
 
 // --- Mapa geologického průzkumu ---
@@ -2233,6 +2258,8 @@ const ICONS = {
     soundOff: '<path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="m16 9 5 6M21 9l-5 6"/>',
     people: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15.5 14.2c3 .2 5.5 2.5 5.5 5.8"/>',
     fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+    pipe: '<path d="M3 9h5v6H3zM16 9h5v6h-5zM8 12h8"/><path d="M8 10v4M16 10v4"/>',
+    rail: '<path d="M7 3v18M17 3v18M4 7h16M4 12h16M4 17h16"/>',
     drop: '<path d="M12 3s5 6 5 9.5a5 5 0 0 1-10 0C7 9 12 3 12 3Z"/><path d="M3 20c1.5-1.2 3-1.2 4.5 0s3 1.2 4.5 0 3-1.2 4.5 0 3 1.2 4.5 0"/>'
 };
 
@@ -5088,6 +5115,111 @@ function pathRoundRect(x, y, w, h, r) {
 }
 
 // Cisterna, kabina vpravo. facing = -1 ji zrcadlí (jede doleva). loadRatio 0–1 = hladina v okénku.
+// --- Odbyt vrtu na povrchu: ropovod na podpěrách za silnicí, vlečka s kolejemi a cisternou ---
+function drawTransportLinks(groundLevel) {
+    const t = performance.now() / 1000;
+    pipeNetworks.forEach(network => {
+        const link = network.link;
+        if (!link || network.derrickId < 0) return;
+        const plot = plots.find(p => p.id === network.derrickId);
+        const buyer = world.market[link.buyer];
+        if (!plot || !buyer) return;
+        const x0 = plot.x + plot.width / 2;
+        const flowing = network.oilStored > 0 && !buyer.closed;
+        if (link.kind === 'siding') drawSiding(x0, buyer.x, groundLevel, flowing, t, network.id);
+        else drawPipeline(x0, buyer.x, groundLevel, flowing, t, isMine(network));
+    });
+}
+
+function drawPipeline(x0, x1, groundLevel, flowing, t, mine) {
+    const y = groundLevel - STRUCTURE_BASE_OFFSET - 14; // za vrty, před městem
+    const dir = Math.sign(x1 - x0) || 1;
+    const from = x0 + dir * 22, to = x1 - dir * 14;
+    ctx.save();
+    ctx.lineCap = 'round';
+    // Podpěry po 60 px
+    ctx.fillStyle = '#1c1714';
+    for (let x = Math.min(from, to) + 20; x < Math.max(from, to); x += 60) {
+        ctx.fillRect(x - 1.5, y, 3, 11);
+        ctx.fillRect(x - 5, y + 10, 10, 2);
+    }
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.moveTo(from, y + 3); ctx.lineTo(to, y + 3); ctx.stroke();
+    ctx.strokeStyle = '#17120f';
+    ctx.lineWidth = 7;
+    ctx.beginPath(); ctx.moveTo(from, y); ctx.lineTo(to, y); ctx.stroke();
+    ctx.strokeStyle = '#8a6a4a';
+    ctx.lineWidth = 4.5;
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 220, 170, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(from, y - 1.5); ctx.lineTo(to, y - 1.5); ctx.stroke();
+    // Objímky
+    ctx.strokeStyle = '#2a1f17';
+    ctx.lineWidth = 2;
+    for (let x = Math.min(from, to) + 10; x < Math.max(from, to); x += 30) {
+        ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 4); ctx.stroke();
+    }
+    // Svislé přívody u vrtu a u kupce
+    ctx.strokeStyle = '#17120f';
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(from, y); ctx.lineTo(from, y + STRUCTURE_BASE_OFFSET - 10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(to, y); ctx.lineTo(to, y + STRUCTURE_BASE_OFFSET - 10); ctx.stroke();
+    if (flowing) { // tekoucí ropa směrem ke kupci
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = 'rgba(255, 160, 60, 0.8)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 12]);
+        ctx.lineDashOffset = -dir * (t * 40) % 18;
+        ctx.beginPath(); ctx.moveTo(from, y); ctx.lineTo(to, y); ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    ctx.restore();
+}
+
+// Vlečka: koleje za silnicí od vrtu k nádraží, po nich pendluje cisternový vagon
+function drawSiding(x0, x1, groundLevel, flowing, t, seed) {
+    const y = groundLevel - ROAD_DEPTH - 7;
+    const from = Math.min(x0 + 30, x1), to = Math.max(x0 + 30, x1);
+    ctx.save();
+    ctx.fillStyle = '#1a1820'; // pražce
+    for (let x = from; x < to; x += 9) ctx.fillRect(x, y - 2, 5, 4);
+    ctx.fillStyle = '#6a6f88'; // kolejnice
+    ctx.fillRect(from, y - 3, to - from, 1);
+    ctx.fillRect(from, y + 1, to - from, 1);
+    // Výhybka u vrtu: oblouk z vrtu na trať
+    ctx.strokeStyle = '#6a6f88';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x0, y + 14);
+    ctx.quadraticCurveTo(x0 + 10, y + 2, x0 + 30, y - 1);
+    ctx.stroke();
+    // Vagon: tam s nákladem, zpátky prázdný; stojí, když není co vozit
+    const span = Math.max(60, to - from - 50);
+    const phase = flowing ? ((t * 55 + seed * 37) % (span * 2)) : 0;
+    const loaded = phase < span;
+    const wx = from + 25 + (loaded ? phase : span * 2 - phase);
+    const tank = ctx.createLinearGradient(0, y - 18, 0, y - 4);
+    tank.addColorStop(0, '#4a4b62');
+    tank.addColorStop(1, '#14141c');
+    ctx.fillStyle = tank;
+    pathRoundRect(wx - 20, y - 18, 40, 12, 6);
+    ctx.fill();
+    ctx.fillStyle = loaded ? 'rgba(255, 180, 90, 0.7)' : 'rgba(200, 200, 215, 0.4)';
+    ctx.font = '700 6px "Barlow Condensed", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(loaded ? 'CRUDE' : 'EMPTY', wx, y - 12);
+    ctx.fillStyle = '#0d0d13';
+    [-14, -6, 6, 14].forEach(dx => {
+        ctx.beginPath();
+        ctx.arc(wx + dx, y - 4, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.restore();
+}
+
 // Cedulka STÁVKA nad stojícím vozem
 function drawStrikeTag(x, y) {
     ctx.save();
