@@ -69,4 +69,4 @@ Visual and UI work must look hand-crafted and specific to this game, not like a 
 
 ## Git workflow used here
 
-Work on a short-lived branch, commit with an English message, fast-forward merge into `main`, push `origin/main`, delete the branch (only when asked). Render deploys `main` automatically. Repo-local git identity is configured; do not change global git config. `Analýza.docx` describes an older truck system and is out of date; trust the code.
+Work on a short-lived branch, commit with an English message, fast-forward merge into `main`, push `origin/main`, delete the branch (only when asked). Render deploys `main` automatically. Repo-local git identity is configured; do not change global git config. `Analýza.docx` describes an older truck system and is out of date; trust the code. `docs/claude-code-prirucka.md` is a Czech guide to setting up Claude Code (plugins, token saving, self-made skills) for people working with Claude; it is not about the game.
