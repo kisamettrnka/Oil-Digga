@@ -499,8 +499,10 @@ button:disabled {
 .paper,
 .telegram,
 .ledger,
+#hud-rig,
 #hud-goals,
 #hud-race,
+#hud-rig,
 .sheet,
 .newspaper,
 #news-flash,
@@ -1413,4 +1415,142 @@ button:disabled {
 }
 #hud-goals .goal-name .value {
     flex-shrink: 0;
+}
+
+/* --- Vrtný protokol: formulář vybraného vrtu, hodnoty strojopisem, stav jako razítko --- */
+#hud-rig {
+    position: absolute;
+    left: 0.8em;
+    bottom: 0.8em;
+    width: 19.5em;
+    padding: 0.6em 0.85em 0.7em;
+    transform: rotate(0.6deg);
+    border-radius: 0.15em;
+    font-size: 0.9em;
+}
+#hud-rig .rig-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid rgba(26, 18, 11, 0.45);
+}
+#hud-rig .rig-title {
+    font-family: 'Rye', Georgia, serif;
+    font-size: 1.1em;
+}
+#hud-rig .rig-plot {
+    flex: 1;
+    font-family: 'Courier Prime', monospace;
+    font-size: 0.85em;
+    color: var(--ink-soft);
+}
+#hud-rig .rig-close {
+    border: none;
+    background: none;
+    font: 700 1.2em 'Courier Prime', monospace;
+    color: var(--ink-soft);
+    cursor: pointer;
+    padding: 0 0.2em;
+}
+#hud-rig .rig-stamp {
+    --stamp: var(--stamp-blue);
+    display: inline-block;
+    margin: 0.45em 0 0.35em;
+    padding: 0.05em 0.5em;
+    font: 700 0.95em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    border: 2px solid var(--stamp);
+    border-radius: 0.2em;
+    transform: rotate(-2.5deg);
+    opacity: 0.85;
+}
+#hud-rig .rig-stamp.bad { --stamp: var(--stamp-red); }
+#hud-rig .rig-stamp.good { --stamp: var(--stamp-green); }
+#hud-rig .rig-stamp.alarm { animation: rig-alarm 0.5s steps(2) infinite; }
+@keyframes rig-alarm {
+    50% { opacity: 0.35; }
+}
+#hud-rig .rig-rows {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.12em 0.8em;
+    margin: 0;
+    font-size: 0.85em;
+}
+#hud-rig dt {
+    font: 700 0.95em 'Barlow Condensed', system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+}
+#hud-rig dd {
+    margin: 0;
+    font-family: 'Courier Prime', monospace;
+    font-weight: 700;
+    border-bottom: 1px dotted rgba(26, 18, 11, 0.35);
+}
+/* Stupnice: deset dílků, vyplněná část inkoustem */
+#hud-rig .rig-scale {
+    display: inline-block;
+    vertical-align: middle;
+    width: 6.5em;
+    height: 0.55em;
+    margin-right: 0.4em;
+    background:
+        repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), rgba(26, 18, 11, 0.5) calc(10% - 1px) 10%),
+        rgba(26, 18, 11, 0.08);
+    border: 1px solid rgba(26, 18, 11, 0.55);
+    position: relative;
+}
+#hud-rig .rig-scale > i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--ink);
+}
+#hud-rig .rig-scale.bad > i { background: var(--stamp-red); }
+#hud-rig .rig-scale.water > i { background: var(--stamp-blue); }
+#hud-rig .rig-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em;
+    margin-top: 0.55em;
+}
+#hud-rig .rig-btn {
+    --stamp: var(--ink);
+    padding: 0.2em 0.55em 0.15em;
+    font: 700 0.9em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    background: rgba(255, 240, 210, 0.12);
+    border: 3px double var(--stamp);
+    border-radius: 0.2em;
+    cursor: pointer;
+}
+#hud-rig .rig-btn:hover:not(:disabled) { background: rgba(255, 240, 210, 0.3); }
+#hud-rig .rig-btn:disabled { opacity: 0.4; cursor: default; }
+#hud-rig .rig-btn.bad { --stamp: var(--stamp-red); }
+#hud-rig .rig-btn.water { --stamp: var(--stamp-blue); }
+#hud-rig .rig-btn.urgent {
+    --stamp: var(--stamp-red);
+    font-size: 1.1em;
+    animation: rig-alarm 0.5s steps(2) infinite;
+}
+#hud-rig .rig-hint {
+    margin-top: 0.45em;
+    font-family: 'Courier Prime', monospace;
+    font-size: 0.75em;
+    color: var(--ink-soft);
+}
+@container (max-width: 1200px) {
+    #hud-rig {
+        width: 16em;
+        font-size: 0.8em;
+    }
+    #hud-rig .rig-hint {
+        display: none;
+    }
 }

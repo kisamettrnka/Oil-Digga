@@ -4,12 +4,50 @@ const Sim = require('../sim');
 const { C } = Sim;
 const out = [];
 const t = (name, fn) => { try { fn(); out.push('OK   ' + name); } catch (e) { out.push('FAIL ' + name + ': ' + e.stack.split('\n').slice(0, 3).join(' | ')); } };
+// Vrtá k bodu, dokud vrták nedojede (preventer a korunku obslouží sám). Čas běží jen po dobu vrtání.
+function drillTo(w, pid, plotId, target) {
+    const r = Sim.act(w, pid, { type: 'drill', plotId, x: target.x, y: target.y });
+    if (!r.ok) return r;
+    const started = w.time.started;
+    w.time.started = true;
+    const n = Sim.getNetworkForPlot(w, plotId);
+    for (let i = 0; i < 40000 && n.drillState !== 'done' && n.drillState !== 'idle'; i++) {
+        serviceRigs(w);
+        Sim.step(w, 16);
+    }
+    w.time.started = started;
+    return { ok: true, struck: n.drillState === 'done' };
+}
+// Obsluha vrtných souprav jako hráč: zavře preventer, vymění korunku
+function serviceRigs(w) {
+    w.pipeNetworks.forEach(n => {
+        if (n.drillState === 'kick') Sim.act(w, n.owner, { type: 'bop', plotId: n.derrickId });
+        if (n.drillState === 'worn' && !(n.blowout > 0)) Sim.act(w, n.owner, { type: 'bit', plotId: n.derrickId });
+    });
+}
+function pocketCenter(pk) {
+    return { x: pk.x + pk.width / 2, y: pk.y + pk.height / 2 };
+}
 function tapNearest(w, pid, plotId) {
     const plot = w.plots[plotId];
     const cx = plot.x + C.PLOT_WIDTH / 2;
     const pk = w.oilPockets.filter(p => !p.tappedBy.length).sort((a, b) => Math.abs(a.x + a.width / 2 - cx) - Math.abs(b.x + b.width / 2 - cx))[0];
-    return Sim.act(w, pid, { type: 'pipe', plotId, x: pk.x + pk.width / 2, y: pk.y + pk.height / 2 });
+    return drillTo(w, pid, plotId, pocketCenter(pk));
 }
+// Svět bez náhodných rizik a s jednou horninou: pro testy, které měří vrtání
+function plainWorld(seed, rock = 'sand') {
+    const w = Sim.createWorld({ seed });
+    w.hazards = [];
+    w.links = [];
+    w.strata = { bounds: [], layers: [rock] };
+    w.players.player.money = 100000;
+    Sim.act(w, 'player', { type: 'buyPlot', plotId: 3 });
+    Sim.act(w, 'player', { type: 'buildDerrick', plotId: 3 });
+    w.time.started = true;
+    w.news.nextInDays = 9999;
+    return w;
+}
+const rigX = w => w.plots[3].x + C.PLOT_WIDTH / 2;
 
 t('same seed = same world', () => {
     const a = Sim.createWorld({ seed: 42 }), b = Sim.createWorld({ seed: 42 });
@@ -115,13 +153,17 @@ t('shared: two players tap same pocket and both pump', () => {
     Sim.act(w, 'b', { type: 'buildDerrick', plotId: 4 });
     const pk = w.oilPockets[0];
     const target = { x: pk.x + pk.width / 2, y: pk.y + pk.height / 2 };
-    assert.ok(Sim.act(w, 'a', { type: 'pipe', plotId: 3, ...target }).struck);
-    assert.ok(Sim.act(w, 'b', { type: 'pipe', plotId: 4, ...target }).struck);
-    assert.deepStrictEqual(pk.tappedBy, ['a', 'b']);
+    w.hazards = [];
+    w.links = [];
+    w.oilPockets = [pk]; // ať vrták cestou nenarazí na jiné ložisko
+    Sim.act(w, 'a', { type: 'drill', plotId: 3, ...target });
+    Sim.act(w, 'b', { type: 'drill', plotId: 4, ...target });
+    w.time.started = true;
+    for (let i = 0; i < 40000 && pk.tappedBy.length < 2; i++) { serviceRigs(w); Sim.step(w, 16); }
+    assert.deepStrictEqual(pk.tappedBy.slice().sort(), ['a', 'b']);
     Sim.act(w, 'a', { type: 'buyTruck' });
     Sim.act(w, 'b', { type: 'buyTruck' });
-    assert.ok(!Sim.act(w, 'b', { type: 'pipe', plotId: 3, x: 500, y: 600 }).ok, 'b cannot pipe a rig');
-    w.time.started = true;
+    assert.ok(!Sim.act(w, 'b', { type: 'drill', plotId: 3, x: 500, y: 600 }).ok, 'b cannot drill a rig');
     const priceBefore = w.market.left.price + w.market.right.price;
     for (let i = 0; i < 4000; i++) Sim.step(w, 16);
     assert.ok(w.players.a.sold > 0 && w.players.b.sold > 0, `sold a=${w.players.a.sold} b=${w.players.b.sold}`);
@@ -204,6 +246,153 @@ t('news: trucks avoid a closed buyer and turn around', () => {
     const sales = w.events.filter(e => e.type === 'sale');
     assert.ok(sales.length > 0, 'sold something');
     assert.ok(sales.every(e => e.company === 'left'), 'only the open refinery buys');
+});
+
+t('drilling takes time and is paid per pixel', () => {
+    const w = plainWorld(21);
+    const start = w.players.player.money;
+    const x = rigX(w);
+    assert.ok(Sim.act(w, 'player', { type: 'drill', plotId: 3, x, y: C.GROUND_LEVEL + 100 }).ok);
+    const n = Sim.getNetworkForPlot(w, 3);
+    w.oilPockets = []; // nic k navrtání
+    Sim.step(w, 1000);
+    assert.ok(Math.abs(n.drilled - C.DRILL_SPEED) < 0.5, 'one second of sand ' + n.drilled);
+    assert.ok(Math.abs(start - w.players.player.money - n.drilled * C.DRILL_COST_PER_PX) < 1, 'paid per px');
+    for (let i = 0; i < 300; i++) Sim.step(w, 16);
+    assert.strictEqual(n.drillState, 'idle');
+    assert.ok(Math.abs(n.drilled - 100) < 0.01);
+    const g = plainWorld(21, 'granite');
+    g.oilPockets = [];
+    Sim.act(g, 'player', { type: 'drill', plotId: 3, x, y: C.GROUND_LEVEL + 100 });
+    Sim.step(g, 1000);
+    const gn = Sim.getNetworkForPlot(g, 3);
+    assert.ok(gn.drilled < n.drilled / 4, 'granite is slow ' + gn.drilled);
+    assert.ok((1 - gn.bit) / gn.drilled > (1 - n.bit) / n.drilled * 4, 'granite wears the bit faster per px');
+});
+
+t('drill cannot climb steeply, drillStop cuts the plan', () => {
+    const w = plainWorld(22);
+    w.oilPockets = [];
+    const x = rigX(w);
+    Sim.act(w, 'player', { type: 'drill', plotId: 3, x, y: C.GROUND_LEVEL + 200 });
+    assert.strictEqual(Sim.act(w, 'player', { type: 'drill', plotId: 3, x: x + 10, y: C.GROUND_LEVEL + 100 }).reason, 'angle');
+    assert.ok(Sim.act(w, 'player', { type: 'drill', plotId: 3, x: x + 200, y: C.GROUND_LEVEL + 180 }).ok, 'slight rise is fine');
+    Sim.step(w, 1000);
+    assert.ok(Sim.act(w, 'player', { type: 'drillStop', plotId: 3 }).ok);
+    const n = Sim.getNetworkForPlot(w, 3);
+    assert.strictEqual(n.drillState, 'idle');
+    assert.ok(Math.abs(Sim.pathLength(n.path) - n.drilled) < 0.01, 'path ends at the bit');
+});
+
+t('worn bit stops the drill until replaced', () => {
+    const w = plainWorld(23);
+    w.oilPockets = [];
+    Sim.act(w, 'player', { type: 'drill', plotId: 3, x: rigX(w), y: C.GROUND_LEVEL + 300 });
+    const n = Sim.getNetworkForPlot(w, 3);
+    n.bit = 0.001;
+    Sim.step(w, 100);
+    assert.strictEqual(n.drillState, 'worn');
+    const at = n.drilled;
+    Sim.step(w, 500);
+    assert.strictEqual(n.drilled, at, 'no progress on a worn bit');
+    assert.ok(Sim.act(w, 'player', { type: 'bit', plotId: 3 }).ok);
+    Sim.step(w, C.BIT_SWAP_MS + 20);
+    assert.strictEqual(n.bit, 1);
+    Sim.step(w, 200);
+    assert.ok(n.drilled > at);
+});
+
+t('gas kick: preventer saves the well, ignoring it blows out', () => {
+    const setup = () => {
+        const w = plainWorld(24);
+        w.oilPockets = [];
+        w.hazards = [{ id: 0, kind: 'gas', x: rigX(w), y: C.GROUND_LEVEL + 60, r: 15, hit: false, revealedBy: [] }];
+        Sim.act(w, 'player', { type: 'drill', plotId: 3, x: rigX(w), y: C.GROUND_LEVEL + 200 });
+        for (let i = 0; i < 200 && Sim.getNetworkForPlot(w, 3).drillState === 'drilling'; i++) Sim.step(w, 16);
+        return w;
+    };
+    const saved = setup();
+    const n = Sim.getNetworkForPlot(saved, 3);
+    assert.strictEqual(n.drillState, 'kick');
+    assert.ok(Sim.act(saved, 'player', { type: 'bop', plotId: 3 }).ok);
+    Sim.step(saved, C.KICK_SHUT_MS + 20);
+    assert.strictEqual(n.drillState, 'drilling');
+    assert.ok(!saved.events.some(e => e.type === 'blowout'));
+
+    const lost = setup();
+    const money = lost.players.player.money;
+    Sim.step(lost, C.KICK_MS + 20);
+    const ln = Sim.getNetworkForPlot(lost, 3);
+    assert.ok(lost.events.some(e => e.type === 'blowout' && e.kick));
+    assert.strictEqual(ln.drillState, 'worn');
+    assert.ok(lost.players.player.money <= money - Sim.getBlowoutFine(lost));
+});
+
+t('water layer waters the well, cement fixes it', () => {
+    const w = plainWorld(25);
+    const pk = w.oilPockets[0];
+    const x = rigX(w);
+    Object.assign(pk, { x: x - 50, y: C.GROUND_LEVEL + 150, width: 100, height: 60, oil: 8000, maxOil: 8000, drive0: 1 });
+    pk.vertices = [{ x: x - 50, y: C.GROUND_LEVEL + 150 }, { x: x + 50, y: C.GROUND_LEVEL + 150 }, { x: x + 50, y: C.GROUND_LEVEL + 210 }, { x: x - 50, y: C.GROUND_LEVEL + 210 }];
+    w.oilPockets = [pk];
+    pk.id = 0;
+    w.hazards = [{ id: 0, kind: 'water', x, y: C.GROUND_LEVEL + 80, r: 20, hit: false, revealedBy: [] }];
+    assert.ok(drillTo(w, 'player', 3, { x, y: C.GROUND_LEVEL + 180 }).struck);
+    const n = Sim.getNetworkForPlot(w, 3);
+    assert.ok(Math.abs(n.waterCut - C.WATER_CUT_HIT) < 1e-9);
+    const wet = Sim.wellRate(w, n);
+    assert.ok(Sim.act(w, 'player', { type: 'cement', plotId: 3 }).ok);
+    assert.ok(Sim.wellRate(w, n) > wet * 1.4, 'cemented well flows more');
+});
+
+t('reservoir: rate declines as the pocket drains, injection lifts it', () => {
+    const w = plainWorld(26);
+    const pk = w.oilPockets[0];
+    w.oilPockets = [pk];
+    const x = pocketCenter(pk).x;
+    w.plots[3].x = x - C.PLOT_WIDTH / 2;
+    assert.ok(drillTo(w, 'player', 3, pocketCenter(pk)).struck);
+    const n = Sim.getNetworkForPlot(w, 3);
+    pk.oil = pk.maxOil;
+    const full = Sim.wellRate(w, n);
+    pk.oil = pk.maxOil / 2;
+    const half = Sim.wellRate(w, n);
+    assert.ok(half < full * 0.5, `decline full=${full} half=${half}`);
+    // druhý vrt do stejného ložiska vtláčí vodu
+    Sim.act(w, 'player', { type: 'buyPlot', plotId: 4 });
+    Sim.act(w, 'player', { type: 'buildDerrick', plotId: 4 });
+    w.plots[4].x = x - C.PLOT_WIDTH / 2 + 30;
+    assert.ok(drillTo(w, 'player', 4, pocketCenter(pk)).struck, 'second well into the same pocket');
+    const injector = Sim.getNetworkForPlot(w, 4);
+    assert.ok(Sim.act(w, 'player', { type: 'inject', plotId: 4 }).ok);
+    assert.ok(!injector.isPumping && injector.injecting);
+    const money = w.players.player.money;
+    pk.oil = pk.maxOil / 2;
+    const before = Sim.pocketDrive(pk);
+    for (let i = 0; i < 625; i++) { Sim.step(w, 16); pk.oil = pk.maxOil / 2; }
+    assert.ok(Sim.pocketDrive(pk) > before + 0.1, 'injection raises drive');
+    assert.ok(pk.waterCut > 0, 'and waters the field');
+    assert.ok(w.players.player.money < money - 40, 'and costs money');
+});
+
+t('linked pockets: oil flows to the drained one', () => {
+    const w = plainWorld(27);
+    const [a, b] = w.oilPockets;
+    w.links = [[a.id, b.id]];
+    a.oil = a.maxOil * 0.2;
+    b.oil = b.maxOil;
+    const total = a.oil + b.oil;
+    for (let i = 0; i < 600; i++) Sim.step(w, 16);
+    assert.ok(a.oil > a.maxOil * 0.2, 'drained pocket refills');
+    assert.ok(Math.abs(a.oil + b.oil - total) < 1e-6, 'oil is conserved');
+});
+
+t('strata and hazards are generated from the seed', () => {
+    const w = Sim.createWorld({ seed: 31 });
+    assert.ok(w.strata.layers.length >= 5);
+    assert.ok(w.hazards.some(h => h.kind === 'gas') && w.hazards.some(h => h.kind === 'water'));
+    assert.ok(Sim.ROCKS[Sim.rockAt(w, 800, C.GROUND_LEVEL + 50)]);
+    assert.deepStrictEqual(Sim.createWorld({ seed: 31 }).hazards, w.hazards);
 });
 
 console.log(out.join('\n'));

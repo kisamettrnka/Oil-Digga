@@ -17,7 +17,8 @@ let raceMode = null;
 // Globální proměnné níž (money, plots, trucks...) jsou jen zrcadlo světa pro kreslení a HUD,
 // plní je syncFromWorld(). Měnit stav jde jen přes doAction().
 const {
-    PLOT_COUNT, VRT_COST, SILO_COST, TRUCK_COST, PIPE_COST_PER_PIXEL, TRUCK_CAPACITY, OIL_PER_SECOND,
+    PLOT_COUNT, VRT_COST, SILO_COST, TRUCK_COST, TRUCK_CAPACITY, DRILL_SPEED, DRILL_COST_PER_PX, DRILL_MAX_RISE,
+    BIT_COST, KICK_MS, CEMENT_COST, INJECT_COST_PER_S,
     MAX_SILOS_PER_PLOT, MAX_TRUCKS, MS_PER_DAY, SURVIVAL_TAX_STEP, TRUCK_LENGTH, TRUCK_GAP_PAD,
     VENT_MIN, PRESSURE_WARN, SEISMIC_COST, DRONE_COST, RADAR_COST, SEISMIC_RADIUS, SEISMIC_WAVE_MS,
     RADAR_RADIUS, RADAR_PULSE_MS, DRONE_BEAM_HALF, ECHO_MS
@@ -62,6 +63,7 @@ let totalOilSold = 0;
 let oilPockets = [];
 let plots = [];
 let pipeNetworks = [];
+let hazards = [];         // zrcadlo world.hazards (plyn, voda)
 let trucks = [];
 let lastBoughtHighlightTimer = 0;
 let lastBoughtPlotId = null;
@@ -247,6 +249,9 @@ function syncFromWorld() {
     pipeNetworks.forEach(network => {
         network.connectedPocket = oilPockets[network.pocket] || null;
     });
+    // Rizika v hornině: vidí je, kdo je navrtal (všichni) nebo odhalil georadarem
+    hazards = world.hazards || [];
+    hazards.forEach(h => { h.visible = h.hit || h.revealedBy.includes(myId); });
 }
 
 function isMine(thing) {
@@ -324,7 +329,7 @@ function handleWorldEvents(events) {
             case 'derrick_built':
                 if (!mine) break;
                 playSound('build');
-                notify('Vrt postaven', 'Klikni do podzemí a veď potrubí k ložisku', 'cool', 'derrick');
+                notify('Vrt postaven', 'Klikej do podzemí: vrták pojede po trase a platí se za metr', 'cool', 'derrick');
                 selectedDerrickPlotId = e.plotId;
                 cancelBuildMode(false);
                 break;
@@ -344,9 +349,51 @@ function handleWorldEvents(events) {
                 if (!mine) break;
                 playSound('strike');
                 notify('Ropa navrtána!', `Ložisko s ${e.oil.toLocaleString('cs-CZ')} barely`, 'good', 'gusher');
-                if (selectedDerrickPlotId === e.plotId) selectedDerrickPlotId = null;
                 break;
             }
+            case 'kick':
+                if (!mine) break;
+                shakeCamera(7);
+                playSound('warn');
+                notify('Plynový kopanec!', `Pozemek ${e.plotId + 1}: klikni na vrt a zavři preventer, máš ${Math.round(KICK_MS / 1000)} s`, 'bad', 'warning');
+                break;
+            case 'bop':
+                if (!mine) break;
+                playSound('vent');
+                logEvent(`Preventer zavřen, plyn hoří na fléře (pozemek ${e.plotId + 1}).`);
+                break;
+            case 'kick_over':
+                if (mine) logEvent(`Plyn vyhořel, vrtá se dál (pozemek ${e.plotId + 1}).`);
+                break;
+            case 'water':
+                if (!mine) break;
+                playSound('build');
+                notify('Navrtaná voda', `Pozemek ${e.plotId + 1}: vrt bude těžit i vodu, jde zacementovat`, 'bad', 'drop');
+                break;
+            case 'bit_worn':
+                if (!mine) break;
+                playSound('warn');
+                notify('Korunka je tupá', `Pozemek ${e.plotId + 1}: vrták stojí, vyměň korunku za $${BIT_COST}`, 'bad', 'derrick');
+                break;
+            case 'bit_swap':
+                if (mine) logEvent(`Tahá se soutyčí, nová korunka (pozemek ${e.plotId + 1}).`);
+                break;
+            case 'bit_ready':
+                if (mine) logEvent(`Nová korunka nasazena (pozemek ${e.plotId + 1}).`);
+                break;
+            case 'drill_stalled':
+                if (mine) notify('Vrták stojí', 'Došly peníze na vrtání, pojede dál, až přibydou', 'bad', 'derrick');
+                break;
+            case 'cement':
+                if (!mine) break;
+                playSound('build');
+                logEvent(`Vrt zacementován, voda utěsněna (pozemek ${e.plotId + 1}).`);
+                break;
+            case 'inject':
+                if (!mine) break;
+                if (e.forced) notify('Vtláčení zastaveno', `Pozemek ${e.plotId + 1}: vrt zase těží`, 'bad', 'drop');
+                else logEvent(e.on ? `Pozemek ${e.plotId + 1}: vtláčí vodu do ložiska.` : `Pozemek ${e.plotId + 1}: zpátky na těžbu.`);
+                break;
             case 'vent':
                 if (!mine) break;
                 playSound('vent');
@@ -361,7 +408,8 @@ function handleWorldEvents(events) {
                 if (!mine) break;
                 shakeCamera(12);
                 playSound('gush');
-                notify('Erupce ropy!', `Vrt na pozemku ${e.plotId + 1}: únik a pokuta $${e.fine}`, 'bad', 'blowout');
+                if (e.kick) notify('Plyn vyrazil z vrtu!', `Pozemek ${e.plotId + 1}: pokuta $${e.fine}, korunka zničená`, 'bad', 'blowout');
+                else notify('Erupce ropy!', `Vrt na pozemku ${e.plotId + 1}: únik a pokuta $${e.fine}`, 'bad', 'blowout');
                 break;
             case 'exhausted':
                 if (mine) notify('Ložisko vyčerpáno', `Vrt na pozemku ${e.plotId + 1} přestal čerpat`, 'bad', 'barrel');
@@ -393,7 +441,8 @@ function handleWorldEvents(events) {
             case 'radar':
                 if (!mine) break;
                 playSound(e.found ? 'strike' : 'build');
-                if (e.found) notify('Georadar našel ropu', `${e.found}× ložisko odhaleno`, 'cool', 'radar');
+                if (e.found) notify('Georadar našel ropu', `${e.found}× ložisko odhaleno${e.hazards ? `, ${e.hazards}× riziko v hornině` : ''}`, 'cool', 'radar');
+                else if (e.hazards) notify('Georadar: pozor v hornině', `${e.hazards}× plyn nebo voda v okolí`, 'cool', 'radar');
                 else logEvent('Georadar: v okolí nic.');
                 cancelBuildMode();
                 break;
@@ -423,6 +472,8 @@ function emitClientEffects(dt) {
     emitDerrickSmoke(dt);
     pipeNetworks.forEach(network => {
         const x = getNetworkPickupX(network);
+        if (network.pocket < 0 && network.drillState === 'drilling' && !network.stalled) emitDrillDust(network, x, dt);
+        if (network.drillState === 'kick') emitSteam(x, dt, 0.8);
         if (network.blowout > 0) emitGusher(network, x, dt);
         else {
             if (network.vent > 0) emitSteam(x, dt, 1);
@@ -941,6 +992,7 @@ function draw() {
 
     // Kreslení herních prvků (podzemí, pak deska odzadu dopředu)
     drawOilPockets(groundLevel);
+    drawHazards();
     drawToolEffects(groundLevel);
     drawPipeNetworks();
     drawPlots(groundLevel);
@@ -951,7 +1003,10 @@ function draw() {
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
         drawSpill(plot, groundLevel);
         if (plot.hasVrt) {
-            drawDerrick(centerX, structureY, plot.id, network ? network.isPumping : false, network);
+            // Zavřený preventer: plyn se pálí na fléře vedle věže
+            if (network && network.drillState === 'shut') drawFlare(centerX - 34, structureY, 46);
+            const working = network ? network.isPumping || (network.pocket < 0 && network.drillState === 'drilling' && !network.stalled) : false;
+            drawDerrick(centerX, structureY, plot.id, working, network);
             const panic = !!network && (network.blowout > 0 || (network.pressure || 0) >= PRESSURE_WARN || plot.spill > 0.05);
             drawRigWorkers(centerX, structureY, plot.id, panic);
         }
@@ -1019,7 +1074,8 @@ function updateUI() {
     setText('stat-trucks', `${trucksOwned}/${MAX_TRUCKS}`);
     const storedOil = pipeNetworks.reduce((sum, n) => sum + (isMine(n) ? n.oilStored : 0), 0);
     setText('stat-oil', Math.floor(storedOil).toLocaleString('cs-CZ'));
-    setText('stat-oil-rate', formatRate(pumpingRigs.length * OIL_PER_SECOND * MS_PER_DAY / 1000));
+    const oilPerSecond = pumpingRigs.reduce((sum, n) => sum + OilSim.wellRate(world, n), 0);
+    setText('stat-oil-rate', formatRate(oilPerSecond * MS_PER_DAY / 1000));
     setText('stat-sold', Math.floor(totalOilSold).toLocaleString('cs-CZ'));
     setText('stat-income', formatRate(lastDayIncome, '$'));
     document.getElementById('stat-income').classList.toggle('negative', lastDayIncome < 0);
@@ -1034,6 +1090,7 @@ function updateUI() {
 
     renderGoals();
     renderActiveNews();
+    renderRigPanel();
 
     // Tlačítka
     const buttons = [
@@ -1116,6 +1173,128 @@ function renderGoals() {
     }
 }
 
+// --- Vrtný protokol vybraného vrtu ---
+// Kostra (řádky a tlačítka) se přestaví jen při změně rozložení, hodnoty se přepisují každý snímek.
+// Jinak by tlačítko zmizelo pod kurzorem uprostřed kliknutí.
+let rigLayoutKey = '';
+
+const DRILL_STATE_STAMPS = {
+    drilling: ['Vrtá se', ''],
+    idle: ['Čeká na trasu', ''],
+    kick: ['Plynový kopanec', 'bad alarm'],
+    shut: ['Preventer zavřen', 'bad'],
+    swap: ['Výměna korunky', ''],
+    worn: ['Tupá korunka', 'bad']
+};
+
+function getRigStamp(network) {
+    if (!network) return ['Bez vrtu', ''];
+    if (network.blowout > 0) return ['Erupce', 'bad alarm'];
+    if (network.pocket >= 0) {
+        const pocket = oilPockets[network.pocket];
+        if (network.injecting) return ['Vtláčí vodu', ''];
+        if (!pocket || pocket.oil <= 0) return ['Vyčerpáno', 'bad'];
+        if ((network.pressure || 0) >= VENT_MIN) return ['Přetlak', 'bad alarm'];
+        return ['Těží', 'good'];
+    }
+    if (network.stalled) return ['Došly peníze', 'bad'];
+    return DRILL_STATE_STAMPS[network.drillState] || ['Vrtá se', ''];
+}
+
+function rigScale(ratio, cls = '') {
+    return `<span class="rig-scale ${cls}"><i style="width:${(Math.max(0, Math.min(1, ratio)) * 100).toFixed(0)}%"></i></span>`;
+}
+
+function renderRigPanel() {
+    const box = document.getElementById('hud-rig');
+    if (!box) return;
+    const plot = selectedDerrickPlotId !== null ? plots.find(p => p.id === selectedDerrickPlotId) : null;
+    if (!plot || !isMine(plot) || !plot.hasVrt || isGameOver) {
+        if (rigLayoutKey) {
+            box.classList.add('hidden');
+            rigLayoutKey = '';
+        }
+        return;
+    }
+    const network = pipeNetworks.find(n => n.derrickId === plot.id) || null;
+    const [stampText, stampCls] = getRigStamp(network);
+    const connected = !!network && network.pocket >= 0;
+    const pocket = connected ? oilPockets[network.pocket] : null;
+    const rows = [];
+    const actions = [];
+    let hint = '';
+    if (!network) {
+        hint = 'Klikej do podzemí: každý klik přidá bod trasy, vrták po ní pojede.';
+    } else if (!connected) {
+        const head = OilSim.drillHead(network);
+        const rock = OilSim.ROCKS[OilSim.rockAt(world, head.x, head.y)];
+        const planLeft = OilSim.pathLength(network.path) - network.drilled;
+        rows.push(['Hornina', rock.name]);
+        rows.push(['Hloubka', `${Math.max(0, Math.round(head.y - getGroundLevel()))} m`]);
+        rows.push(['Korunka', rigScale(network.bit, network.bit < 0.25 ? 'bad' : '') + `${Math.round(network.bit * 100)} %`]);
+        rows.push(['Vyvrtáno', `$${Math.round(network.drillCost || 0).toLocaleString('cs-CZ')}`]);
+        if (network.waterCut > 0) rows.push(['Voda', rigScale(network.waterCut, 'water') + `${Math.round(network.waterCut * 100)} %`]);
+        if (network.drillState === 'kick') {
+            actions.push({ act: 'bop', label: `Zavřít preventer · ${(network.drillTimer / 1000).toFixed(1)} s`, cls: 'urgent', key: 'bop' });
+        }
+        if (network.drillState === 'drilling' && planLeft > 0.5) actions.push({ act: 'drillStop', label: 'Zastavit vrták' });
+        if (['drilling', 'idle', 'worn'].includes(network.drillState) && network.bit < 1) {
+            actions.push({ act: 'bit', label: `Nová korunka $${BIT_COST}`, disabled: money < BIT_COST, cls: network.drillState === 'worn' ? 'bad' : '' });
+        }
+        hint = network.drillState === 'idle' ? 'Klikni do podzemí a veď vrták dál.' : 'Kliky do podzemí přidávají body trasy.';
+    } else {
+        const drive = pocket ? OilSim.pocketDrive(pocket) : 0;
+        const water = OilSim.waterCutOf(world, network);
+        rows.push(['Těžba', `${Math.round(OilSim.wellRate(world, network) * MS_PER_DAY / 1000)} bbl/den`]);
+        rows.push(['Tlak ložiska', rigScale(drive / 1.2) + `${Math.round(drive * 100)} %`]);
+        rows.push(['Voda', rigScale(water, 'water') + `${Math.round(water * 100)} %`]);
+        rows.push(['Ložisko', `${Math.floor(pocket ? pocket.oil : 0).toLocaleString('cs-CZ')} bbl`]);
+        if (pocket && (world.links || []).some(l => l.includes(pocket.id))) rows.push(['Pole', 'propojené se sousedním']);
+        if (canVentRig(network)) actions.push({ act: 'vent', label: 'Odpustit ventil', cls: 'bad' });
+        if (pocket && pocket.oil > 0) {
+            actions.push(network.injecting
+                ? { act: 'inject', label: 'Zpět na těžbu' }
+                : { act: 'inject', label: `Vtláčet vodu $${INJECT_COST_PER_S * MS_PER_DAY / 1000}/den`, cls: 'water' });
+        }
+        hint = network.injecting
+            ? 'Vtláčení zvedá tlak celého ložiska pro ostatní vrty, ale zavodňuje ho.'
+            : 'Průtok klesá s tlakem ložiska. Druhý vrt může vtláčet vodu.';
+    }
+    if (network && network.waterCut > 0) actions.push({ act: 'cement', label: `Zacementovat $${CEMENT_COST}`, disabled: money < CEMENT_COST, cls: 'water' });
+
+    const layout = [plot.id, stampText, stampCls, rows.map(r => r[0]).join(), actions.map(a => `${a.act}:${a.key || a.label}:${!!a.disabled}`).join(), hint].join('|');
+    if (layout !== rigLayoutKey) {
+        rigLayoutKey = layout;
+        box.classList.remove('hidden');
+        box.innerHTML =
+            `<div class="rig-head"><span class="rig-title">Vrtný protokol</span><span class="rig-plot">pozemek ${plot.id + 1}</span>` +
+            `<button class="rig-close" data-act="close" title="Zavřít (Esc)">×</button></div>` +
+            `<div class="rig-stamp ${stampCls}">${stampText}</div>` +
+            (rows.length ? `<dl class="rig-rows">${rows.map((r, i) => `<dt>${r[0]}</dt><dd data-row="${i}"></dd>`).join('')}</dl>` : '') +
+            (actions.length ? `<div class="rig-actions">${actions.map((a, i) => `<button class="rig-btn ${a.cls || ''}" data-act="${a.act}" data-btn="${i}"${a.disabled ? ' disabled' : ''}></button>`).join('')}</div>` : '') +
+            (hint ? `<div class="rig-hint">${hint}</div>` : '');
+    }
+    rows.forEach((r, i) => {
+        const el = box.querySelector(`[data-row="${i}"]`);
+        if (el && el.innerHTML !== r[1]) el.innerHTML = r[1];
+    });
+    actions.forEach((a, i) => {
+        const el = box.querySelector(`[data-btn="${i}"]`);
+        if (el && el.textContent !== a.label) el.textContent = a.label;
+    });
+}
+
+function handleRigPanelClick(event) {
+    const button = event.target.closest('[data-act]');
+    if (!button || button.disabled || selectedDerrickPlotId === null) return;
+    if (button.dataset.act === 'close') {
+        selectedDerrickPlotId = null;
+        updateUI();
+        return;
+    }
+    doAction({ type: button.dataset.act, plotId: selectedDerrickPlotId });
+}
+
 // --- Mimořádné zprávy ---
 const NEWS_FLASH_MS = 8000;
 let newsFlashTimer = null;
@@ -1193,7 +1372,8 @@ const ICONS = {
     soundOn: '<path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/>',
     soundOff: '<path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="m16 9 5 6M21 9l-5 6"/>',
     people: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15.5 14.2c3 .2 5.5 2.5 5.5 5.8"/>',
-    fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>'
+    fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+    drop: '<path d="M12 3s5 6 5 9.5a5 5 0 0 1-10 0C7 9 12 3 12 3Z"/><path d="M3 20c1.5-1.2 3-1.2 4.5 0s3 1.2 4.5 0 3-1.2 4.5 0 3 1.2 4.5 0"/>'
 };
 
 function iconSvg(name, cls = 'icon-svg') {
@@ -1389,6 +1569,200 @@ function getVignette() {
 
 function drawSkyAndGround() {
     ctx.drawImage(getSceneCache(), 0, 0);
+    const strata = getStrataCache();
+    if (strata) ctx.drawImage(strata, 0, 0);
+}
+
+// --- Vrstvy hornin jako geologický řez: šrafy podle horniny (mění se s mapou, proto vlastní vrstva) ---
+const ROCK_LOOK = {
+    clay: { tint: '122, 74, 50', ink: '235, 190, 160' },
+    sand: { tint: '160, 128, 80', ink: '240, 215, 165' },
+    shale: { tint: '62, 68, 80', ink: '190, 200, 220' },
+    lime: { tint: '138, 138, 120', ink: '230, 228, 205' },
+    granite: { tint: '90, 58, 72', ink: '235, 200, 215' }
+};
+let strataCache = null;
+let strataKey = '';
+
+function getStrataCache() {
+    const strata = world?.strata;
+    if (!strata) return null;
+    // Na sdílené mapě přichází svět znovu s každou zprávou: klíč z obsahu, ne z reference
+    const key = strata.layers.join() + strata.bounds.map(b => b.y.toFixed(1) + b.phase.toFixed(2)).join();
+    if (key !== strataKey || !strataCache) {
+        strataKey = key;
+        strataCache = paintLayer(strataCache || createLayer(), () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawStrata(strata, getGroundLevel());
+        });
+    }
+    return strataCache;
+}
+
+// Hranice vrstvy jako lomená čára (po 10 px)
+function strataCurve(bound, fallbackY) {
+    const pts = [];
+    for (let x = 0; x <= canvas.width; x += 10) pts.push({ x, y: bound ? OilSim.strataBoundaryY(bound, x) : fallbackY });
+    return pts;
+}
+
+function drawStrata(strata, groundLevel) {
+    const topY = groundLevel + LIP_HEIGHT * 1.5; // skalní hrana pod deskou zůstává vidět
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, topY, canvas.width, canvas.height - topY);
+    ctx.clip();
+    strata.layers.forEach((kind, i) => {
+        const upper = strataCurve(strata.bounds[i - 1], groundLevel);
+        const lower = strataCurve(strata.bounds[i], canvas.height);
+        ctx.save();
+        ctx.beginPath();
+        upper.forEach((p, k) => (k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        for (let k = lower.length - 1; k >= 0; k--) ctx.lineTo(lower[k].x, lower[k].y);
+        ctx.closePath();
+        const look = ROCK_LOOK[kind] || ROCK_LOOK.sand;
+        ctx.fillStyle = `rgba(${look.tint}, 0.16)`;
+        ctx.fill();
+        ctx.clip();
+        const top = Math.min(...upper.map(p => p.y));
+        const bottom = Math.max(...lower.map(p => p.y));
+        drawRockHatch(kind, top, bottom, look.ink, seededRandom(31 + i * 7));
+        ctx.restore();
+        // Název vrstvy u levého okraje, jako popisek v geologickém řezu
+        const midY = (upper[2].y + lower[2].y) / 2;
+        if (midY > topY + 8 && midY < canvas.height - 150) {
+            ctx.font = '700 11px "Barlow Condensed", system-ui, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = `rgba(${look.ink}, 0.42)`;
+            ctx.fillText(OilSim.ROCKS[kind].name.toUpperCase(), 12, midY);
+        }
+    });
+    // Hranice vrstev: tenká čárkovaná linka
+    ctx.setLineDash([10, 6]);
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = 'rgba(235, 215, 175, 0.22)';
+    strata.bounds.forEach(bound => {
+        const pts = strataCurve(bound);
+        ctx.beginPath();
+        pts.forEach((p, k) => (k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    ctx.restore();
+}
+
+// Šrafa horniny: jíl čárky, pískovec tečky, břidlice linky, vápenec cihly, žula křížky
+function drawRockHatch(kind, top, bottom, ink, rand) {
+    const w = canvas.width;
+    ctx.strokeStyle = `rgba(${ink}, 0.13)`;
+    ctx.fillStyle = `rgba(${ink}, 0.16)`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    switch (kind) {
+        case 'clay':
+            for (let y = top + 6, row = 0; y < bottom; y += 11, row++) {
+                for (let x = (row % 2) * 12; x < w; x += 24) {
+                    ctx.moveTo(x, y);
+                    ctx.lineTo(x + 10, y);
+                }
+            }
+            ctx.stroke();
+            break;
+        case 'sand':
+            for (let y = top + 3; y < bottom; y += 7) {
+                for (let x = rand() * 7; x < w; x += 7 + rand() * 6) ctx.rect(x, y + rand() * 3, 1.3, 1.3);
+            }
+            ctx.fill();
+            break;
+        case 'shale':
+            for (let y = top + 4; y < bottom; y += 6) {
+                ctx.moveTo(0, y);
+                for (let x = 0; x <= w; x += 80) ctx.lineTo(x, y + Math.sin(x * 0.02 + y) * 1.2);
+            }
+            ctx.stroke();
+            break;
+        case 'lime':
+            for (let y = top, row = 0; y < bottom; y += 14, row++) {
+                ctx.moveTo(0, y);
+                ctx.lineTo(w, y);
+                for (let x = (row % 2) * 18; x < w; x += 36) {
+                    ctx.moveTo(x, y);
+                    ctx.lineTo(x, y + 14);
+                }
+            }
+            ctx.stroke();
+            break;
+        case 'granite':
+            ctx.strokeStyle = `rgba(${ink}, 0.2)`;
+            for (let y = top + 6; y < bottom; y += 15) {
+                for (let x = rand() * 15; x < w; x += 15 + rand() * 10) {
+                    const yy = y + (rand() - 0.5) * 6;
+                    const r = 2.5;
+                    if (rand() < 0.5) {
+                        ctx.moveTo(x - r, yy); ctx.lineTo(x + r, yy);
+                        ctx.moveTo(x, yy - r); ctx.lineTo(x, yy + r);
+                    } else {
+                        ctx.moveTo(x - r, yy - r); ctx.lineTo(x + r, yy + r);
+                        ctx.moveTo(x + r, yy - r); ctx.lineTo(x - r, yy + r);
+                    }
+                }
+            }
+            ctx.stroke();
+            break;
+    }
+}
+
+// Rizika v hornině, která hráč zná: plyn (žlutozelený) a voda (modrá), vyhořelý plyn jen jizva
+function drawHazards() {
+    const t = performance.now() / 1000;
+    hazards.forEach(h => {
+        if (!h.visible && !DEV) return;
+        ctx.save();
+        const gas = h.kind === 'gas';
+        const color = gas ? '205, 225, 120' : '120, 180, 255';
+        const alpha = h.spent ? 0.3 : 0.85;
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${color}, ${h.spent ? 0.04 : 0.12})`;
+        ctx.fill();
+        ctx.setLineDash(gas ? [3, 4] : [8, 4]);
+        ctx.lineDashOffset = gas && !h.spent ? -t * 8 : 0;
+        ctx.strokeStyle = `rgba(${color}, ${alpha})`;
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.clip();
+        if (gas && !h.spent) { // bublinky plynu
+            for (let b = 0; b < 5; b++) {
+                const life = (t * 0.5 + b / 5) % 1;
+                ctx.beginPath();
+                ctx.arc(h.x + Math.sin(b * 2.1) * h.r * 0.5, h.y + h.r * 0.6 - life * h.r * 1.2, 1.5 + (b % 2), 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(${color}, ${0.7 * (1 - life)})`;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        } else if (!gas) { // vlnky vody
+            ctx.strokeStyle = `rgba(${color}, 0.5)`;
+            ctx.lineWidth = 1.2;
+            for (let k = -1; k <= 1; k++) {
+                ctx.beginPath();
+                for (let x = -h.r; x <= h.r; x += 4) {
+                    const y = h.y + k * h.r * 0.4 + Math.sin(x * 0.4 + t * 2 + k) * 1.6;
+                    if (x === -h.r) ctx.moveTo(h.x + x, y); else ctx.lineTo(h.x + x, y);
+                }
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+        ctx.save();
+        ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = `rgba(${color}, ${alpha})`;
+        ctx.fillText(gas ? (h.spent ? 'VYHOŘELÝ PLYN' : 'PLYN') : 'VODA', h.x, h.y - h.r - 4);
+        ctx.restore();
+    });
 }
 
 function drawSky(groundLevel, rand) {
@@ -2367,6 +2741,24 @@ function drawOilPockets(groundLevel) {
         }
     });
 
+    // Propojená pole: propustná vrstva mezi ložisky, když hráč zná obě
+    (world?.links || []).forEach(([ia, ib]) => {
+        const a = oilPockets[ia], b = oilPockets[ib];
+        if (!a || !b || !(DEV || ((a.tapped || a.revealed) && (b.tapped || b.revealed)))) return;
+        const ax = a.x + a.width / 2, ay = a.y + a.height / 2, bx = b.x + b.width / 2, by = b.y + b.height / 2;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 150, 60, 0.5)';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.setLineDash([0.1, 8]); // tečky: prosakující ropa, ne trasa vrtu
+        ctx.lineDashOffset = -t * 10 * Math.sign((a.oil / a.maxOil) - (b.oil / b.maxOil) || 1);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.quadraticCurveTo((ax + bx) / 2, Math.max(ay, by) + 24, bx, by);
+        ctx.stroke();
+        ctx.restore();
+    });
+
     // Štítky až po všech ložiscích, aby je záře sousedního ložiska nepřekryla
     oilPockets.forEach(pocket => {
         if (!(DEV || pocket.tapped || pocket.revealed)) return;
@@ -2436,7 +2828,9 @@ function drawPocketChip(pocket, pumping) {
     ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillStyle = pocket.oil <= 0 ? INK_RED : (pumping ? INK_RED : '#1b3a66');
-    ctx.fillText(pocket.oil <= 0 ? 'Vyčerpáno' : (pumping ? 'Těží se' : 'Odhaleno'), x + w - 9, y + 29);
+    const status = pocket.oil <= 0 ? 'Vyčerpáno'
+        : (pocket.tapped ? `tlak ${Math.round(OilSim.pocketDrive(pocket) * 100)} %` : 'Odhaleno');
+    ctx.fillText(status, x + w - 9, y + 29);
     ctx.restore();
 }
 
@@ -2448,7 +2842,7 @@ function drawDerrick(x, y, plotId, isPumping, network) {
     const lit = Math.sign(MOON_X - x) || 1; // strana věže obrácená k měsíci
     const selected = selectedDerrickPlotId === plotId;
     // Přetlak rozechvěje věž, při erupci se třese nejvíc
-    const pressure = network ? (network.blowout > 0 ? 1.3 : network.pressure || 0) : 0;
+    const pressure = network ? (network.blowout > 0 ? 1.3 : (network.drillState === 'kick' ? 0.8 : network.pressure || 0)) : 0;
     const shake = pressure > VENT_MIN ? (pressure - VENT_MIN) * 3.5 : 0;
     ctx.save();
     ctx.translate(x + (shake ? (Math.random() - 0.5) * shake : 0), y);
@@ -2710,88 +3104,179 @@ function tracePath(path, offsetY = 0) {
     for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y + offsetY);
 }
 
+// Trasa vrtu rozdělená v místě korunky: done = vyvrtáno (pažnice), plan = kudy vrták teprve pojede
+function splitDrillPath(network) {
+    const path = network.path;
+    if (network.drilled == null || network.pocket >= 0) return { done: path, plan: [], head: null };
+    const head = OilSim.drillHead(network);
+    const done = path.slice(0, Math.max(1, head.index));
+    done.push({ x: head.x, y: head.y });
+    const plan = [{ x: head.x, y: head.y }, ...path.slice(Math.max(1, head.index))];
+    return { done, plan: plan.length > 1 ? plan : [], head };
+}
+
 // Kovové potrubí ve vrstvách (stín, obrys, tělo, odlesk); při těžbě jím teče svítící ropa
-// směrem k vrtu a klouby žhnou.
+// směrem k vrtu a klouby žhnou. Před korunkou čárkovaná plánovaná trasa.
 function drawPipeNetworks() {
     const t = performance.now();
     pipeNetworks.forEach(network => {
         if (network.path.length < 2) return;
-        const path = network.path;
+        const { done: path, plan, head } = splitDrillPath(network);
         ctx.save();
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        tracePath(path, 4);
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.lineWidth = 16;
-        ctx.stroke();
-        tracePath(path);
-        ctx.strokeStyle = '#17120f';
-        ctx.lineWidth = 13;
-        ctx.stroke();
-        ctx.strokeStyle = '#8a6a4a'; // bronz
-        ctx.lineWidth = 9;
-        ctx.stroke();
-        ctx.strokeStyle = '#5e4632';
-        ctx.lineWidth = 3;
-        tracePath(path, 2.5);
-        ctx.stroke();
-        tracePath(path, -2.5);
-        ctx.strokeStyle = 'rgba(255, 220, 170, 0.45)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        // Spojovací objímky po ~28 px
-        ctx.strokeStyle = '#2a1f17';
-        ctx.lineWidth = 3;
-        for (let i = 1; i < path.length; i++) {
-            const a = path[i - 1], b = path[i];
-            const len = Math.hypot(b.x - a.x, b.y - a.y);
-            if (len < 1) continue;
-            const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
-            for (let d = 20; d < len - 10; d += 28) {
-                const px = a.x + (b.x - a.x) * d / len, py = a.y + (b.y - a.y) * d / len;
-                ctx.beginPath();
-                ctx.moveTo(px - nx * 7, py - ny * 7);
-                ctx.lineTo(px + nx * 7, py + ny * 7);
-                ctx.stroke();
-            }
-        }
-
-        if (network.isPumping) {
-            ctx.globalCompositeOperation = 'lighter';
-            tracePath(path);
-            ctx.strokeStyle = 'rgba(255, 160, 60, 0.85)';
-            ctx.lineWidth = 3.5;
-            ctx.setLineDash([7, 13]);
-            ctx.lineDashOffset = (t / 25) % 20; // posun k začátku cesty = k vrtu
+        if (plan.length > 1 && isMine(network)) {
+            tracePath(plan);
+            ctx.strokeStyle = 'rgba(240, 220, 180, 0.55)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 7]);
+            ctx.lineDashOffset = -t / 40;
             ctx.stroke();
             ctx.setLineDash([]);
-            ctx.globalCompositeOperation = 'source-over';
+            plan.slice(1).forEach(p => { // body trasy jako křížky zeměměřiče
+                ctx.strokeStyle = 'rgba(240, 220, 180, 0.8)';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(p.x - 5, p.y - 5); ctx.lineTo(p.x + 5, p.y + 5);
+                ctx.moveTo(p.x + 5, p.y - 5); ctx.lineTo(p.x - 5, p.y + 5);
+                ctx.stroke();
+            });
         }
 
-        // Klouby v bodech, kde hráč klikal
-        for (let i = 1; i < path.length; i++) {
-            const p = path[i];
-            if (network.isPumping) drawGlow(p.x, p.y, 22, '255, 150, 60', 0.45);
-            ctx.fillStyle = '#211812';
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = network.isPumping ? '#ffb45a' : '#a8875f';
-            ctx.lineWidth = 2.5;
+        if (path.length >= 2) {
+            tracePath(path, 4);
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.lineWidth = 16;
             ctx.stroke();
-            ctx.fillStyle = network.isPumping ? '#ffd890' : '#6a5440';
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-            ctx.fill();
+            tracePath(path);
+            ctx.strokeStyle = '#17120f';
+            ctx.lineWidth = 13;
+            ctx.stroke();
+            ctx.strokeStyle = network.injecting ? '#4a6a8a' : '#8a6a4a'; // vtláčecí vrt: modrá ocel
+            ctx.lineWidth = 9;
+            ctx.stroke();
+            ctx.strokeStyle = network.injecting ? '#2c3e52' : '#5e4632';
+            ctx.lineWidth = 3;
+            tracePath(path, 2.5);
+            ctx.stroke();
+            tracePath(path, -2.5);
+            ctx.strokeStyle = 'rgba(255, 220, 170, 0.45)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            // Spojovací objímky po ~28 px
+            ctx.strokeStyle = '#2a1f17';
+            ctx.lineWidth = 3;
+            for (let i = 1; i < path.length; i++) {
+                const a = path[i - 1], b = path[i];
+                const len = Math.hypot(b.x - a.x, b.y - a.y);
+                if (len < 1) continue;
+                const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
+                for (let d = 20; d < len - 10; d += 28) {
+                    const px = a.x + (b.x - a.x) * d / len, py = a.y + (b.y - a.y) * d / len;
+                    ctx.beginPath();
+                    ctx.moveTo(px - nx * 7, py - ny * 7);
+                    ctx.lineTo(px + nx * 7, py + ny * 7);
+                    ctx.stroke();
+                }
+            }
+
+            if (network.isPumping || network.injecting) {
+                ctx.globalCompositeOperation = 'lighter';
+                tracePath(path);
+                ctx.strokeStyle = network.injecting ? 'rgba(110, 180, 255, 0.8)' : 'rgba(255, 160, 60, 0.85)';
+                ctx.lineWidth = 3.5;
+                ctx.setLineDash([7, 13]);
+                // ropa teče k vrtu, voda od vrtu do ložiska
+                ctx.lineDashOffset = network.injecting ? -(t / 25) % 20 : (t / 25) % 20;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.globalCompositeOperation = 'source-over';
+            }
+
+            // Klouby v bodech, kde hráč klikal (konec vyvrtané části je korunka, ne kloub)
+            const joints = head ? path.length - 1 : path.length;
+            for (let i = 1; i < joints; i++) {
+                const p = path[i];
+                if (network.isPumping) drawGlow(p.x, p.y, 22, '255, 150, 60', 0.45);
+                ctx.fillStyle = '#211812';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = network.isPumping ? '#ffb45a' : '#a8875f';
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+                ctx.fillStyle = network.isPumping ? '#ffd890' : '#6a5440';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
         // Příruba na hraně řezu
         ctx.fillStyle = '#2a211b';
-        ctx.fillRect(path[0].x - 9, path[0].y - 2, 18, 7);
+        ctx.fillRect(network.path[0].x - 9, network.path[0].y - 2, 18, 7);
         ctx.fillStyle = '#a08a70';
-        ctx.fillRect(path[0].x - 9, path[0].y - 2, 18, 1.5);
+        ctx.fillRect(network.path[0].x - 9, network.path[0].y - 2, 18, 1.5);
         ctx.restore();
+        if (head) drawDrillBit(head, network, path);
     });
+}
+
+// Korunka na konci vyvrtané části: točí se při vrtání, kopanec = červený puls, tupá = šedá
+function drawDrillBit(head, network, donePath) {
+    const t = performance.now() / 1000;
+    const state = network.drillState;
+    const prev = donePath[Math.max(0, donePath.length - 2)];
+    const angle = Math.atan2(head.y - prev.y, head.x - prev.x) - Math.PI / 2;
+    ctx.save();
+    ctx.translate(head.x, head.y);
+    if (state === 'kick') {
+        const pulse = 0.5 + 0.5 * Math.sin(t * 14);
+        drawGlow(0, 0, 46, '255, 70, 50', 0.5 + 0.3 * pulse);
+        ctx.strokeStyle = `rgba(255, 90, 70, ${0.5 + 0.5 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, 16 + pulse * 8, 0, Math.PI * 2);
+        ctx.stroke();
+    } else if (state === 'shut') {
+        drawGlow(0, 0, 30, '120, 180, 255', 0.35);
+    } else if (state === 'drilling' && !network.stalled) {
+        drawGlow(0, 0, 26, '255, 200, 140', 0.25);
+    }
+    ctx.rotate(angle);
+    const worn = state === 'worn' || (network.bit ?? 1) <= 0;
+    const spin = state === 'drilling' && !network.stalled ? t * 12 : 0;
+    // Tělo korunky: kužel se třemi zubatými válci (trikónus)
+    ctx.fillStyle = worn ? '#5a5552' : '#9a8f84';
+    ctx.strokeStyle = '#1a1410';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-7, -6);
+    ctx.lineTo(7, -6);
+    ctx.lineTo(4, 6);
+    ctx.lineTo(-4, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    for (let k = 0; k < 3; k++) {
+        const a = spin + k * Math.PI * 2 / 3;
+        const cx = Math.cos(a) * 4;
+        ctx.fillStyle = worn ? '#4a4542' : '#d8c8b0';
+        ctx.beginPath();
+        ctx.arc(cx, 8, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    }
+    ctx.restore();
+    if (worn && isMine(network)) {
+        ctx.save();
+        ctx.font = '700 11px "Barlow Condensed", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = '#ff9a7a';
+        ctx.fillText('TUPÁ KORUNKA', head.x, head.y - 16);
+        ctx.restore();
+    }
 }
 
 // --- Výkupci ropy: Rafinerie (vlevo) a Nádraží (vpravo) ---
@@ -3578,6 +4063,50 @@ function toggleSound() {
     }
 }
 
+// Odhad vrtání k bodu pod kurzorem: horniny po cestě dávají cenu a čas, strmé stoupání nejde
+function estimateDrill(from, to) {
+    const len = Math.hypot(to.x - from.x, to.y - from.y);
+    const steps = Math.max(1, Math.ceil(len / 4));
+    let cost = 0, seconds = 0;
+    for (let i = 0; i < steps; i++) {
+        const f = (i + 0.5) / steps;
+        const rock = OilSim.ROCKS[OilSim.rockAt(world, from.x + (to.x - from.x) * f, from.y + (to.y - from.y) * f)];
+        cost += (len / steps) * DRILL_COST_PER_PX * rock.cost;
+        seconds += (len / steps) / (DRILL_SPEED * rock.speed);
+    }
+    return { cost: Math.ceil(cost), seconds };
+}
+
+function drawDrillPreview(from, to) {
+    const tooSteep = from.y - to.y > Math.abs(to.x - from.x) * DRILL_MAX_RISE;
+    const { cost, seconds } = estimateDrill(from, to);
+    const rock = OilSim.ROCKS[OilSim.rockAt(world, to.x, to.y)];
+    const ok = !tooSteep && money >= cost;
+    ctx.save();
+    ctx.strokeStyle = ok ? 'rgba(255, 200, 120, 0.75)' : 'rgba(255, 90, 70, 0.8)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Štítek: cena a čas, pod tím hornina u kurzoru
+    const line1 = tooSteep ? 'Vrták neumí stoupat' : `≈ $${cost} · ${Math.max(1, Math.round(seconds))} s`;
+    const line2 = rock.name;
+    ctx.font = '700 13px "Barlow Condensed", system-ui, sans-serif';
+    const lw = Math.max(ctx.measureText(line1).width, ctx.measureText(line2).width) + 16;
+    fillPaper(to.x + 10, to.y - 40, lw, 34, 2, -0.03);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = ok ? INK : INK_RED;
+    ctx.fillText(line1, to.x + 18, to.y - 30);
+    ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
+    ctx.fillStyle = INK_SOFT;
+    ctx.fillText(line2.toUpperCase(), to.x + 18, to.y - 15);
+    ctx.restore();
+}
+
 function drawEffectsAndPreviews(groundLevel) {
     let newCursor = plotsHoverPointer ? 'pointer' : (getCompanyZoneAt(mousePos) ? 'ns-resize' : (camera.tzoom > 1.01 ? 'grab' : 'default'));
 
@@ -3606,36 +4135,15 @@ function drawEffectsAndPreviews(groundLevel) {
             newCursor = 'not-allowed';
         }
     } else if (selectedDerrickPlotId !== null) {
-        newCursor = 'crosshair';
         const network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
         const startPlot = plots.find(p => p.id === selectedDerrickPlotId);
-        if (startPlot) {
+        newCursor = network && network.pocket >= 0 ? 'default' : 'crosshair';
+        if (startPlot && !(network && network.pocket >= 0)) {
             const lastPoint = network?.path[network.path.length - 1] || {
                 x: startPlot.x + plotWidth / 2,
                 y: groundLevel
             };
-            if (mousePos.y > groundLevel) {
-                const distance = Math.hypot(mousePos.x - lastPoint.x, mousePos.y - lastPoint.y);
-                const cost = Math.ceil(distance * PIPE_COST_PER_PIXEL);
-                ctx.save();
-                ctx.strokeStyle = money >= cost ? 'rgba(255, 200, 120, 0.75)' : 'rgba(255, 90, 70, 0.8)';
-                ctx.lineWidth = 3;
-                ctx.setLineDash([8, 6]);
-                ctx.beginPath();
-                ctx.moveTo(lastPoint.x, lastPoint.y);
-                ctx.lineTo(mousePos.x, mousePos.y);
-                ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.font = '700 13px "Barlow Condensed", system-ui, sans-serif';
-                ctx.textAlign = 'left';
-                ctx.textBaseline = 'middle';
-                const costLabel = `$${cost}`;
-                const lw = ctx.measureText(costLabel).width + 14;
-                fillPaper(mousePos.x + 10, mousePos.y - 26, lw, 20, 2, -0.03);
-                ctx.fillStyle = money >= cost ? INK : INK_RED;
-                ctx.fillText(costLabel, mousePos.x + 17, mousePos.y - 16);
-                ctx.restore();
-            }
+            if (mousePos.y > groundLevel) drawDrillPreview(lastPoint, mousePos);
         }
     } else if (currentBuildMode === 'seismic') {
         // Náhled dosahu nálože: půlkruh pod kurzorem na vlastním pozemku
@@ -3752,6 +4260,7 @@ function cancelBuildMode(clearDerrick = true) {
 
 // --- Posluchače událostí ---
 function addEventListeners() {
+    document.getElementById('hud-rig')?.addEventListener('click', handleRigPanelClick);
     // Pohyb myši
     canvas.addEventListener('pointermove', (event) => {
         const pos = getCanvasPosition(event);
@@ -3855,6 +4364,7 @@ function addEventListeners() {
 
     window.addEventListener('keydown', (event) => {
         if (event.key === 'm' || event.key === 'M') toggleSound();
+        if (event.key === 'Escape') cancelBuildMode();
         handleCameraKey(event);
     });
 
@@ -4002,23 +4512,36 @@ function handleBuildModeClick(clickPos, plot, groundLevel) {
 }
 
 function handlePipePlacementClick(clickPos, groundLevel) {
-    if (clickPos.y <= groundLevel) return;
+    if (clickPos.y <= groundLevel) {
+        // Klik nad zemí: jiný vlastní vrt vybere, jinak výběr zruší
+        const plot = getPlotAtX(clickPos.x);
+        if (isMine(plot) && plot.hasVrt) handleDefaultClick(plot);
+        else {
+            selectedDerrickPlotId = null;
+            updateUI();
+        }
+        return;
+    }
     const network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
-    if (network && network.isPumping) return;
-    doAction({ type: 'pipe', plotId: selectedDerrickPlotId, x: clickPos.x, y: clickPos.y });
+    if (network && network.pocket >= 0) return;
+    const result = doAction({ type: 'drill', plotId: selectedDerrickPlotId, x: clickPos.x, y: clickPos.y });
+    if (result.reason === 'angle') notify('Tudy ne', 'Vrták neumí stoupat strmě vzhůru', 'bad', 'derrick');
 }
 
+// Klik na vlastní vrt: nejdřív nouze (preventer, ventil), jinak výběr vrtu (protokol a trasa)
 function handleDefaultClick(plot) {
     if (isMine(plot) && plot.hasVrt) {
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
+        if (network && network.drillState === 'kick') {
+            doAction({ type: 'bop', plotId: plot.id });
+            return;
+        }
         if (network && canVentRig(network)) {
             doAction({ type: 'vent', plotId: plot.id });
             return;
         }
-        if (!network || !network.isPumping) {
-            selectedDerrickPlotId = plot.id;
-            updateUI();
-        }
+        selectedDerrickPlotId = plot.id;
+        updateUI();
     }
 }
 
@@ -4031,6 +4554,25 @@ function getRigTopY() {
 
 function canVentRig(network) {
     return OilSim.canVentRig(network);
+}
+
+// Vrtání: výplach u paty věže a drť u korunky v podzemí
+function emitDrillDust(network, x, dt) {
+    if (Math.random() < dt / 120) {
+        spawnParticle({
+            type: 'puff', x: x + (Math.random() - 0.5) * 16, y: getGroundLevel() - STRUCTURE_BASE_OFFSET - 4,
+            vx: (Math.random() - 0.5) * 30, vy: -15 - Math.random() * 25,
+            age: 0, life: 900, size: 2 + Math.random() * 2.5, shade: 95
+        });
+    }
+    if (Math.random() < dt / 90) {
+        const head = OilSim.drillHead(network);
+        spawnParticle({
+            type: 'puff', x: head.x + (Math.random() - 0.5) * 8, y: head.y + (Math.random() - 0.5) * 8,
+            vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40,
+            age: 0, life: 500, size: 1.5 + Math.random() * 1.5, shade: 150
+        });
+    }
 }
 
 // Pára z ventilů u paty vrtu; intensity 1 = odpouštění, menší = syčení při přetlaku

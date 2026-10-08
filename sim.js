@@ -21,7 +21,18 @@
         VRT_COST: 350,
         SILO_COST: 250,
         TRUCK_COST: 150,
-        PIPE_COST_PER_PIXEL: 2,
+        // Vrtání: vrták jede po trase reálným časem, platí se za vyvrtaný pixel podle horniny
+        DRILL_SPEED: 46,             // px/s v pískovci
+        DRILL_COST_PER_PX: 1.5,
+        DRILL_MAX_RISE: 0.36,        // trasa smí stoupat nejvýš ~20° (dy/dx)
+        BIT_WEAR_PER_PX: 0.0024,     // opotřebení korunky za pixel × tvrdost horniny
+        BIT_COST: 120,
+        BIT_SWAP_MS: 3500,           // vytažení soutyčí a nasazení nové korunky
+        KICK_MS: 5000,               // plynový kopanec: tolik času na zavření preventeru
+        KICK_SHUT_MS: 2600,          // zavřený preventer: plyn hoří na fléře, vrták stojí
+        WATER_CUT_HIT: 0.35,         // navrtaná zvodnělá vrstva přidá tolik vody do těžby
+        MAX_WATER_CUT: 0.85,
+        CEMENT_COST: 180,
         TRUCK_SPEED: 150,
         TRUCK_CAPACITY: 100,
         TRUCK_LENGTH: 76,
@@ -30,7 +41,17 @@
         PRICE_HISTORY_LEN: 24,
         SILO_CAPACITY_BONUS: 500,
         DERRICK_BASE_CAPACITY: 50,
-        OIL_PER_SECOND: 8,
+        // Živé ložisko: průtok = OIL_PER_SECOND × tlak ložiska × (1 − podíl vody)
+        OIL_PER_SECOND: 10,
+        MIN_DRIVE: 0.12,             // i vyčerpané ložisko trochu teče
+        DECLINE_EXP: 1.3,            // tlak = počáteční tlak × naplnění^DECLINE_EXP
+        INJECT_COST_PER_S: 5,        // vtláčení vody: $/s
+        INJECT_BOOST_PER_S: 0.018,   // o kolik vtláčení zvedá tlak ložiska za sekundu
+        INJECT_BOOST_MAX: 0.5,
+        BOOST_DECAY_PER_S: 0.004,    // bez vtláčení tlak zase opadá
+        INJECT_WATER_PER_S: 0.002,   // vtláčení pomalu zavodňuje celé ložisko
+        MIGRATE_RATE: 0.001,         // propojená ložiska: tok podle rozdílu naplnění
+        LINK_MAX_DIST: 300,
         MAX_SILOS_PER_PLOT: 4,
         MIN_LOAD_AMOUNT: 25,
         MAX_TRUCKS: 8,
@@ -74,6 +95,17 @@
     };
 
     const PLAYER_COLORS = ['#ffb45a', '#6ec6ff', '#7ee08a', '#ff7aa8'];
+
+    // Horniny: speed = násobek rychlosti vrtání, wear = opotřebení korunky, cost = násobek ceny za pixel
+    const ROCKS = {
+        clay: { name: 'Jíl', speed: 0.75, wear: 0.1, cost: 0.9 },
+        sand: { name: 'Pískovec', speed: 1, wear: 0.25, cost: 1 },
+        shale: { name: 'Břidlice', speed: 0.6, wear: 0.5, cost: 1.2 },
+        lime: { name: 'Vápenec', speed: 0.42, wear: 0.8, cost: 1.4 },
+        granite: { name: 'Žula', speed: 0.2, wear: 2.2, cost: 2 }
+    };
+    const SHALLOW_ROCKS = ['sand', 'clay', 'sand', 'shale'];
+    const DEEP_ROCKS = ['shale', 'lime', 'granite', 'lime', 'sand'];
 
     // --- Mimořádné zprávy ---
     // Události ze světa na pár dní mění trh (násobí výkupní cenu, zavírají výkupce) nebo pravidla.
@@ -119,6 +151,9 @@
             rulesName: race ? 'race' : 'solo',
             plots: [],
             oilPockets: [],
+            links: [],      // propojená ložiska [idA, idB]: ropa mezi nimi pomalu teče
+            strata: null,   // vrstvy hornin
+            hazards: [],    // plynové kapsy a zvodnělé vrstvy (skryté)
             pipeNetworks: [],
             trucks: [],
             players: {},
@@ -177,7 +212,10 @@
             const minY = C.GROUND_LEVEL + 80;
             const maxY = C.WORLD_H - C.POCKET_BOTTOM_MARGIN - height;
             const y = minY + rand() * Math.max(0, maxY - minY);
-            const richness = 5000 + rand() * 10000;
+            // Hloubka = riziko i odměna: hlubší ložiska jsou bohatší a mají vyšší tlak
+            const depth = maxY > minY ? (y - minY) / (maxY - minY) : 0.5;
+            const richness = (4000 + rand() * 7000) * (0.75 + 0.8 * depth);
+            const drive0 = 0.55 + 0.45 * depth + (rand() - 0.5) * 0.1;
             const vertices = [];
             const numberOfVertices = 3 + Math.floor(rand() * 4);
             for (let j = 0; j < numberOfVertices; j++) {
@@ -191,15 +229,91 @@
                 id: i, x, y, width: pocketWidth, height, vertices,
                 oil: richness,
                 maxOil: richness,
+                drive0,         // počáteční tlak ložiska
+                boost: 0,       // tlak navíc z vtláčení vody
+                waterCut: 0,    // zavodnění ložiska vtláčením
                 tappedBy: [],   // hráči, jejichž vrt z ložiska čerpá (na sdílené mapě víc najednou)
                 revealedBy: [], // komu ho odhalil georadar (vrtatelné dál)
                 echo: {}        // playerId -> do kdy je vidět ozvěna (tools.clock)
             });
         }
+        world.links = createLinks(world.oilPockets, rand);
+        world.strata = createStrata(rand);
+        world.hazards = createHazards(world.oilPockets, rand);
 
         // Náhoda trhu se nesdílí přes síť (funkce se do JSON nezapíše); klient na sdílené mapě trh nepočítá
         world._market = seed == null ? Math.random : seededRandom((seed ^ 0x9E3779B9) >>> 0);
         return world;
+    }
+
+    // Propojená pole: sousední ložiska spojí propustná vrstva (každé nejvýš jedno spojení)
+    function createLinks(pockets, rand) {
+        const links = [];
+        const linked = new Set();
+        const center = p => ({ x: p.x + p.width / 2, y: p.y + p.height / 2 });
+        pockets.forEach(a => {
+            if (linked.has(a.id)) return;
+            let best = null, bestDist = C.LINK_MAX_DIST;
+            pockets.forEach(b => {
+                if (b === a || linked.has(b.id)) return;
+                const d = Math.hypot(center(a).x - center(b).x, center(a).y - center(b).y);
+                if (d < bestDist) { best = b; bestDist = d; }
+            });
+            if (best && rand() < 0.65) {
+                links.push([a.id, best.id]);
+                linked.add(a.id);
+                linked.add(best.id);
+            }
+        });
+        return links;
+    }
+
+    // Vrstvy hornin: zvlněné hranice (bounds) shora dolů, layers[i] leží nad bounds[i].
+    // Mělko spíš měkké horniny, hloubka spíš tvrdé; dvě stejné vrstvy pod sebou nejdou.
+    function createStrata(rand) {
+        const top = C.GROUND_LEVEL + 40;
+        const bottom = C.WORLD_H;
+        const count = 4 + Math.floor(rand() * 2);
+        const spacing = (bottom - top) / (count + 1);
+        const bounds = [];
+        for (let i = 0; i < count; i++) {
+            bounds.push({
+                y: top + spacing * (i + 1) + (rand() - 0.5) * spacing * 0.3,
+                amp: 6 + rand() * 14,
+                freq: 0.003 + rand() * 0.006,
+                phase: rand() * Math.PI * 2
+            });
+        }
+        const layers = [];
+        for (let i = 0; i <= count; i++) {
+            const pool = i < (count + 1) / 2 ? SHALLOW_ROCKS : DEEP_ROCKS;
+            let kind = pool[Math.floor(rand() * pool.length)];
+            if (layers.length && layers[layers.length - 1] === kind) kind = pool[(pool.indexOf(kind) + 1) % pool.length];
+            layers.push(kind);
+        }
+        return { bounds, layers };
+    }
+
+    // Plynové kapsy (hlouběji častější) a zvodnělé vrstvy; nesmí ležet v ložisku
+    function createHazards(pockets, rand) {
+        const hazards = [];
+        const minY = C.GROUND_LEVEL + 70;
+        const maxY = C.WORLD_H - C.POCKET_BOTTOM_MARGIN;
+        const place = (kind, r, yFrom) => {
+            for (let tries = 0; tries < 12; tries++) {
+                const x = 40 + rand() * (C.WORLD_W - 80);
+                const y = yFrom + rand() * (maxY - yFrom);
+                if (pockets.some(p => distanceToPocket(x, y, p) < r + 12)) continue;
+                if (hazards.some(h => Math.hypot(h.x - x, h.y - y) < h.r + r + 20)) continue;
+                hazards.push({ id: hazards.length, kind, x, y, r, hit: false, revealedBy: [] });
+                return;
+            }
+        };
+        const gas = 3 + Math.floor(rand() * 3);
+        for (let i = 0; i < gas; i++) place('gas', 16 + rand() * 14, minY + (maxY - minY) * 0.35);
+        const water = 2 + Math.floor(rand() * 3);
+        for (let i = 0; i < water; i++) place('water', 22 + rand() * 16, minY);
+        return hazards;
     }
 
     // --- Pomocné dotazy ---
@@ -282,6 +396,80 @@
         return pocket.maxOil > C.RICH_LARGE_OIL ? 'velké' : (pocket.maxOil > C.RICH_MEDIUM_OIL ? 'střední' : 'malé');
     }
 
+    // --- Horniny a ložisko ---
+    function strataBoundaryY(bound, x) {
+        return bound.y + bound.amp * Math.sin(x * bound.freq + bound.phase) +
+            bound.amp * 0.4 * Math.sin(x * bound.freq * 2.7 + bound.phase * 1.3);
+    }
+
+    function rockAt(world, x, y) {
+        const strata = world.strata;
+        if (!strata) return 'sand';
+        let i = 0;
+        while (i < strata.bounds.length && y > strataBoundaryY(strata.bounds[i], x)) i++;
+        return strata.layers[i];
+    }
+
+    // Tlak ložiska: klesá s vytěženou ropou, vtláčení ho zvedá
+    function pocketDrive(pocket) {
+        const fill = pocket.maxOil > 0 ? Math.max(0, pocket.oil) / pocket.maxOil : 0;
+        const drive = (pocket.drive0 ?? 1) * Math.pow(fill, C.DECLINE_EXP) + (pocket.boost || 0);
+        return Math.max(C.MIN_DRIVE, Math.min(1.6, drive));
+    }
+
+    function waterCutOf(world, network) {
+        const pocket = world.oilPockets[network.pocket];
+        return Math.min(C.MAX_WATER_CUT, (network.waterCut || 0) + (pocket ? pocket.waterCut || 0 : 0));
+    }
+
+    // Barelů za sekundu, které vrt právě těží (0 = netěží)
+    function wellRate(world, network) {
+        const pocket = world.oilPockets[network.pocket];
+        if (!pocket || !network.isPumping || pocket.oil <= 0) return 0;
+        return C.OIL_PER_SECOND * pocketDrive(pocket) * (1 - waterCutOf(world, network));
+    }
+
+    // --- Trasa vrtu ---
+    function pathLength(path) {
+        let len = 0;
+        for (let i = 1; i < path.length; i++) len += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+        return len;
+    }
+
+    // Bod ve vzdálenosti dist od začátku trasy (index = segment, ve kterém leží)
+    function pointAlong(path, dist) {
+        for (let i = 1; i < path.length; i++) {
+            const a = path[i - 1], b = path[i];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            if (dist <= len || i === path.length - 1) {
+                const t = len > 0 ? Math.max(0, Math.min(1, dist / len)) : 1;
+                return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, index: i };
+            }
+            dist -= len;
+        }
+        return { x: path[0].x, y: path[0].y, index: 0 };
+    }
+
+    function drillHead(network) {
+        return pointAlong(network.path, network.drilled || 0);
+    }
+
+    // Uřízne trasu v místě vrtáku (zbytek naplánované trasy zmizí)
+    function cutPathAtHead(network) {
+        const head = drillHead(network);
+        if (network.path.length < 2 || head.index === 0) return;
+        network.path = network.path.slice(0, head.index);
+        const last = network.path[network.path.length - 1];
+        if (Math.hypot(last.x - head.x, last.y - head.y) > 0.5) network.path.push({ x: head.x, y: head.y });
+        network.drilled = pathLength(network.path);
+    }
+
+    function segmentHitsCircle(a, b, c) {
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((c.x - a.x) * dx + (c.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        return Math.hypot(a.x + dx * t - c.x, a.y + dy * t - c.y) <= c.r;
+    }
+
     function emit(world, event) {
         world.events.push(event);
     }
@@ -333,12 +521,10 @@
         return best;
     }
 
-    // Ložisko, do kterého trubka vede. Sólo/závod: jedno ložisko = jeden vrt (už navrtané se přeskočí).
-    // Sdílená mapa: do ložiska může vést trubka víc hráčů, jen ne podruhé téhož hráče.
-    function findHitPocket(world, playerId, start, end) {
+    // Ložisko, do kterého vrták právě vjel. Do jednoho ložiska smí vést víc vrtů (i různých hráčů),
+    // každý pak těží podle tlaku ložiska, takže se ložisko vyprázdní rychleji.
+    function findHitPocket(world, start, end) {
         for (const pocket of world.oilPockets) {
-            const taken = world.shared ? pocket.tappedBy.includes(playerId) : pocket.tappedBy.length > 0;
-            if (taken) continue;
             if (isSegmentIntersectingPolygon(start, end, pocket.vertices)) return pocket;
         }
         return null;
@@ -355,7 +541,12 @@
             case 'buildSilo': return buildSilo(world, player, action.plotId);
             case 'buyTruck': return buyTruck(world, player);
             case 'assignTruck': return assignTruck(player, action.company, action.delta);
-            case 'pipe': return layPipe(world, player, action.plotId, action.x, action.y);
+            case 'drill': return addDrillPoint(world, player, action.plotId, action.x, action.y);
+            case 'drillStop': return stopDrill(world, player, action.plotId);
+            case 'bop': return closePreventer(world, player, action.plotId);
+            case 'bit': return replaceBit(world, player, action.plotId);
+            case 'cement': return cementWell(world, player, action.plotId);
+            case 'inject': return toggleInjection(world, player, action.plotId);
             case 'vent': return vent(world, player, action.plotId);
             case 'seismic': return fireSeismic(world, player, action.plotId, action.x);
             case 'drone': return launchDrone(world, player);
@@ -430,8 +621,9 @@
         return { ok: true };
     }
 
-    // Další bod potrubí od vrtu na pozemku; první klik síť založí na přední hraně pozemku
-    function layPipe(world, player, plotId, x, y) {
+    // Další bod trasy vrtu. První klik založí vrt na přední hraně pozemku; vrták pak jede
+    // po trase reálným časem (stepDrilling) a platí se za vyvrtaný pixel.
+    function addDrillPoint(world, player, plotId, x, y) {
         const plot = ownedPlot(world, player, plotId);
         if (!plot || !plot.hasVrt) return fail('plot');
         x = Number(x);
@@ -439,18 +631,27 @@
         if (!Number.isFinite(x) || !Number.isFinite(y)) return fail('point');
         if (y <= C.GROUND_LEVEL || y > C.WORLD_H || x < 0 || x > C.WORLD_W) return fail('point');
         let network = getNetworkForPlot(world, plot.id);
-        if (network && network.isPumping) return fail('pumping');
+        if (network && network.pocket >= 0) return fail('pumping');
         const lastPoint = network
             ? network.path[network.path.length - 1]
             : { x: plot.x + C.PLOT_WIDTH / 2, y: C.GROUND_LEVEL };
-        const cost = Math.ceil(Math.hypot(x - lastPoint.x, y - lastPoint.y) * C.PIPE_COST_PER_PIXEL);
-        if (player.money < cost) return fail('money');
+        // Vrták neumí stoupat strmě vzhůru
+        if (lastPoint.y - y > Math.abs(x - lastPoint.x) * C.DRILL_MAX_RISE) return fail('angle');
+        if (Math.hypot(x - lastPoint.x, y - lastPoint.y) < 4) return fail('point');
         if (!network) {
             network = {
                 id: world.nextNetworkId++,
                 derrickId: plot.id,
                 owner: player.id,
                 path: [{ x: plot.x + C.PLOT_WIDTH / 2, y: C.GROUND_LEVEL }],
+                drilled: 0,          // kolik px trasy je vyvrtáno
+                drillState: 'drilling', // drilling | idle | kick | shut | swap | worn | done
+                drillTimer: 0,
+                bit: 1,              // korunka 1 = nová, 0 = opotřebená
+                stalled: false,      // došly peníze
+                drillCost: 0,
+                waterCut: 0,         // voda ze zvodnělé vrstvy
+                injecting: false,
                 isPumping: false,
                 oilStored: 0,
                 oilCapacity: C.DERRICK_BASE_CAPACITY + plot.siloCount * C.SILO_CAPACITY_BONUS,
@@ -462,17 +663,72 @@
             };
             world.pipeNetworks.push(network);
         }
-        player.money -= cost;
-        const point = { x, y };
-        network.path.push(point);
-        const hit = findHitPocket(world, player.id, lastPoint, point);
-        if (hit) {
-            hit.tappedBy.push(player.id);
-            network.pocket = hit.id;
-            network.isPumping = true;
-            emit(world, { type: 'strike', playerId: player.id, plotId: plot.id, oil: Math.floor(hit.oil), x: network.path[0].x });
+        network.path.push({ x, y });
+        if (network.drillState === 'idle') network.drillState = 'drilling';
+        return { ok: true };
+    }
+
+    function rigOf(world, player, plotId) {
+        const plot = ownedPlot(world, player, plotId);
+        return plot ? getNetworkForPlot(world, plot.id) : null;
+    }
+
+    // Zastaví vrták na místě: zbytek naplánované trasy se zahodí
+    function stopDrill(world, player, plotId) {
+        const network = rigOf(world, player, plotId);
+        if (!network || network.pocket >= 0) return fail('drill');
+        cutPathAtHead(network);
+        if (network.drillState === 'drilling') network.drillState = 'idle';
+        return { ok: true };
+    }
+
+    // Preventer: zavře vrt při plynovém kopanci
+    function closePreventer(world, player, plotId) {
+        const network = rigOf(world, player, plotId);
+        if (!network || network.drillState !== 'kick') return fail('bop');
+        network.drillState = 'shut';
+        network.drillTimer = C.KICK_SHUT_MS;
+        emit(world, { type: 'bop', playerId: player.id, plotId });
+        return { ok: true };
+    }
+
+    // Nová korunka: chvíli trvá (vytažení soutyčí), pak se vrtá dál
+    function replaceBit(world, player, plotId) {
+        const network = rigOf(world, player, plotId);
+        if (!network || network.pocket >= 0 || network.bit >= 1) return fail('bit');
+        if (!['drilling', 'idle', 'worn'].includes(network.drillState)) return fail('bit');
+        if (player.money < C.BIT_COST) return fail('money');
+        player.money -= C.BIT_COST;
+        network.drillState = 'swap';
+        network.drillTimer = C.BIT_SWAP_MS;
+        emit(world, { type: 'bit_swap', playerId: player.id, plotId });
+        return { ok: true };
+    }
+
+    // Cementace utěsní zvodnělou vrstvu (voda z ložiska po vtláčení zůstává)
+    function cementWell(world, player, plotId) {
+        const network = rigOf(world, player, plotId);
+        if (!network || !(network.waterCut > 0)) return fail('cement');
+        if (player.money < C.CEMENT_COST) return fail('money');
+        player.money -= C.CEMENT_COST;
+        network.waterCut = 0;
+        emit(world, { type: 'cement', playerId: player.id, plotId });
+        return { ok: true };
+    }
+
+    // Vrt přepne mezi těžbou a vtláčením vody do ložiska
+    function toggleInjection(world, player, plotId) {
+        const network = rigOf(world, player, plotId);
+        const pocket = network && world.oilPockets[network.pocket];
+        if (!pocket || pocket.oil <= 0 || network.blowout > 0) return fail('inject');
+        network.injecting = !network.injecting;
+        network.isPumping = !network.injecting;
+        if (network.injecting) {
+            network.pressure = 0;
+            network.warned = false;
         }
-        return { ok: true, struck: !!hit };
+        emit(world, { type: 'inject', playerId: player.id, plotId, on: network.injecting });
+        return { ok: true };
     }
 
     function vent(world, player, plotId) {
@@ -521,8 +777,14 @@
                 found++;
             }
         });
-        emit(world, { type: 'radar', playerId: player.id, found });
-        return { ok: true, found };
+        let hazards = 0;
+        world.hazards.forEach(h => {
+            if (h.spent || Math.hypot(h.x - x, h.y - y) > C.RADAR_RADIUS + h.r || h.revealedBy.includes(player.id)) return;
+            h.revealedBy.push(player.id);
+            hazards++;
+        });
+        emit(world, { type: 'radar', playerId: player.id, found, hazards });
+        return { ok: true, found, hazards };
     }
 
     // --- Čas ---
@@ -532,6 +794,8 @@
         if (!world.time.started || world.over) return;
         stepCalendar(world, dt);
         if (world._market) stepMarket(world, dt);
+        stepDrilling(world, dt);
+        stepReservoir(world, dt);
         stepPumping(world, dt);
         stepPressure(world, dt);
         stepTrucks(world, dt);
@@ -581,7 +845,10 @@
         player.reason = reason;
         if (world.shared) {
             world.pipeNetworks.forEach(n => {
-                if (n.owner === player.id) n.isPumping = false;
+                if (n.owner === player.id) {
+                    n.isPumping = false;
+                    n.injecting = false;
+                }
             });
             world.trucks = world.trucks.filter(t => t.owner !== player.id);
         }
@@ -613,17 +880,155 @@
         });
     }
 
-    // Těžba: čerpá ze zapojeného ložiska do zásobníku vrtu
+    // --- Vrtání ---
+    // Vrták jede po trase rychlostí podle horniny, platí se za pixel, korunka se opotřebovává.
+    // Cestou může navrtat plyn (kopanec: zavřít preventer), vodu (zavodnění) nebo ložisko (těžba).
+    function stepDrilling(world, dt) {
+        world.pipeNetworks.forEach(network => {
+            if (network.derrickId < 0 || !network.drillState || network.pocket >= 0) return;
+            const player = world.players[network.owner];
+            if (!player || player.over) return;
+            switch (network.drillState) {
+                case 'kick':
+                    network.drillTimer -= dt;
+                    if (network.drillTimer <= 0) kickBlowout(world, network, player);
+                    break;
+                case 'shut':
+                    network.drillTimer -= dt;
+                    if (network.drillTimer <= 0) {
+                        network.drillState = 'drilling';
+                        emit(world, { type: 'kick_over', playerId: player.id, plotId: network.derrickId });
+                    }
+                    break;
+                case 'swap':
+                    network.drillTimer -= dt;
+                    if (network.drillTimer <= 0) {
+                        network.bit = 1;
+                        network.drillState = 'drilling';
+                        emit(world, { type: 'bit_ready', playerId: player.id, plotId: network.derrickId });
+                    }
+                    break;
+                case 'drilling':
+                    advanceDrill(world, network, player, dt);
+                    break;
+            }
+        });
+    }
+
+    function advanceDrill(world, network, player, dt) {
+        const total = pathLength(network.path);
+        const remaining = total - network.drilled;
+        if (remaining <= 0.01) {
+            network.drillState = 'idle';
+            return;
+        }
+        if (network.blowout > 0) return;
+        const from = drillHead(network);
+        const rock = ROCKS[rockAt(world, from.x, from.y)];
+        const px = Math.min(remaining, C.DRILL_SPEED * rock.speed * dt / 1000);
+        const cost = px * C.DRILL_COST_PER_PX * rock.cost;
+        if (player.money < cost) {
+            if (!network.stalled) emit(world, { type: 'drill_stalled', playerId: player.id, plotId: network.derrickId });
+            network.stalled = true;
+            return;
+        }
+        network.stalled = false;
+        player.money -= cost;
+        network.drillCost += cost;
+        network.drilled += px;
+        network.bit = Math.max(0, network.bit - px * C.BIT_WEAR_PER_PX * rock.wear);
+        const to = drillHead(network);
+
+        network.hits = network.hits || [];
+        for (const hazard of world.hazards) {
+            if (hazard.spent || network.hits.includes(hazard.id) || !segmentHitsCircle(from, to, hazard)) continue;
+            network.hits.push(hazard.id);
+            hazard.hit = true;
+            if (hazard.kind === 'gas') {
+                hazard.spent = true; // kapsa se kopancem vyprázdní
+                network.drillState = 'kick';
+                network.drillTimer = C.KICK_MS;
+                emit(world, { type: 'kick', playerId: player.id, plotId: network.derrickId, x: to.x, y: to.y });
+                return;
+            }
+            network.waterCut = Math.min(C.MAX_WATER_CUT, network.waterCut + C.WATER_CUT_HIT);
+            emit(world, { type: 'water', playerId: player.id, plotId: network.derrickId, x: to.x, y: to.y });
+        }
+
+        const pocket = findHitPocket(world, from, to);
+        if (pocket) {
+            cutPathAtHead(network);
+            network.pocket = pocket.id;
+            network.isPumping = pocket.oil > 0;
+            network.drillState = 'done';
+            if (!pocket.tappedBy.includes(player.id)) pocket.tappedBy.push(player.id);
+            emit(world, { type: 'strike', playerId: player.id, plotId: network.derrickId, oil: Math.floor(pocket.oil), x: network.path[0].x });
+            return;
+        }
+        if (network.bit <= 0) {
+            network.drillState = 'worn';
+            emit(world, { type: 'bit_worn', playerId: player.id, plotId: network.derrickId });
+        } else if (network.drilled >= total - 0.01) {
+            network.drillState = 'idle';
+        }
+    }
+
+    // Nezvládnutý kopanec: plyn vyrazí z vrtu, pokuta jako za erupci a zničená korunka
+    function kickBlowout(world, network, player) {
+        const fine = getBlowoutFine(world);
+        player.money -= fine;
+        network.blowout = C.BLOWOUT_MS;
+        network.bit = 0;
+        network.drillState = 'worn';
+        emit(world, { type: 'blowout', playerId: player.id, plotId: network.derrickId, fine, kick: true });
+    }
+
+    // --- Ložisko ---
+    // Propojená ložiska vyrovnávají naplnění, vtláčení vody zvedá tlak a zavodňuje
+    function stepReservoir(world, dt) {
+        const s = dt / 1000;
+        (world.links || []).forEach(([ia, ib]) => {
+            const a = world.oilPockets[ia], b = world.oilPockets[ib];
+            if (!a || !b) return;
+            const fa = a.oil / a.maxOil, fb = b.oil / b.maxOil;
+            const balance = (fa - fb) * a.maxOil * b.maxOil / (a.maxOil + b.maxOil); // přesun do vyrovnání
+            let flow = C.MIGRATE_RATE * (fa - fb) * Math.min(a.maxOil, b.maxOil) * s;
+            flow = flow > 0 ? Math.min(flow, balance) : Math.max(flow, balance);
+            a.oil -= flow;
+            b.oil += flow;
+        });
+        world.oilPockets.forEach(p => {
+            if (p.boost > 0) p.boost = Math.max(0, p.boost - C.BOOST_DECAY_PER_S * s);
+        });
+        world.pipeNetworks.forEach(network => {
+            if (!network.injecting) return;
+            const pocket = world.oilPockets[network.pocket];
+            const player = world.players[network.owner];
+            const cost = C.INJECT_COST_PER_S * s;
+            if (!pocket || pocket.oil <= 0 || !player || player.money < cost) {
+                network.injecting = false;
+                network.isPumping = !!pocket && pocket.oil > 0;
+                emit(world, { type: 'inject', playerId: network.owner, plotId: network.derrickId, on: false, forced: true });
+                return;
+            }
+            player.money -= cost;
+            pocket.boost = Math.min(C.INJECT_BOOST_MAX, pocket.boost + (C.INJECT_BOOST_PER_S + C.BOOST_DECAY_PER_S) * s);
+            pocket.waterCut = Math.min(C.MAX_WATER_CUT, pocket.waterCut + C.INJECT_WATER_PER_S * s);
+        });
+    }
+
+    // Těžba: průtok podle tlaku ložiska a podílu vody, do zásobníku vrtu
     function stepPumping(world, dt) {
         world.pipeNetworks.forEach(network => {
             if (!network.isPumping || network.oilStored >= network.oilCapacity) return;
             const pocket = world.oilPockets[network.pocket];
             if (!pocket || pocket.oil <= 0) {
                 network.isPumping = false;
+                emit(world, { type: 'exhausted', playerId: network.owner, plotId: network.derrickId });
                 return;
             }
             const room = network.oilCapacity - network.oilStored;
-            const extracted = Math.min(C.OIL_PER_SECOND * (dt / 1000), pocket.oil, room);
+            const extracted = Math.min(wellRate(world, network) * (dt / 1000), pocket.oil, room);
             network.oilStored += extracted;
             pocket.oil -= extracted;
             if (pocket.oil <= 0) {
@@ -681,7 +1086,7 @@
         let best = null;
         let bestScore = -Infinity;
         world.pipeNetworks.forEach(network => {
-            if (network.owner !== truck.owner || !network.isPumping) return;
+            if (network.owner !== truck.owner || !rigHasOil(network)) return;
             const claimed = world.trucks.filter(t => t !== truck && t.homeNetworkId === network.id &&
                 (t.state === 'to_rig' || t.state === 'waiting_at_rig')).length;
             const distance = Math.abs(getNetworkPickupX(world, network) - truck.x);
@@ -710,6 +1115,11 @@
         if (player.assigned.left > player.assigned.right) return 'left';
         if (player.assigned.right > player.assigned.left) return 'right';
         return truck.id % 2 ? 'left' : 'right';
+    }
+
+    // Vrt, ke kterému má smysl jet: těží, nebo má v zásobníku aspoň na jednu fůru
+    function rigHasOil(network) {
+        return network.isPumping || network.oilStored >= C.MIN_LOAD_AMOUNT;
     }
 
     function tryLoadTruckAtRig(truck, network) {
@@ -798,7 +1208,7 @@
             const network = world.pipeNetworks.find(n => n.id === truck.homeNetworkId) || null;
             switch (truck.state) {
                 case 'waiting_at_rig': {
-                    if (!network || !network.isPumping) {
+                    if (!network || !rigHasOil(network)) {
                         truck.state = 'idle';
                         truck.homeNetworkId = null;
                         break;
@@ -818,7 +1228,7 @@
                     break;
                 }
                 case 'to_rig': {
-                    if (!network || !network.isPumping) {
+                    if (!network || !rigHasOil(network)) {
                         truck.state = 'idle';
                         truck.homeNetworkId = null;
                         break;
@@ -897,9 +1307,10 @@
     }
 
     return {
-        C, RULES, PLAYER_COLORS, NEWS,
+        C, RULES, PLAYER_COLORS, NEWS, ROCKS,
         seededRandom, createWorld, act, step, serialize,
         getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
-        isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll
+        isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll,
+        strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
     };
 });
