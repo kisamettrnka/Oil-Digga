@@ -189,7 +189,7 @@ t('shared: bankrupt player stops pumping, others keep going', () => {
     tapNearest(w, 'a', 3);
     Sim.act(w, 'a', { type: 'buyTruck' });
     claim(w, 'a', 1);
-    w.players.a.money = 1;
+    w.players.a.money = -500; // první tržba dluh nesmaže, daň za pozemky ho dorazí
     w.time.started = true;
     for (let i = 0; i < 700; i++) Sim.step(w, 16);
     assert.strictEqual(w.players.a.reason, 'bankrupt');

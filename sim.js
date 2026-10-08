@@ -84,7 +84,7 @@
         RICH_MEDIUM_OIL: 8500,
         RICH_LARGE_OIL: 11500,
         // Sdílená mapa: dražby claimů, obchod mezi hráči, kartel, sabotáž
-        AUCTION_MS: 15000,           // dražba končí 1,5 dne po posledním příhozu
+        AUCTION_MS: 7500,            // dražba končí 7,5 s (tři čtvrtě dne) po posledním příhozu
         AUCTION_MIN_RAISE: 25,
         DEAL_DAYS: 2,                // nabídka ropy platí tolik dní
         CARTEL_PROPOSAL_DAYS: 2,

@@ -16,7 +16,7 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 - Vrtný protokol, Zakázky, Soupeři a průvodce jsou větší a čitelnější.
 - Na každém ceníku je razítko „Vozit sem“: všechny tvé vozy pak jezdí k tomu kupci (dokud nezavře), další klik to zruší a vozy si zase vybírají podle ceny.
 - V závodě a na sdílené mapě zmizelo ovládání času, zůstal jen kalendář; čas tam řídí server.
-- Dražba claimu končí 1,5 dne po posledním příhozu (bylo 2).
+- Dražba claimu končí 7,5 s (tři čtvrtě dne) po posledním příhozu, bylo 2 dny.
 
 ### Kamera v nouzi
 - Při přetlaku, plynovém kopanci a erupci na vlastním vrtu kamera na vrt najede a po 7 s se vrátí, pokud s ní hráč mezitím nehnul. V Předvolbách jde vypnout (Kamera: Zůstane).
@@ -33,7 +33,7 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 - Ropovod se zastaví, když má kupec zásobu na den a víc, aby mu nesrazil cenu (zásoba na půl dne); vozy mezitím odvezou zbytek jinam.
 
 ### Sdílená mapa: dražby, obchod, kartel a sabotáž
-- Claim na sdílené mapě se nekupuje, ale draží: první zájemce přihodí cenu, ostatní mohou přihazovat, dražba končí 1,5 dne po posledním příhozu. Kdo na konci nemá peníze, o claim přijde.
+- Claim na sdílené mapě se nekupuje, ale draží: první zájemce přihodí cenu, ostatní mohou přihazovat, dražba končí tři čtvrtě dne po posledním příhozu. Kdo na konci nemá peníze, o claim přijde.
 - Panel Soupeři: nabídni jinému hráči ropu ze svých zásobníků za pevnou cenu (přelije se mu do nádrží), navrhni kartel, nebo zaplať stávku jeho řidičů.
 - Kartel: dohoda nevozit ropu jednomu kupci, aby mu vyschl sklad a cena vyletěla. Nic ho nevynucuje. Kdo tam přesto doveze, kartel rozbije a všichni se to dozví.
 - Stávka: za $500 stojí vozy soupeře 1,5 dne. Ve 40 % případů se provalí, kdo platil.
