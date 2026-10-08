@@ -10,7 +10,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <script>
-        // Každé načtení dostane novou verzi souborů (?v=...), script.js ji čte přes assetUrl()
+        // Každé načtení dostane novou verzi souborů (?v=...), js/core.js ji čte přes assetUrl()
         window.ASSET_VERSION = Date.now();
         document.write('<link rel="icon" type="image/png" href="img/oil-tower.png?v=' + window.ASSET_VERSION + '">');
         document.write('<link rel="stylesheet" href="style.css?v=' + window.ASSET_VERSION + '">');
@@ -128,7 +128,7 @@
                 </div>
             </div>
 
-            <!-- Nahoře uprostřed: průvodce první hrou (lístek s radou, script.js renderGuide) -->
+            <!-- Nahoře uprostřed: průvodce první hrou (lístek s radou, js/hud.js renderGuide) -->
             <div id="hud-guide" class="hidden"></div>
 
             <!-- Vlevo (jen sdílená mapa): soupeři a co s nimi jde udělat: nabídnout ropu, kartel, stávka -->
@@ -178,7 +178,7 @@
                     </div>
                 </div>
             </div>
-            <!-- Mapa geologického průzkumu: list přes celou scénu, kreslí ho script.js (drawSurveyMap) -->
+            <!-- Mapa geologického průzkumu: list přes celou scénu, kreslí ho js/hud.js (drawSurveyMap) -->
             <div id="hud-map" class="overlay dim hidden">
                 <div class="survey">
                     <canvas id="map-canvas" width="1600" height="760"></canvas>
@@ -188,7 +188,7 @@
                     </div>
                 </div>
             </div>
-            <!-- Předvolby hráče: formulář připíchnutý přes scénu (script.js plní volby) -->
+            <!-- Předvolby hráče: formulář připíchnutý přes scénu (js/core.js plní volby) -->
             <div id="prefs" class="overlay hidden">
                 <section class="sheet form prefs-sheet">
                     <header class="sheet-head">Předvolby</header>
@@ -217,7 +217,7 @@
     </div>
     <script>
         // Skripty se verzují stejně jako CSS; SDK je zabalené esbuildem (npm run build)
-        ['dist/discord-sdk.js', 'ads.js', 'sim.js', 'net.js', 'script.js'].forEach(function (src) {
+        ['dist/discord-sdk.js', 'ads.js', 'sim.js', 'net.js', 'js/core.js', 'js/scene.js', 'js/world-draw.js', 'js/hud.js', 'js/input.js'].forEach(function (src) {
             document.write('<script src="' + src + '?v=' + window.ASSET_VERSION + '"><\/script>');
         });
     </script>

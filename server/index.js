@@ -40,9 +40,10 @@ const staticDir = dir => express.static(dir, { index: false, setHeaders: noStore
 
 // Jen vyjmenované soubory hry: server/, .env ani node_modules se ven nedostanou
 app.get('/', sendRootFile('index.html'));
-['script.js', 'net.js', 'sim.js', 'ads.js', 'style.css'].forEach(file => app.get('/' + file, sendRootFile(file)));
+['net.js', 'sim.js', 'ads.js', 'style.css'].forEach(file => app.get('/' + file, sendRootFile(file)));
 app.use('/img', staticDir(path.join(ROOT, 'img')));
 app.use('/dist', staticDir(path.join(ROOT, 'dist')));
+app.use('/js', staticDir(path.join(ROOT, 'js')));
 ['rye', 'courier-prime', 'barlow-condensed'].forEach(font => {
     app.use(`/fonts/${font}`, staticDir(path.join(ROOT, `node_modules/@fontsource/${font}/files`)));
 });
