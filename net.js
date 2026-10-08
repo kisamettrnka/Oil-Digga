@@ -105,7 +105,6 @@ const Net = (() => {
                 return;
             }
             if (msg.type === 'state') onState(msg);
-            else if (msg.type === 'race_start') onRaceStart(msg);
             else if (msg.type === 'race_end') onRaceEnd(msg);
             else if (msg.type === 'shared_start') onSharedStart(msg);
             else if (msg.type === 'snapshot') onSnapshot(msg);
@@ -159,19 +158,6 @@ const Net = (() => {
         }
         render();
         updatePresence();
-    }
-
-    function onRaceStart(msg) {
-        raceId = msg.raceId;
-        finishSent = false;
-        raceStartedAt = Date.now() + msg.startIn;
-        // raceMode musí být nastavený před restartGame: podle něj se vezmou závodní pravidla
-        raceMode = { raceId: msg.raceId, months: msg.months || 3, mode: msg.mode || 'richest', target: msg.target || 0 };
-        if (typeof restartGame === 'function') restartGame(msg.seed);
-        gameSpeed = 1;
-        isPaused = false;
-        setMode('countdown');
-        runCountdown(msg.startIn);
     }
 
     // Server ukončil závod: zbyl jsi poslední (ostatní zkrachovali/odpadli), nebo vypršel čas
@@ -248,31 +234,11 @@ const Net = (() => {
         if (typeof restartGame === 'function') restartGame(null);
     }
 
-    // Každou sekundu průběžný výsledek; po konci roku nebo bankrotu konečný
+    // Hru počítá server: klient jen přepne na výsledky, až jeho svět skončí, a obnoví presence
     function sendProgress() {
         if (mode !== 'race' && mode !== 'results') return;
         if (!raceMode || finishSent) return;
-        if (raceMode.shared) {
-            if (isGameOver && mode === 'race') setMode('results');
-            updatePresence();
-            return;
-        }
-        const progress = {
-            raceId,
-            money: Math.floor(money),
-            revenue: Math.floor(totalRevenue),
-            sold: Math.floor(totalOilSold),
-            day,
-            month,
-            reason: gameOverReason || null
-        };
-        if (isGameOver) {
-            finishSent = true;
-            sendMsg({ type: 'finish', ...progress });
-            setMode('results');
-        } else {
-            sendMsg({ type: 'progress', ...progress });
-        }
+        if (isGameOver && mode === 'race') setMode('results');
         updatePresence();
     }
 

@@ -5,6 +5,7 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 ## Nevydáno
 
 ### Rychlejší a úspornější hra
+- Závod „každý svou mapu“ počítá server (svět na hráče ze stejného seedu), takže nejde podvádět hlášením peněz a žebříček je přesný.
 - Akce na sdílené mapě se projeví hned, bez čekání na odpověď serveru.
 - Server posílá každému hráči jen ložiska a rizika, která zná; cizí tajemství nejde vyčíst z prohlížeče a zprávy jsou kratší.
 - Při pauze a otevřené mapě se scéna nepřekresluje naplno, záře se kreslí z předpřipravených kotoučů, HUD se obnovuje 4× za sekundu a při slabém výkonu hra sama sníží rozlišení plátna.

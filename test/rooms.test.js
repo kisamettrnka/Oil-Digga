@@ -26,92 +26,116 @@ t('non-host cannot change settings', () => {
     assert.deepStrictEqual(room.settings, { kind: 'race', months: 3, mode: 'richest', target: 20000 });
 });
 
-t('race_start carries mode, target and months', () => {
-    const { ws } = setup(2, { mode: 'target', target: 10000, months: 6 });
-    const m = last(ws[1], 'race_start');
+// Závod počítá server: svět na hráče ze stejného seedu; testy hýbou světy přímo
+const Sim = require('../sim');
+const game = room => room.shared;
+const world = (room, id) => room.shared.worldOf(id);
+const tick = (room, n = 1) => { room.shared.startNow(); for (let i = 0; i < n; i++) room.shared.tick(); };
+
+t('start sends every racer its own world from the same seed', () => {
+    const { room, ws } = setup(2, { mode: 'target', target: 10000, months: 6 });
+    const m = last(ws[1], 'shared_start');
     assert.strictEqual(m.mode, 'target'); assert.strictEqual(m.target, 10000); assert.strictEqual(m.months, 6);
+    assert.strictEqual(m.separate, true);
+    assert.deepStrictEqual(Object.keys(m.world.players), ['p1'], 'own world only');
+    assert.notStrictEqual(world(room, 'p0'), world(room, 'p1'));
+    assert.deepStrictEqual(world(room, 'p0').plots.map(p => p.price), world(room, 'p1').plots.map(p => p.price), 'same map');
+    assert.strictEqual(world(room, 'p0').shared, false, 'no auctions in a race');
+    room.backToLobby?.();
 });
 
-t('target: first to reach wins, everyone gets race_end', () => {
-    const { room, ws } = setup(3, { mode: 'target', target: 10000 });
-    const rid = room.raceId;
-    room.handle('p1', { type: 'progress', raceId: rid, money: 9000 });
+t('target: first to reach wins, all worlds end', () => {
+    const { room } = setup(3, { mode: 'target', target: 10000 });
+    world(room, 'p1').players.p1.money = 9000;
+    tick(room);
     assert.strictEqual(room.winnerId, null);
-    room.handle('p2', { type: 'progress', raceId: rid, money: 10500 });
+    world(room, 'p2').players.p2.money = 10500;
+    tick(room);
     assert.strictEqual(room.winnerId, 'p2');
-    ws.forEach(w => assert.strictEqual(last(w, 'race_end')?.reason, 'target'));
-    room.handle('p1', { type: 'progress', raceId: rid, money: 20000 }); // pozdě
-    assert.strictEqual(room.winnerId, 'p2');
-    ['p0', 'p1', 'p2'].forEach(id => room.handle(id, { type: 'finish', raceId: rid, money: 5000, reason: 'race_end' }));
+    assert.ok(['p0', 'p1', 'p2'].every(id => world(room, id).over), 'everyone is over');
     assert.strictEqual(room.phase, 'finished');
     assert.strictEqual(room.snapshot().winnerId, 'p2');
 });
 
-t('last standing: 2 players, one bankrupt -> other gets race_end', () => {
-    const { room, ws } = setup(2);
-    const rid = room.raceId;
-    room.handle('p0', { type: 'finish', raceId: rid, money: -10, reason: 'bankrupt' });
-    assert.strictEqual(room.phase, 'playing');
-    assert.strictEqual(last(ws[1], 'race_end')?.reason, 'last_standing');
-    room.handle('p1', { type: 'finish', raceId: rid, money: 2500, reason: 'race_end' });
+t('last standing: 2 players, one bankrupt -> race ends', () => {
+    const { room } = setup(2);
+    Sim.endPlayer(world(room, 'p0'), world(room, 'p0').players.p0, 'bankrupt');
+    tick(room);
     assert.strictEqual(room.phase, 'finished');
     assert.strictEqual(room.winnerId, 'p1');
 });
 
 t('survival: last standing is winner even with less money', () => {
     const { room } = setup(3, { mode: 'survival' });
-    const rid = room.raceId;
-    room.handle('p0', { type: 'finish', raceId: rid, money: -5, reason: 'bankrupt' });
-    room.handle('p1', { type: 'finish', raceId: rid, money: -50, reason: 'bankrupt' });
-    assert.strictEqual(room.winnerId, 'p2');
-    room.handle('p2', { type: 'finish', raceId: rid, money: 100, reason: 'race_end' });
+    world(room, 'p2').players.p2.money = 100;
+    world(room, 'p0').players.p0.money = 9000;
+    Sim.endPlayer(world(room, 'p0'), world(room, 'p0').players.p0, 'bankrupt');
+    Sim.endPlayer(world(room, 'p1'), world(room, 'p1').players.p1, 'bankrupt');
+    tick(room);
     assert.strictEqual(room.phase, 'finished');
     assert.strictEqual(room.winnerId, 'p2');
 });
 
-t('richest: winner is most money among non-bankrupt', () => {
+t('richest: winner is most money among non-bankrupt at the end', () => {
     const { room } = setup(3, { mode: 'richest' });
-    const rid = room.raceId;
-    room.handle('p0', { type: 'finish', raceId: rid, money: 9000, reason: 'race_end' });
-    room.handle('p1', { type: 'finish', raceId: rid, money: 12000, reason: 'race_end' });
-    room.handle('p2', { type: 'finish', raceId: rid, money: 4000, reason: 'race_end' });
+    world(room, 'p0').players.p0.money = 9000;
+    world(room, 'p1').players.p1.money = 12000;
+    world(room, 'p2').players.p2.money = 4000;
+    game(room).endNow();
+    tick(room);
     assert.strictEqual(room.phase, 'finished');
     assert.strictEqual(room.winnerId, 'p1');
 });
 
 t('solo race (1 player) does not end on its own', () => {
-    const { room, ws } = setup(1);
+    const { room } = setup(1);
+    tick(room, 5);
     assert.strictEqual(room.phase, 'playing');
-    assert.strictEqual(last(ws[0], 'race_end'), undefined);
 });
 
 t('disconnect leaves one racer -> last standing', () => {
     const { room, ws } = setup(2);
     room.leave('p0', ws[0]);
-    assert.strictEqual(last(ws[1], 'race_end')?.reason, 'last_standing');
+    tick(room);
+    assert.strictEqual(room.phase, 'finished');
 });
 
 t('forceEnd finishes stuck race', () => {
     const { room } = setup(2);
     room.forceEnd(room.raceId);
+    tick(room);
     assert.strictEqual(room.phase, 'finished');
 });
 
 t('reset clears winner and timers', () => {
     const { room } = setup(2, { mode: 'target', target: 10000 });
-    room.handle('p1', { type: 'progress', raceId: room.raceId, money: 99999 });
+    world(room, 'p1').players.p1.money = 99999;
+    tick(room);
     room.handle('p0', { type: 'reset' });
     assert.strictEqual(room.phase, 'lobby'); assert.strictEqual(room.winnerId, null); assert.strictEqual(room.raceTimer, null);
 });
 
 t('survival: finishing on time is not being out (no false last standing)', () => {
-    const { room, ws } = setup(2, { mode: 'survival' });
-    const rid = room.raceId;
-    room.handle('p0', { type: 'finish', raceId: rid, money: 9000, reason: 'race_end' });
-    assert.strictEqual(last(ws[1], 'race_end'), undefined);
-    room.handle('p1', { type: 'finish', raceId: rid, money: 3000, reason: 'race_end' });
+    const { room } = setup(2, { mode: 'survival' });
+    Sim.endPlayer(world(room, 'p0'), world(room, 'p0').players.p0, 'race_end');
+    tick(room);
+    assert.strictEqual(room.phase, 'playing', 'p1 still races');
+    assert.strictEqual(room.winnerId, null);
+    world(room, 'p0').players.p0.money = 9000;
+    world(room, 'p1').players.p1.money = 3000;
+    Sim.endPlayer(world(room, 'p1'), world(room, 'p1').players.p1, 'race_end');
+    tick(room);
     assert.strictEqual(room.phase, 'finished');
     assert.strictEqual(room.winnerId, 'p0');
+});
+
+t('clients cannot report money: progress and finish messages are ignored', () => {
+    const { room } = setup(2, { mode: 'target', target: 10000 });
+    room.handle('p1', { type: 'progress', raceId: room.raceId, money: 99999 });
+    room.handle('p1', { type: 'finish', raceId: room.raceId, money: 99999, reason: 'race_end' });
+    tick(room);
+    assert.strictEqual(room.winnerId, null);
+    assert.ok(room.players.get('p1').progress.money < 10000);
 });
 
 console.log(results.join('\n'));

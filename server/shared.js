@@ -1,7 +1,7 @@
-// Sdílená mapa: server počítá jeden svět (sim.js) pro všechny hráče místnosti.
-// Klienti posílají jen akce (koupě, stavby, potrubí...), server 20× za sekundu krokuje svět
-// a 5× za sekundu rozešle stav s událostmi. Klient mezi zprávami svět dopočítává sám,
-// takže kamiony jezdí plynule, a další zpráva ho opraví.
+// Hra na serveru: server počítá svět (sim.js), klienti posílají jen akce (koupě, stavby,
+// vrtání...). 20× za sekundu krokuje svět a 5× za sekundu rozešle každému hráči stav s událostmi.
+// Klient mezi zprávami svět dopočítává sám, takže vozy jezdí plynule, a další zpráva ho opraví.
+// Sdílená mapa = jeden svět pro všechny, závod = svět na hráče ze stejného seedu.
 const Sim = require('../sim');
 
 const TICK_MS = 50;
@@ -32,41 +32,64 @@ function serializeFor(world, playerId) {
     return serializeRounded(view);
 }
 
+// Jedna hra místnosti. Sdílená mapa: jeden svět pro všechny. Závod „každý svou mapu“: svět na hráče
+// ze stejného seedu (separate), takže i závod počítá server a klient nemůže hlásit vymyšlené peníze.
 class SharedGame {
-    constructor(room, racers, startInMs) {
+    constructor(room, racers, startInMs, { separate = false } = {}) {
         this.room = room;
         this.raceId = room.raceId;
+        this.separate = separate;
         const { months, mode, target } = room.settings;
-        this.world = Sim.createWorld({
-            seed: room.seed,
-            race: { months, mode, target },
-            shared: true,
-            players: racers.map(p => ({ id: p.id, name: p.name }))
-        });
+        const race = { months, mode, target };
+        this.ids = racers.map(p => p.id);
+        this.worlds = new Map();
+        if (separate) {
+            racers.forEach(p => this.worlds.set(p.id, Sim.createWorld({ seed: room.seed, race, shared: false, players: [{ id: p.id, name: p.name }] })));
+        } else {
+            const world = Sim.createWorld({ seed: room.seed, race, shared: true, players: racers.map(p => ({ id: p.id, name: p.name })) });
+            racers.forEach(p => this.worlds.set(p.id, world));
+        }
         this.startAt = Date.now() + startInMs;
-        this.pendingEvents = [];
+        this.pendingEvents = new Map(this.ids.map(id => [id, []]));
         this.tickCount = 0;
         this.actionCounts = new Map();
         this.finished = false;
         racers.forEach(p => this.sendStart(p));
-        this.startTimer = setTimeout(() => { this.world.time.started = true; }, startInMs);
+        this.startTimer = setTimeout(() => this.startNow(), startInMs);
         this.interval = setInterval(() => this.tick(), TICK_MS);
         this.startTimer.unref?.();
         this.interval.unref?.();
+    }
+
+    // Sdílený svět (nebo první svět závodu): testy a kontrola času
+    get world() {
+        return this.worlds.get(this.ids[0]);
+    }
+
+    worldOf(id) {
+        return this.worlds.get(id);
+    }
+
+    uniqueWorlds() {
+        return [...new Set(this.worlds.values())];
+    }
+
+    startNow() {
+        this.uniqueWorlds().forEach(w => { w.time.started = true; });
     }
 
     sendStart(player) {
         if (!player.ws || player.ws.readyState !== 1) return;
         const { months, mode, target } = this.room.settings;
         const head = JSON.stringify({
-            type: 'shared_start', raceId: this.raceId, months, mode, target,
+            type: 'shared_start', raceId: this.raceId, months, mode, target, separate: this.separate,
             startIn: Math.max(0, this.startAt - Date.now())
         });
-        player.ws.send(`${head.slice(0, -1)},"world":${serializeFor(this.world, player.id)}}`);
+        player.ws.send(`${head.slice(0, -1)},"world":${serializeFor(this.worldOf(player.id), player.id)}}`);
     }
 
     hasPlayer(id) {
-        return !!this.world.players[id];
+        return this.worlds.has(id);
     }
 
     // Hráč se po výpadku spojení vrátil: dostane aktuální svět a hraje dál
@@ -83,58 +106,83 @@ class SharedGame {
         } else {
             this.actionCounts.set(playerId, { second, n: 1 });
         }
-        Sim.act(this.world, playerId, action);
+        Sim.act(this.worldOf(playerId), playerId, action);
+    }
+
+    playerState(id) {
+        return this.worldOf(id).players[id];
+    }
+
+    allOver() {
+        return this.uniqueWorlds().every(w => w.over);
     }
 
     tick() {
         if (this.finished) return;
-        Sim.step(this.world, TICK_MS);
+        this.uniqueWorlds().forEach(w => Sim.step(w, TICK_MS));
         this.applyRaceRules();
-        this.pendingEvents.push(...this.world.events.splice(0));
+        // Události světa dostanou jeho hráči (sdílený svět všichni, oddělený jen jeho majitel)
+        this.uniqueWorlds().forEach(w => {
+            const events = w.events.splice(0);
+            if (!events.length) return;
+            this.ids.forEach(id => {
+                if (this.worlds.get(id) !== w) return;
+                const queue = this.pendingEvents.get(id);
+                queue.push(...events);
+                if (queue.length > 200) queue.splice(0, queue.length - 200);
+            });
+        });
         this.syncRoomPlayers();
         this.tickCount++;
-        if (this.world.over || this.tickCount % BROADCAST_EVERY === 0) this.broadcast();
-        if (this.world.over) {
+        const over = this.allOver();
+        if (over || this.tickCount % BROADCAST_EVERY === 0) this.broadcast();
+        if (over) {
             this.finished = true;
             this.stop();
             this.room.onSharedOver();
         }
     }
 
-    // Režimy závodu na sdílené mapě: cíl, poslední přeživší (bankrot nebo odpojení soupeřů)
+    // Režimy závodu: cíl (první s částkou), poslední přeživší (bankrot nebo odpojení soupeřů)
     applyRaceRules() {
-        const world = this.world;
-        if (world.over || !world.time.started) return;
+        if (this.allOver() || !this.world.time.started) return;
         const settings = this.room.settings;
-        const ids = world.playerOrder;
+        const ids = this.ids;
         if (settings.mode === 'target' && !this.room.winnerId) {
-            const hit = ids.find(id => !world.players[id].over && world.players[id].money >= settings.target);
+            const hit = ids.find(id => !this.playerState(id).over && this.playerState(id).money >= settings.target);
             if (hit) {
                 this.room.winnerId = hit;
-                Sim.endAll(world, 'race_end');
+                this.endAll();
                 return;
             }
         }
-        const isIn = id => !world.players[id].over && this.room.players.get(id)?.connected;
-        const alive = ids.filter(isIn);
-        if (!alive.length) {
-            Sim.endAll(world, 'race_end');
-        } else if (ids.length >= 2 && alive.length === 1) {
-            if (settings.mode === 'survival') this.room.winnerId = alive[0];
-            Sim.endAll(world, 'race_end');
+        // Venku je, kdo zkrachoval nebo odpadl; kdo dojel na čas, z boje nevypadl
+        const over = id => this.playerState(id).over;
+        const connected = id => !!this.room.players.get(id)?.connected;
+        const out = id => (over(id) && this.playerState(id).reason === 'bankrupt') || !connected(id);
+        const racing = ids.filter(id => !over(id) && connected(id));
+        if (!racing.length) {
+            this.endAll();
+        } else if (ids.length >= 2 && racing.length === 1 && ids.filter(id => id !== racing[0]).every(out)) {
+            if (settings.mode === 'survival') this.room.winnerId = racing[0];
+            this.endAll();
         }
     }
 
-    // Průběžné výsledky do místnosti (žebříček a výsledky používají stejná data jako závod)
+    endAll() {
+        this.uniqueWorlds().forEach(w => Sim.endAll(w, 'race_end'));
+    }
+
+    // Průběžné výsledky do místnosti (žebříček a výsledky používají stejná data)
     syncRoomPlayers() {
-        const world = this.world;
-        world.playerOrder.forEach(id => {
+        this.ids.forEach(id => {
             const roomPlayer = this.room.players.get(id);
-            const p = world.players[id];
+            const p = this.playerState(id);
+            const time = this.worldOf(id).time;
             if (!roomPlayer) return;
             roomPlayer.progress = {
                 money: Math.round(p.money), revenue: Math.round(p.revenue), sold: Math.round(p.sold),
-                day: world.time.day, month: world.time.month, over: p.over, reason: p.reason
+                day: time.day, month: time.month, over: p.over, reason: p.reason
             };
             if (p.over && roomPlayer.status === 'racing') roomPlayer.status = 'finished';
         });
@@ -142,17 +190,17 @@ class SharedGame {
     }
 
     broadcast() {
-        const events = JSON.stringify(this.pendingEvents);
-        this.pendingEvents = [];
         for (const p of this.room.players.values()) {
             if (!(p.connected && p.ws && p.ws.readyState === 1 && this.hasPlayer(p.id))) continue;
-            p.ws.send(`{"type":"snapshot","raceId":${this.raceId},"events":${events},"world":${serializeFor(this.world, p.id)}}`);
+            const events = JSON.stringify(this.pendingEvents.get(p.id));
+            this.pendingEvents.set(p.id, []);
+            p.ws.send(`{"type":"snapshot","raceId":${this.raceId},"events":${events},"world":${serializeFor(this.worldOf(p.id), p.id)}}`);
         }
     }
 
     // Pojistka serveru (vypršel čas závodu): ukončí všechny, poslední krok rozešle konec
     endNow() {
-        if (!this.world.over) Sim.endAll(this.world, 'race_end');
+        if (!this.allOver()) this.endAll();
     }
 
     stop() {
