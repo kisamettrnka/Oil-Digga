@@ -83,6 +83,15 @@
         ECHO_MS: 8000,
         RICH_MEDIUM_OIL: 8500,
         RICH_LARGE_OIL: 11500,
+        // Sdílená mapa: dražby claimů, obchod mezi hráči, kartel, sabotáž
+        AUCTION_MS: 20000,           // dražba končí 2 dny po posledním příhozu
+        AUCTION_MIN_RAISE: 25,
+        DEAL_DAYS: 2,                // nabídka ropy platí tolik dní
+        CARTEL_PROPOSAL_DAYS: 2,
+        CARTEL_MAX_DAYS: 10,
+        STRIKE_COST: 500,
+        STRIKE_MS: 15000,            // podplacená stávka: vozy soupeře stojí 1,5 dne
+        STRIKE_TRACE_CHANCE: 0.4,    // s touto pravděpodobností se ví, kdo platil
         // Město jako trh: cena kupce klesá, když má plný sklad (dny zásoby podle poptávky)
         STOCK_DAYS: 2,               // při zásobě na tolik dní je cena základní × 0,65
         SHARED_DEMAND_PER_PLAYER: 0.4, // sdílená mapa: poptávka roste s počtem hráčů (míň než hráčů, ať si konkurují)
@@ -208,6 +217,10 @@
             market: createMarket(players.length, shared),
             town: { era: 0, delivered: 0 },
             contracts: { offers: [], active: [], nextInDays: C.CONTRACT_FIRST_DAY, nextId: 0 },
+            // Sdílená mapa: dražby claimů, nabídky ropy mezi hráči a kartel
+            auctions: [],
+            deals: { offers: [], nextId: 0 },
+            cartel: null,
             time: { day: 1, month: 1, dayTimer: 0, started: false, dayIndex: 0 },
             news: { active: [], nextInDays: NEWS_FIRST_DAY },
             tools: { clock: 0, waves: [], pulses: [], drones: [] },
@@ -227,6 +240,7 @@
                 trucksOwned: 0,
                 revenueAtDayStart: 0,
                 lastDayIncome: 0,
+                strikeMs: 0,         // podplacená stávka: vozy stojí
                 over: false,
                 reason: null
             };
@@ -675,6 +689,13 @@
             case 'buildSilo': return buildSilo(world, player, action.plotId);
             case 'buyTruck': return buyTruck(world, player);
             case 'acceptContract': return acceptContract(world, player, action.id);
+            case 'bid': return placeBid(world, player, action.plotId, action.amount);
+            case 'offerDeal': return offerDeal(world, player, action.to, action.oil, action.price);
+            case 'acceptDeal': return answerDeal(world, player, action.id, true);
+            case 'declineDeal': return answerDeal(world, player, action.id, false);
+            case 'proposeCartel': return proposeCartel(world, player, action.buyer, action.days);
+            case 'joinCartel': return joinCartel(world, player);
+            case 'sabotage': return sabotage(world, player, action.target);
             case 'drill': return addDrillPoint(world, player, action.plotId, action.x, action.y);
             case 'drillStop': return stopDrill(world, player, action.plotId);
             case 'bop': return closePreventer(world, player, action.plotId);
@@ -702,6 +723,13 @@
         const plot = getPlot(world, plotId);
         if (!plot || plot.owner) return fail('taken');
         if (player.money < plot.price) return fail('money');
+        // Sdílená mapa: koupě je první příhoz v dražbě, ostatní mohou přihodit
+        if (world.shared) {
+            if (world.auctions.some(a => a.plotId === plot.id)) return placeBid(world, player, plot.id, plot.price);
+            world.auctions.push({ plotId: plot.id, bidder: player.id, amount: plot.price, timer: C.AUCTION_MS });
+            emit(world, { type: 'auction', playerId: player.id, plotId: plot.id, amount: plot.price, start: true });
+            return { ok: true, auction: true };
+        }
         player.money -= plot.price;
         plot.owner = player.id;
         emit(world, { type: 'plot_bought', playerId: player.id, plotId: plot.id, price: plot.price });
@@ -756,6 +784,165 @@
         c.active.push(contract);
         emit(world, { type: 'contract_taken', playerId: player.id, id: offer.id, buyer: offer.buyer, amount: offer.amount, price: offer.price, days: offer.days });
         return { ok: true };
+    }
+
+    // --- Sdílená mapa: dražby, obchod, kartel, sabotáž ---
+    function placeBid(world, player, plotId, amount) {
+        const auction = world.auctions.find(a => a.plotId === plotId);
+        if (!auction) return fail('auction');
+        amount = Math.round(Number(amount));
+        if (!Number.isFinite(amount) || amount < auction.amount + C.AUCTION_MIN_RAISE) return fail('low');
+        if (auction.bidder === player.id) return fail('own');
+        if (player.money < amount) return fail('money');
+        auction.bidder = player.id;
+        auction.amount = amount;
+        auction.timer = C.AUCTION_MS;
+        emit(world, { type: 'auction', playerId: player.id, plotId, amount });
+        return { ok: true };
+    }
+
+    function stepAuctions(world, dt) {
+        if (!world.auctions?.length) return;
+        world.auctions.forEach(a => { a.timer -= dt; });
+        world.auctions.filter(a => a.timer <= 0).forEach(a => {
+            const plot = getPlot(world, a.plotId);
+            const winner = world.players[a.bidder];
+            if (plot && !plot.owner && winner && !winner.over && winner.money >= a.amount) {
+                winner.money -= a.amount;
+                plot.owner = winner.id;
+                emit(world, { type: 'plot_bought', playerId: winner.id, plotId: plot.id, price: a.amount, auction: true });
+            } else {
+                emit(world, { type: 'auction_failed', playerId: a.bidder, plotId: a.plotId });
+            }
+        });
+        world.auctions = world.auctions.filter(a => a.timer > 0);
+    }
+
+    function storedOil(world, playerId) {
+        return world.pipeNetworks.filter(n => n.owner === playerId).reduce((s, n) => s + n.oilStored, 0);
+    }
+
+    // Nabídka ropy jinému hráči: tolik barelů ze zásobníků za pevnou cenu za barel
+    function offerDeal(world, player, to, oil, price) {
+        const target = world.players[to];
+        if (!world.shared || !target || target.id === player.id || target.over) return fail('player');
+        oil = Math.round(Number(oil));
+        price = Math.round(Number(price) * 100) / 100;
+        if (!(oil >= 25) || !(price > 0) || price > 10) return fail('terms');
+        if (storedOil(world, player.id) < oil) return fail('oil');
+        if (world.deals.offers.some(d => d.from === player.id && d.to === to)) return fail('pending');
+        const deal = { id: world.deals.nextId++, from: player.id, to, oil, price, expiresIn: C.DEAL_DAYS };
+        world.deals.offers.push(deal);
+        emit(world, { type: 'deal_offer', ...deal, playerId: to });
+        return { ok: true };
+    }
+
+    // Příjemce přijme: ropa se přelije ze zásobníků prodávajícího do zásobníků kupujícího
+    function answerDeal(world, player, id, accept) {
+        const deal = world.deals.offers.find(d => d.id === id);
+        if (!deal || deal.to !== player.id) return fail('deal');
+        world.deals.offers = world.deals.offers.filter(d => d !== deal);
+        const seller = world.players[deal.from];
+        if (!accept || !seller || seller.over) {
+            emit(world, { type: 'deal_declined', id, playerId: deal.from, to: player.id });
+            return { ok: true };
+        }
+        const room = world.pipeNetworks.filter(n => n.owner === player.id).reduce((s, n) => s + Math.max(0, n.oilCapacity - n.oilStored), 0);
+        const oil = Math.min(deal.oil, storedOil(world, deal.from), room);
+        const cost = oil * deal.price;
+        if (oil < 1 || player.money < cost) {
+            emit(world, { type: 'deal_failed', id, playerId: player.id, from: deal.from, reason: oil < 1 ? 'room' : 'money' });
+            return fail(oil < 1 ? 'room' : 'money');
+        }
+        moveOil(world, deal.from, player.id, oil);
+        player.money -= cost;
+        seller.money += cost;
+        seller.revenue += cost;
+        emit(world, { type: 'deal_done', id, playerId: player.id, from: deal.from, oil, price: deal.price, amount: Math.round(cost) });
+        return { ok: true };
+    }
+
+    function moveOil(world, fromId, toId, oil) {
+        let left = oil;
+        world.pipeNetworks.filter(n => n.owner === fromId).forEach(n => {
+            const take = Math.min(left, n.oilStored);
+            n.oilStored -= take;
+            left -= take;
+        });
+        left = oil;
+        world.pipeNetworks.filter(n => n.owner === toId).forEach(n => {
+            const put = Math.min(left, Math.max(0, n.oilCapacity - n.oilStored));
+            n.oilStored += put;
+            left -= put;
+        });
+    }
+
+    // Kartel: dohoda nevozit ropu danému kupci, aby mu vyschl sklad a cena vyletěla.
+    // Nic nevynucuje; kdo tam přesto doveze, kartel rozbije a všichni se to dozví.
+    function proposeCartel(world, player, buyer, days) {
+        if (!world.shared || world.cartel) return fail('cartel');
+        if (!world.market[buyer] || !world.market[buyer].open) return fail('buyer');
+        days = Math.max(2, Math.min(C.CARTEL_MAX_DAYS, Math.round(Number(days)) || 5));
+        const others = world.playerOrder.filter(id => id !== player.id && !world.players[id].over);
+        if (!others.length) return fail('alone');
+        world.cartel = { buyer, by: player.id, days, members: [player.id], pending: others, active: false, daysLeft: C.CARTEL_PROPOSAL_DAYS };
+        emit(world, { type: 'cartel_proposal', playerId: player.id, buyer, days, name: world.market[buyer].name });
+        return { ok: true };
+    }
+
+    function joinCartel(world, player) {
+        const c = world.cartel;
+        if (!c || c.active || !c.pending.includes(player.id)) return fail('cartel');
+        c.pending = c.pending.filter(id => id !== player.id);
+        c.members.push(player.id);
+        emit(world, { type: 'cartel_join', playerId: player.id, buyer: c.buyer });
+        if (!c.pending.length) {
+            c.active = true;
+            c.daysLeft = c.days;
+            emit(world, { type: 'cartel_on', buyer: c.buyer, days: c.days, name: world.market[c.buyer].name });
+        }
+        return { ok: true };
+    }
+
+    function stepCartel(world) {
+        const c = world.cartel;
+        if (!c) return;
+        c.daysLeft--;
+        if (c.daysLeft > 0) return;
+        emit(world, { type: c.active ? 'cartel_end' : 'cartel_expired', buyer: c.buyer, name: world.market[c.buyer].name });
+        world.cartel = null;
+    }
+
+    // Prodej členem kartelu u kartelového kupce = zrada
+    function checkCartelBreach(world, playerId, buyerId) {
+        const c = world.cartel;
+        if (!c || !c.active || c.buyer !== buyerId || !c.members.includes(playerId)) return;
+        world.cartel = null;
+        emit(world, { type: 'cartel_broken', playerId, buyer: buyerId, name: world.market[buyerId].name });
+    }
+
+    // Podplacená stávka: vozy soupeře na čas stojí; občas se provalí, kdo platil
+    function sabotage(world, player, targetId) {
+        const target = world.players[targetId];
+        if (!world.shared || !target || target.id === player.id || target.over) return fail('player');
+        if (target.strikeMs > 0) return fail('busy');
+        if (player.money < C.STRIKE_COST) return fail('money');
+        player.money -= C.STRIKE_COST;
+        target.strikeMs = C.STRIKE_MS;
+        const rnd = world._market || Math.random;
+        const traced = rnd() < C.STRIKE_TRACE_CHANCE;
+        emit(world, { type: 'strike', playerId: target.id, by: traced ? player.id : null, ms: C.STRIKE_MS });
+        return { ok: true };
+    }
+
+    function stepStrikes(world, dt) {
+        world.playerOrder.forEach(id => {
+            const p = world.players[id];
+            if (p.strikeMs > 0) {
+                p.strikeMs = Math.max(0, p.strikeMs - dt);
+                if (p.strikeMs === 0) emit(world, { type: 'strike_over', playerId: id });
+            }
+        });
     }
 
     // Další bod trasy vrtu. První klik založí vrt na přední hraně pozemku; vrták pak jede
@@ -929,6 +1116,8 @@
         if (dt <= 0) return;
         stepTools(world, dt);
         if (!world.time.started || world.over) return;
+        stepAuctions(world, dt);
+        stepStrikes(world, dt);
         stepCalendar(world, dt);
         if (world._market) stepMarket(world, dt);
         stepBuyers(world, dt);
@@ -948,6 +1137,11 @@
         time.dayIndex++;
         stepNews(world);
         stepContracts(world);
+        stepCartel(world);
+        if (world.deals) {
+            world.deals.offers.forEach(d => { d.expiresIn--; });
+            world.deals.offers = world.deals.offers.filter(d => d.expiresIn > 0);
+        }
         const landTax = getLandTax(world);
         world.playerOrder.forEach(id => {
             const player = world.players[id];
@@ -983,6 +1177,9 @@
         player.over = true;
         player.reason = reason;
         if (world.shared) {
+            world.auctions = (world.auctions || []).filter(a => a.bidder !== player.id);
+            if (world.deals) world.deals.offers = world.deals.offers.filter(d => d.from !== player.id && d.to !== player.id);
+            if (world.cartel) world.cartel.pending = world.cartel.pending.filter(id => id !== player.id);
             world.pipeNetworks.forEach(n => {
                 if (n.owner === player.id) {
                     n.isPumping = false;
@@ -1430,6 +1627,7 @@
             player.sold += truck.oil;
         }
         emit(world, { type: 'sale', playerId: truck.owner, amount: Math.round(sale), x: targetX, company: buyer.id });
+        checkCartelBreach(world, truck.owner, buyer.id);
         // Sklad kupce roste, cena klesá (na sdílené mapě si tak hráči konkurují)
         buyer.stock += truck.oil;
         growTown(world, truck.oil);
@@ -1449,6 +1647,7 @@
 
         world.trucks.forEach(truck => {
             if (truck.state === 'idle') return;
+            if ((world.players[truck.owner]?.strikeMs || 0) > 0) return; // stávka: vůz stojí, kde je
             const network = world.pipeNetworks.find(n => n.id === truck.homeNetworkId) || null;
             switch (truck.state) {
                 case 'waiting_at_rig': {
@@ -1554,6 +1753,6 @@
         seededRandom, createWorld, act, step, serialize,
         getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
         isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll,
-        eraThreshold, truckSpeed, quoteAtStock, plotAtX, terrainOf, plotCenterX, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
+        eraThreshold, truckSpeed, quoteAtStock, storedOil, plotAtX, terrainOf, plotCenterX, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
     };
 });

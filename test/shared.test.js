@@ -24,10 +24,15 @@ const last = (w, type) => [...w.inbox].reverse().find(m => m.type === type);
         const rid = room.raceId;
         const w = room.shared.world;
         w.players.a.money = w.players.b.money = 50000;
+        // Koupě na sdílené mapě je dražba: první příhoz od a, b musí přihodit víc, pak se čeká na konec
+        const settleAuctions = () => { w.time.started = true; for (let i = 0; i < 50 && w.auctions.length; i++) Sim.step(w, 500); };
         room.handle('a', { type: 'action', raceId: rid, action: { type: 'buyPlot', plotId: 2 } });
         room.handle('b', { type: 'action', raceId: rid, action: { type: 'buyPlot', plotId: 2 } });
+        assert.ok(w.auctions.some(x => x.plotId === 2 && x.bidder === 'a'), 'a leads the auction');
+        settleAuctions();
         assert.strictEqual(w.plots[2].owner, 'a', 'first buyer gets the plot');
         room.handle('b', { type: 'action', raceId: rid, action: { type: 'buyPlot', plotId: 5 } });
+        settleAuctions();
         room.handle('a', { type: 'action', raceId: rid, action: { type: 'buildDerrick', plotId: 2 } });
         room.handle('b', { type: 'action', raceId: rid, action: { type: 'buildDerrick', plotId: 2 } });
         assert.ok(w.plots[2].hasVrt);

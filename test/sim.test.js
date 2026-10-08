@@ -25,6 +25,16 @@ function serviceRigs(w) {
         if (n.drillState === 'worn' && !(n.blowout > 0)) Sim.act(w, n.owner, { type: 'bit', plotId: n.derrickId });
     });
 }
+// Koupě claimu: na sdílené mapě je to dražba, která skončí až po AUCTION_MS bez příhozu
+function claim(w, pid, plotId) {
+    const r = Sim.act(w, pid, { type: 'buyPlot', plotId });
+    if (!r.ok || !w.shared) return r;
+    const started = w.time.started;
+    w.time.started = true;
+    for (let i = 0; i < 50 && !w.plots[plotId].owner; i++) Sim.step(w, 500);
+    w.time.started = started;
+    return r;
+}
 function pocketCenter(pk) {
     return { x: pk.x + pk.width / 2, y: pk.y + pk.height / 2 };
 }
@@ -129,7 +139,7 @@ t('survival tax grows', () => {
 t('tools: seismic echoes, radar reveals per player, drone flies away', () => {
     const w = Sim.createWorld({ seed: 3, players: [{ id: 'a' }, { id: 'b' }], shared: true, race: { months: 3, mode: 'richest' } });
     w.players.a.money = 10000;
-    Sim.act(w, 'a', { type: 'buyPlot', plotId: 4 });
+    claim(w, 'a', 4);
     assert.ok(Sim.act(w, 'a', { type: 'seismic', plotId: 4, x: 0 }).ok);
     assert.ok(!Sim.act(w, 'b', { type: 'seismic', plotId: 4, x: 0 }).ok, 'not your plot');
     for (let i = 0; i < 120; i++) Sim.step(w, 16);
@@ -147,9 +157,9 @@ t('tools: seismic echoes, radar reveals per player, drone flies away', () => {
 t('shared: two players tap same pocket and both pump', () => {
     const w = Sim.createWorld({ seed: 5, players: [{ id: 'a' }, { id: 'b' }], shared: true, race: { months: 3, mode: 'richest' } });
     w.players.a.money = w.players.b.money = 100000;
-    Sim.act(w, 'a', { type: 'buyPlot', plotId: 3 });
+    claim(w, 'a', 3);
     assert.ok(!Sim.act(w, 'b', { type: 'buyPlot', plotId: 3 }).ok, 'b cannot buy a plot');
-    Sim.act(w, 'b', { type: 'buyPlot', plotId: 4 });
+    claim(w, 'b', 4);
     Sim.act(w, 'a', { type: 'buildDerrick', plotId: 3 });
     Sim.act(w, 'b', { type: 'buildDerrick', plotId: 4 });
     const pk = w.oilPockets[0];
@@ -174,11 +184,11 @@ t('shared: two players tap same pocket and both pump', () => {
 t('shared: bankrupt player stops pumping, others keep going', () => {
     const w = Sim.createWorld({ seed: 5, players: [{ id: 'a' }, { id: 'b' }], shared: true, race: { months: 3, mode: 'richest' } });
     w.players.a.money = 100000;
-    Sim.act(w, 'a', { type: 'buyPlot', plotId: 3 });
+    claim(w, 'a', 3);
     Sim.act(w, 'a', { type: 'buildDerrick', plotId: 3 });
     tapNearest(w, 'a', 3);
     Sim.act(w, 'a', { type: 'buyTruck' });
-    Sim.act(w, 'a', { type: 'buyPlot', plotId: 1 });
+    claim(w, 'a', 1);
     w.players.a.money = 1;
     w.time.started = true;
     for (let i = 0; i < 700; i++) Sim.step(w, 16);
@@ -514,6 +524,95 @@ t('claims: river makes injection cheap', () => {
     const flat = costOn('flat');
     const river = costOn('river');
     assert.ok(Math.abs(river - flat * Sim.TERRAIN.river.injectMult) < 0.01, `river ${river} vs flat ${flat}`);
+});
+
+function sharedWorld(seed) {
+    const w = Sim.createWorld({ seed, players: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], shared: true, race: { months: 3, mode: 'richest' } });
+    w.hazards = [];
+    w.news.nextInDays = 9999;
+    w.contracts.nextInDays = 9999;
+    w.players.a.money = w.players.b.money = 20000;
+    w.time.started = true;
+    return w;
+}
+
+t('shared: buying a claim starts an auction, the highest bid wins after the timer', () => {
+    const w = sharedWorld(61);
+    const plot = w.plots[3];
+    assert.ok(Sim.act(w, 'a', { type: 'buyPlot', plotId: 3 }).auction);
+    assert.strictEqual(plot.owner, null, 'not owned yet');
+    assert.strictEqual(Sim.act(w, 'a', { type: 'bid', plotId: 3, amount: plot.price + 50 }).reason, 'own');
+    assert.strictEqual(Sim.act(w, 'b', { type: 'bid', plotId: 3, amount: plot.price + 10 }).reason, 'low');
+    assert.ok(Sim.act(w, 'b', { type: 'bid', plotId: 3, amount: plot.price + 50 }).ok);
+    Sim.step(w, C.AUCTION_MS - 1000);
+    assert.strictEqual(plot.owner, null, 'bid reset the timer');
+    assert.ok(Sim.act(w, 'a', { type: 'bid', plotId: 3, amount: plot.price + 100 }).ok);
+    const money = w.players.a.money;
+    for (let i = 0; i < 50 && !plot.owner; i++) Sim.step(w, 500);
+    assert.strictEqual(plot.owner, 'a');
+    assert.strictEqual(money - w.players.a.money, plot.price + 100, 'pays the final bid');
+    assert.ok(w.events.some(e => e.type === 'plot_bought' && e.auction && e.playerId === 'a'));
+    assert.strictEqual(w.auctions.length, 0);
+    // Vítěz bez peněz: dražba propadne, claim zůstane volný
+    Sim.act(w, 'b', { type: 'buyPlot', plotId: 5 });
+    w.players.b.money = 1;
+    for (let i = 0; i < 50 && w.auctions.length; i++) Sim.step(w, 500);
+    assert.strictEqual(w.plots[5].owner, null);
+    assert.ok(w.events.some(e => e.type === 'auction_failed'));
+});
+
+t('shared: oil deal moves stored oil for money', () => {
+    const w = sharedWorld(62);
+    claim(w, 'a', 2); Sim.act(w, 'a', { type: 'buildDerrick', plotId: 2 }); Sim.act(w, 'a', { type: 'buildSilo', plotId: 2 });
+    claim(w, 'b', 5); Sim.act(w, 'b', { type: 'buildDerrick', plotId: 5 }); Sim.act(w, 'b', { type: 'buildSilo', plotId: 5 });
+    Sim.act(w, 'a', { type: 'drill', plotId: 2, x: w.plots[2].x + 10, y: C.GROUND_LEVEL + 40 });
+    Sim.act(w, 'b', { type: 'drill', plotId: 5, x: w.plots[5].x + 10, y: C.GROUND_LEVEL + 40 });
+    const na = Sim.getNetworkForPlot(w, 2), nb = Sim.getNetworkForPlot(w, 5);
+    na.oilStored = 300;
+    assert.strictEqual(Sim.act(w, 'a', { type: 'offerDeal', to: 'b', oil: 500, price: 1.2 }).reason, 'oil');
+    assert.ok(Sim.act(w, 'a', { type: 'offerDeal', to: 'b', oil: 200, price: 1.2 }).ok);
+    assert.strictEqual(Sim.act(w, 'a', { type: 'offerDeal', to: 'b', oil: 50, price: 1 }).reason, 'pending');
+    const offer = w.deals.offers[0];
+    assert.ok(!Sim.act(w, 'a', { type: 'acceptDeal', id: offer.id }).ok, 'only the receiver accepts');
+    const moneyA = w.players.a.money, moneyB = w.players.b.money;
+    assert.ok(Sim.act(w, 'b', { type: 'acceptDeal', id: offer.id }).ok);
+    assert.strictEqual(na.oilStored, 100);
+    assert.strictEqual(nb.oilStored, 200);
+    assert.ok(Math.abs(w.players.b.money - (moneyB - 240)) < 0.01 && Math.abs(w.players.a.money - (moneyA + 240)) < 0.01);
+    assert.strictEqual(w.deals.offers.length, 0);
+    assert.ok(w.events.some(e => e.type === 'deal_done' && e.oil === 200));
+});
+
+t('shared: cartel forms when everyone joins and breaks on the first sale there', () => {
+    const w = sharedWorld(63);
+    assert.strictEqual(Sim.act(w, 'a', { type: 'proposeCartel', buyer: 'right', days: 5 }).reason, 'buyer', 'rail depot not open yet');
+    assert.ok(Sim.act(w, 'a', { type: 'proposeCartel', buyer: 'left', days: 5 }).ok);
+    assert.ok(!w.cartel.active);
+    assert.ok(!Sim.act(w, 'a', { type: 'joinCartel' }).ok, 'proposer is already in');
+    assert.ok(Sim.act(w, 'b', { type: 'joinCartel' }).ok);
+    assert.ok(w.cartel.active && w.cartel.daysLeft === 5);
+    assert.ok(w.events.some(e => e.type === 'cartel_on'));
+    w.trucks.push({ id: 9, owner: 'b', x: 51, state: 'to_company', oil: 100, targetCompany: 'left', facing: -1 });
+    Sim.step(w, 16);
+    assert.strictEqual(w.cartel, null);
+    assert.ok(w.events.some(e => e.type === 'cartel_broken' && e.playerId === 'b'));
+});
+
+t('shared: a bribed strike stops the rival trucks for a while', () => {
+    const w = sharedWorld(64);
+    const truck = { id: 9, owner: 'b', x: 800, state: 'to_company', oil: 100, targetCompany: 'left', facing: -1 };
+    w.trucks.push(truck);
+    const money = w.players.a.money;
+    assert.ok(Sim.act(w, 'a', { type: 'sabotage', target: 'b' }).ok);
+    assert.strictEqual(Sim.act(w, 'a', { type: 'sabotage', target: 'b' }).reason, 'busy');
+    assert.strictEqual(money - w.players.a.money, C.STRIKE_COST);
+    assert.ok(w.events.some(e => e.type === 'strike' && e.playerId === 'b'));
+    Sim.step(w, 1000);
+    assert.strictEqual(truck.x, 800, 'truck stands still');
+    Sim.step(w, C.STRIKE_MS);
+    Sim.step(w, 1000);
+    assert.ok(truck.x < 800, 'truck moves again');
+    assert.ok(w.events.some(e => e.type === 'strike_over'));
 });
 
 console.log(out.join('\n'));

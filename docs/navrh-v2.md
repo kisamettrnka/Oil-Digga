@@ -57,6 +57,8 @@ Hotovo: nepravidelné claimy s terénem (kopec, řeka, skála), mapa geologické
 
 ## Fáze 5: multiplayer postavený na Discordu
 
+Hotovo: dražby claimů (v průběhu hry místo v lobby), obchod s ropou mezi hráči, kartel se zradou, podplacená stávka. Nehotovo: pronájem potrubí a kamionů, přeseknuté potrubí.
+
 - **Smlouvy mezi hráči**: prodej ropy za pevnou cenu, pronájem kapacity (kamiony, potrubí).
 - **Kartel**: hráči se dohodnou na omezení dodávek, cena roste. Kdo tajně dodá víc, vydělá nejvíc, dokud ho ostatní neodhalí.
 - **Aukce claimů** v lobby před startem.

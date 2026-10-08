@@ -63,6 +63,7 @@ let oilPockets = [];
 let plots = [];
 let pipeNetworks = [];
 let hazards = [];         // zrcadlo world.hazards (plyn, voda)
+let auctions = [];        // zrcadlo world.auctions (sdílená mapa)
 let trucks = [];
 let lastBoughtHighlightTimer = 0;
 let lastBoughtPlotId = null;
@@ -205,6 +206,7 @@ function syncFromWorld() {
     isGameOver = me.over;
     gameOverReason = me.reason || '';
     townEra = world.town ? world.town.era : 0;
+    auctions = world.auctions || [];
     day = world.time.day;
     month = world.time.month;
     isGameStarted = world.time.started;
@@ -228,6 +230,10 @@ function syncFromWorld() {
 
 function isMine(thing) {
     return !!thing && thing.owner === myId;
+}
+
+function playerName(id) {
+    return world?.players[id]?.name || 'Hráč';
 }
 
 function playerColor(id) {
@@ -292,11 +298,76 @@ function handleWorldEvents(events) {
         const mine = !e.playerId || e.playerId === myId;
         switch (e.type) {
             case 'plot_bought':
-                if (!mine) break;
+                if (!mine) {
+                    if (e.auction) notify('Claim vydražen', `${playerName(e.playerId)} získal claim ${e.plotId + 1} za $${e.price}`, '', 'flag');
+                    break;
+                }
                 playSound('build');
                 lastBoughtPlotId = e.plotId;
                 lastBoughtHighlightTimer = 30;
-                notify('Pozemek koupen', `Pozemek ${e.plotId + 1} za $${e.price}`, 'cool', 'flag');
+                notify(e.auction ? 'Claim vydražen' : 'Pozemek koupen', `Claim ${e.plotId + 1} za $${e.price}`, 'cool', 'flag');
+                break;
+            case 'auction':
+                if (mine) {
+                    playSound('build');
+                    logEvent(e.start ? `Dražba claimu ${e.plotId + 1} začíná na $${e.amount}.` : `Přihozeno $${e.amount} na claim ${e.plotId + 1}.`);
+                } else {
+                    const outbid = auctions.some(a => a.plotId === e.plotId) || e.start;
+                    notify(e.start ? 'Dražba claimu' : 'Přihodil soupeř', `${playerName(e.playerId)}: claim ${e.plotId + 1} za $${e.amount}${outbid ? '. Klikni na ceduli a přihoď.' : ''}`, 'bad', 'flag');
+                }
+                break;
+            case 'auction_failed':
+                if (mine) notify('Dražba propadla', `Na claim ${e.plotId + 1} nebyly peníze, zůstává volný`, 'bad', 'flag');
+                else logEvent(`Dražba claimu ${e.plotId + 1} propadla.`);
+                break;
+            case 'deal_offer':
+                if (mine) {
+                    playSound('build');
+                    notify('Nabídka ropy', `${playerName(e.from)} nabízí ${e.oil} bbl za $${e.price.toFixed(2)}/bbl`, 'cool', 'barrel');
+                } else if (e.from === myId) logEvent(`Nabídka ${e.oil} bbl poslána hráči ${playerName(e.to)}.`);
+                break;
+            case 'deal_done':
+                if (mine || e.from === myId) {
+                    playSound('sale');
+                    notify('Obchod uzavřen', mine ? `Koupeno ${e.oil} bbl od ${playerName(e.from)} za $${e.amount}` : `Prodáno ${e.oil} bbl hráči ${playerName(e.playerId)} za $${e.amount}`, 'good', 'barrel');
+                }
+                break;
+            case 'deal_declined':
+                if (mine) logEvent(`${playerName(e.to)} nabídku ropy odmítl.`);
+                break;
+            case 'deal_failed':
+                if (mine) notify('Obchod nevyšel', e.reason === 'room' ? 'Nemáš místo v zásobnících' : 'Nemáš dost peněz', 'bad', 'barrel');
+                break;
+            case 'cartel_proposal':
+                if (mine) logEvent(`Navržen kartel proti kupci ${e.name} na ${daysText(e.days)}.`);
+                else notify('Návrh kartelu', `${playerName(e.playerId)}: nevozit kupci ${e.name} ${daysText(e.days)}. Přidej se v zakázkách.`, 'cool', 'wire');
+                break;
+            case 'cartel_join':
+                logEvent(`${mine ? 'Ty' : playerName(e.playerId)} v kartelu.`);
+                break;
+            case 'cartel_on':
+                playSound('build');
+                notify('Kartel platí', `Nikdo nevozí kupci ${e.name} ${daysText(e.days)}. Kdo doveze, zradí.`, 'cool', 'wire');
+                break;
+            case 'cartel_broken':
+                playSound('warn');
+                notify(mine ? 'Zradil jsi kartel' : 'Zrada!', mine ? `Dovezl jsi kupci ${e.name}, kartel padl` : `${playerName(e.playerId)} dovezl kupci ${e.name}, kartel padl`, 'bad', 'skull');
+                break;
+            case 'cartel_end':
+                logEvent(`Kartel proti kupci ${e.name} skončil.`);
+                break;
+            case 'cartel_expired':
+                logEvent(`Návrh kartelu proti kupci ${e.name} vypršel.`);
+                break;
+            case 'strike':
+                if (mine) {
+                    playSound('warn');
+                    notify('Stávka řidičů!', e.by ? `Vozy stojí. Zaplatil ji ${playerName(e.by)}.` : 'Vozy stojí 1,5 dne. Kdo za tím je, se neví.', 'bad', 'warning');
+                } else if (e.by === myId) logEvent(`Stávka u hráče ${playerName(e.playerId)} zaplacena.`);
+                else logEvent(`U hráče ${playerName(e.playerId)} stávkují řidiči.`);
+                break;
+            case 'strike_over':
+                if (mine) notify('Stávka skončila', 'Vozy zase jezdí', 'good', 'wire');
                 break;
             case 'derrick_built':
                 if (!mine) break;
@@ -1211,6 +1282,7 @@ function updateUI() {
     renderActiveNews();
     renderRigPanel();
     renderContracts();
+    renderPlayersPanel();
 
     // Tlačítka
     const buttons = [
@@ -1897,18 +1969,25 @@ function renderContracts() {
     const c = world.contracts;
     const mine = c.active.filter(a => a.owner === myId);
     const canTake = mine.length < OilSim.C.MAX_ACTIVE_CONTRACTS && !isGameOver;
-    if (!c.offers.length && !mine.length) {
+    const deals = (world.deals?.offers || []).filter(d => d.to === myId);
+    const cartel = world.cartel && !world.cartel.active && world.cartel.pending.includes(myId) ? world.cartel : null;
+    if (!c.offers.length && !mine.length && !deals.length && !cartel) {
         if (contractsLayoutKey) {
             box.classList.add('hidden');
             contractsLayoutKey = '';
         }
         return;
     }
-    const key = [c.offers.map(o => o.id).join(), mine.map(a => a.id).join(), canTake].join('|');
+    const key = [c.offers.map(o => o.id).join(), mine.map(a => a.id).join(), canTake, deals.map(d => d.id).join(), cartel ? cartel.buyer + cartel.by : ''].join('|');
     if (key !== contractsLayoutKey) {
         contractsLayoutKey = key;
         box.classList.remove('hidden');
-        box.innerHTML = '<div class="ct-title">Zakázky</div>' +
+        box.innerHTML = '<div class="ct-title">Zakázky a telegramy</div>' +
+            deals.map(d => `<div class="ct-item deal" data-deal="${d.id}">` +
+                `<div class="ct-wire">${playerName(d.from)} nabízí ${d.oil} bbl za $${d.price.toFixed(2)}/bbl, celkem $${Math.round(d.oil * d.price)} stop</div>` +
+                `<div class="ct-meta"><span data-v="dexp"></span><span><button class="ct-decline" data-decline="${d.id}">Odmítnout</button> <button class="ct-accept" data-accept-deal="${d.id}">Přijmout</button></span></div></div>`).join('') +
+            (cartel ? `<div class="ct-item cartel"><div class="ct-wire">${playerName(cartel.by)} navrhuje nevozit kupci ${buyerName(cartel.buyer)} ${daysText(cartel.days)}. Cena tam vyletí, kdo doveze, zradí stop</div>` +
+                `<div class="ct-meta"><span>čeká ${cartel.pending.length} ${cartel.pending.length === 1 ? 'hráč' : 'hráči'}</span><button class="ct-accept" data-join-cartel="1">Přidat se</button></div></div>` : '') +
             mine.map(a => `<div class="ct-item mine" data-active="${a.id}">` +
                 `<div class="ct-wire">${buyerName(a.buyer)}: ${a.amount} bbl za $${a.price.toFixed(2)}</div>` +
                 '<div class="ct-bar"><i></i></div><div class="ct-meta"><span data-v="done"></span><span data-v="left"></span></div></div>').join('') +
@@ -1928,6 +2007,11 @@ function renderContracts() {
         if (doneEl.textContent !== done) doneEl.textContent = done;
         if (leftEl.textContent !== left) leftEl.textContent = left;
     });
+    deals.forEach(d => {
+        const el = box.querySelector(`[data-deal="${d.id}"] [data-v="dexp"]`);
+        const text = `platí ${daysText(d.expiresIn)}`;
+        if (el && el.textContent !== text) el.textContent = text;
+    });
     c.offers.forEach(o => {
         const el = box.querySelector(`[data-offer="${o.id}"] [data-v="exp"]`);
         const text = `nabídka platí ${daysText(o.expiresIn)}`;
@@ -1936,9 +2020,81 @@ function renderContracts() {
 }
 
 function handleContractsClick(event) {
-    const button = event.target.closest('[data-accept]');
+    const button = event.target.closest('button');
     if (!button || button.disabled) return;
-    doAction({ type: 'acceptContract', id: Number(button.dataset.accept) });
+    const d = button.dataset;
+    if (d.accept !== undefined) doAction({ type: 'acceptContract', id: Number(d.accept) });
+    else if (d.acceptDeal !== undefined) doAction({ type: 'acceptDeal', id: Number(d.acceptDeal) });
+    else if (d.decline !== undefined) doAction({ type: 'declineDeal', id: Number(d.decline) });
+    else if (d.joinCartel !== undefined) doAction({ type: 'joinCartel' });
+}
+
+// --- Soupeři (sdílená mapa): nabídka ropy, kartel, stávka ---
+let playersLayoutKey = '';
+
+// Rychlá nabídka: 100 barelů za 85 % mé nejlepší výkupní ceny
+function quickDealTerms() {
+    const best = Math.max(0.3, ...world.market.order.map(id => world.market[id]).filter(b => !b.closed).map(b => b.quote));
+    return { oil: 100, price: Math.round(best * 0.85 * 20) / 20 };
+}
+
+// Kartel má smysl proti kupci s největším odběrem (nejvíc mu vyschne sklad)
+function cartelTarget() {
+    return world.market.order.map(id => world.market[id]).filter(b => b.open).sort((a, b) => b.demand - a.demand)[0];
+}
+
+function renderPlayersPanel() {
+    const box = document.getElementById('hud-players');
+    if (!box) return;
+    const rivals = sharedMode && world ? world.playerOrder.filter(id => id !== myId) : [];
+    if (!rivals.length || isGameOver) {
+        if (playersLayoutKey) {
+            box.classList.add('hidden');
+            playersLayoutKey = '';
+        }
+        return;
+    }
+    const me = world.players[myId];
+    const stored = OilSim.storedOil(world, myId);
+    const terms = quickDealTerms();
+    const target = cartelTarget();
+    const cartel = world.cartel;
+    const rows = rivals.map(id => {
+        const p = world.players[id];
+        const pendingDeal = world.deals.offers.some(d => d.from === myId && d.to === id);
+        return {
+            id, name: p.name, color: p.color, over: p.over,
+            state: p.over ? 'mimo hru' : (p.strikeMs > 0 ? 'stávka' : (cartel?.members.includes(id) ? 'v kartelu' : '')),
+            deal: { label: pendingDeal ? 'Nabídka visí' : `Ropa ${terms.oil} bbl · $${terms.price.toFixed(2)}`, disabled: p.over || pendingDeal || stored < terms.oil },
+            strike: { label: `Stávka $${OilSim.C.STRIKE_COST}`, disabled: p.over || p.strikeMs > 0 || me.money < OilSim.C.STRIKE_COST }
+        };
+    });
+    const cartelBtn = { label: cartel ? (cartel.active ? 'Kartel běží' : 'Kartel navržen') : (target ? `Kartel: ${target.name}` : 'Kartel'), disabled: !!cartel || !target };
+    const cartelLine = cartel ? (cartel.active ? `Kartel: nevozit kupci ${buyerName(cartel.buyer)} ještě ${daysText(cartel.daysLeft)}.` : `Návrh kartelu proti kupci ${buyerName(cartel.buyer)}, čeká ${cartel.pending.length}.`) : '';
+    const key = JSON.stringify([rows, cartelBtn, cartelLine]);
+    if (key !== playersLayoutKey) {
+        playersLayoutKey = key;
+        box.classList.remove('hidden');
+        box.innerHTML = '<div class="pl-title">Soupeři</div>' +
+            rows.map(r => `<div class="pl-row">` +
+                `<div class="pl-name"><span class="pl-dot" style="background:${r.color}"></span>${r.name}<span class="pl-state">${r.state}</span></div>` +
+                `<div class="pl-actions"><button class="pl-btn deal" data-deal-to="${r.id}"${r.deal.disabled ? ' disabled' : ''}>${r.deal.label}</button>` +
+                `<button class="pl-btn strike" data-strike="${r.id}"${r.strike.disabled ? ' disabled' : ''}>${r.strike.label}</button></div></div>`).join('') +
+            `<div class="pl-actions"><button class="pl-btn cartel" data-cartel="1"${cartelBtn.disabled ? ' disabled' : ''}>${cartelBtn.label}</button></div>` +
+            (cartelLine ? `<div class="pl-cartel">${cartelLine}</div>` : '');
+    }
+}
+
+function handlePlayersClick(event) {
+    const button = event.target.closest('button');
+    if (!button || button.disabled) return;
+    const d = button.dataset;
+    if (d.dealTo) doAction({ type: 'offerDeal', to: d.dealTo, ...quickDealTerms() });
+    else if (d.strike) doAction({ type: 'sabotage', target: d.strike });
+    else if (d.cartel) {
+        const target = cartelTarget();
+        if (target) doAction({ type: 'proposeCartel', buyer: target.id, days: 5 });
+    }
 }
 
 // Nová éra města: zvláštní vydání novin
@@ -3552,8 +3708,24 @@ function getPurchasablePlotAt(clickPos, groundLevel) {
         clickPos.x >= p.x && clickPos.x < p.x + p.width) || null;
 }
 
+// Další příhoz v dražbě: aspoň o 25, jinak o desetinu
+function nextBid(auction) {
+    return auction.amount + Math.max(OilSim.C.AUCTION_MIN_RAISE, Math.round(auction.amount * 0.1 / 5) * 5);
+}
+
 function tryPurchasePlot(plot, groundLevel) {
     if (!plot || plot.owner) return 'none';
+    const auction = auctions.find(a => a.plotId === plot.id);
+    if (auction) {
+        if (auction.bidder === myId) return 'none';
+        const amount = nextBid(auction);
+        if (money < amount) {
+            plotBlinkTimers[plot.id] = 20;
+            return 'too_expensive';
+        }
+        doAction({ type: 'bid', plotId: plot.id, amount });
+        return 'bought';
+    }
     if (money >= plot.price) {
         doAction({ type: 'buyPlot', plotId: plot.id });
         updatePlotSignHitboxes(groundLevel);
@@ -3637,7 +3809,8 @@ function drawPlots(groundLevel) {
             const signWidth = sign.width;
             const signHeight = sign.height;
             const postHeight = PLOT_SIGN_POST;
-            const canAfford = money >= plot.price;
+            const auction = auctions.find(a => a.plotId === plot.id);
+            const canAfford = money >= (auction ? nextBid(auction) : plot.price);
             const plotHovered = isPlotSurfaceHovered(plot, groundLevel);
             const signHovered = isPlotSignHovered(sign);
             const isHovered = plotHovered || signHovered;
@@ -3678,12 +3851,22 @@ function drawPlots(groundLevel) {
             ctx.font = PLOT_SIGN_FONT;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillStyle = canAfford ? '#ffd98a' : '#ff8a70';
-            ctx.fillText(`$${plot.price}`, plot.x + plot.width / 2, signY + signHeight / 2 - 4);
-            // Terén a šířka claimu drobně pod cenou
-            ctx.font = '700 8.5px "Barlow Condensed", system-ui, sans-serif';
-            ctx.fillStyle = 'rgba(255, 225, 180, 0.7)';
-            ctx.fillText(`${OilSim.terrainOf(plot).name.toUpperCase()} · ${Math.round(plot.width)} m`, plot.x + plot.width / 2, signY + signHeight - 8);
+            if (auction) {
+                // Dražba: aktuální příhoz, kdo vede a kolik sekund zbývá
+                const leading = auction.bidder === myId;
+                ctx.fillStyle = leading ? '#9fe3a8' : '#ffb27a';
+                ctx.fillText(`$${auction.amount}`, plot.x + plot.width / 2, signY + signHeight / 2 - 4);
+                ctx.font = '700 8.5px "Barlow Condensed", system-ui, sans-serif';
+                ctx.fillStyle = leading ? 'rgba(160, 230, 170, 0.9)' : 'rgba(255, 190, 150, 0.9)';
+                ctx.fillText(`DRAŽBA · ${leading ? 'VEDEŠ' : playerName(auction.bidder).toUpperCase()} · ${Math.ceil(auction.timer / 1000)} s`, plot.x + plot.width / 2, signY + signHeight - 8);
+            } else {
+                ctx.fillStyle = canAfford ? '#ffd98a' : '#ff8a70';
+                ctx.fillText(`$${plot.price}`, plot.x + plot.width / 2, signY + signHeight / 2 - 4);
+                // Terén a šířka claimu drobně pod cenou
+                ctx.font = '700 8.5px "Barlow Condensed", system-ui, sans-serif';
+                ctx.fillStyle = 'rgba(255, 225, 180, 0.7)';
+                ctx.fillText(`${OilSim.terrainOf(plot).name.toUpperCase()} · ${Math.round(plot.width)} m`, plot.x + plot.width / 2, signY + signHeight - 8);
+            }
 
             if (plotBlinkTimers[plot.id] && plotBlinkTimers[plot.id] % 4 < 2) {
                 ctx.fillStyle = 'rgba(255, 60, 40, 0.4)';
@@ -4870,6 +5053,19 @@ function pathRoundRect(x, y, w, h, r) {
 }
 
 // Cisterna, kabina vpravo. facing = -1 ji zrcadlí (jede doleva). loadRatio 0–1 = hladina v okénku.
+// Cedulka STÁVKA nad stojícím vozem
+function drawStrikeTag(x, y) {
+    ctx.save();
+    ctx.font = '700 9px "Barlow Condensed", system-ui, sans-serif';
+    const w = ctx.measureText('STÁVKA').width + 10;
+    fillPaper(x - w / 2, y - 7, w, 14, 1.5, Math.sin(x) * 0.05);
+    ctx.fillStyle = INK_RED;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('STÁVKA', x, y + 0.5);
+    ctx.restore();
+}
+
 // Koňský povoz s cisternovým sudem; phase (ujetá vzdálenost) hýbe nohama koně a koly
 function drawOilWagon(x, baseY, facing, color, loadRatio, phase) {
     const step = phase * 0.12;
@@ -5088,6 +5284,7 @@ function drawTrucks(groundLevel) {
         ctx.ellipse(renderX - 4, baseY + 1, 44, 4, 0, 0, Math.PI * 2);
         ctx.fill();
         const moving = truck.state !== 'waiting_at_rig';
+        if ((world?.players[truck.owner]?.strikeMs || 0) > 0) drawStrikeTag(renderX, baseY - 44);
         if (townEra < 2) { // do éry železnice koňský povoz s sudem
             drawOilWagon(renderX, baseY, facing, color, truck.oil / TRUCK_CAPACITY, moving ? truck.x : 0);
         } else {
@@ -5570,6 +5767,7 @@ function cancelBuildMode(clearDerrick = true) {
 function addEventListeners() {
     document.getElementById('hud-rig')?.addEventListener('click', handleRigPanelClick);
     document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
+    document.getElementById('hud-players')?.addEventListener('click', handlePlayersClick);
     document.getElementById('map-btn')?.addEventListener('click', () => toggleSurveyMap());
     document.getElementById('map-close')?.addEventListener('click', () => toggleSurveyMap(false));
     document.getElementById('map-canvas')?.addEventListener('click', handleMapClick);

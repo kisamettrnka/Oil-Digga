@@ -502,6 +502,7 @@ button:disabled {
 .survey,
 #hud-rig,
 #hud-contracts,
+#hud-players,
 #hud-goals,
 #hud-race,
 #hud-rig,
@@ -1722,4 +1723,96 @@ button:disabled {
 #stage.map-open #hud-contracts,
 #stage.map-open #hud-toasts {
     display: none;
+}
+
+/* --- Soupeři na sdílené mapě: seznam s razítky akcí (telegraf mezi hráči) --- */
+#hud-players {
+    position: absolute;
+    left: 0.8em;
+    top: 24.5em;
+    width: 19em;
+    padding: 0.55em 0.8em 0.6em;
+    transform: rotate(-0.4deg);
+    border-radius: 0.15em;
+    font-size: 0.88em;
+}
+#hud-players .pl-title {
+    font-family: 'Rye', Georgia, serif;
+    font-size: 1.05em;
+    padding-bottom: 0.25em;
+    border-bottom: 1px solid rgba(26, 18, 11, 0.45);
+}
+#hud-players .pl-row {
+    padding: 0.4em 0 0.35em;
+    border-bottom: 1px dashed rgba(26, 18, 11, 0.35);
+}
+#hud-players .pl-row:last-child { border-bottom: none; }
+#hud-players .pl-name {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    font-family: 'Courier Prime', monospace;
+    font-weight: 700;
+    font-size: 0.9em;
+}
+#hud-players .pl-dot {
+    width: 0.7em;
+    height: 0.7em;
+    border-radius: 50%;
+    border: 1px solid rgba(26, 18, 11, 0.6);
+}
+#hud-players .pl-state {
+    margin-left: auto;
+    font: 700 0.8em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--stamp-red);
+}
+#hud-players .pl-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3em;
+    margin-top: 0.3em;
+}
+#hud-players .pl-btn,
+#hud-contracts .ct-decline {
+    --stamp: var(--ink);
+    padding: 0.1em 0.45em 0.05em;
+    font: 700 0.8em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    background: rgba(255, 240, 210, 0.12);
+    border: 2px solid var(--stamp);
+    border-radius: 0.2em;
+    cursor: pointer;
+}
+#hud-players .pl-btn:hover:not(:disabled),
+#hud-contracts .ct-decline:hover:not(:disabled) { background: rgba(255, 240, 210, 0.3); }
+#hud-players .pl-btn:disabled,
+#hud-contracts .ct-decline:disabled { opacity: 0.4; cursor: default; }
+#hud-players .pl-btn.deal { --stamp: var(--stamp-green); }
+#hud-players .pl-btn.cartel { --stamp: var(--stamp-blue); }
+#hud-players .pl-btn.strike,
+#hud-contracts .ct-decline { --stamp: var(--stamp-red); }
+#hud-players .pl-cartel {
+    margin-top: 0.4em;
+    font-family: 'Courier Prime', monospace;
+    font-size: 0.78em;
+    color: var(--stamp-blue);
+}
+#hud-contracts .ct-item.deal .ct-wire::before {
+    content: 'Telegram · ';
+    color: var(--stamp-blue);
+}
+#hud-contracts .ct-item.cartel .ct-wire::before {
+    content: 'Kartel · ';
+    color: var(--stamp-blue);
+}
+@container (max-width: 1200px) {
+    #hud-players {
+        top: 18em;
+        width: 15em;
+        font-size: 0.8em;
+    }
 }

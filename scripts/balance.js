@@ -12,7 +12,7 @@ function makeBot(w, pid, opts) {
     function myPlots() { return w.plots.filter(p => p.owner === pid); }
     function expand() {
         const p = w.players[pid];
-        if (p.over || st.wells.length >= o.maxWells) return;
+        if (p.over || st.wells.length >= o.maxWells || st.pending) return;
         // nejlevnější volný pozemek, nad kterým (do 250 px) je netěžené ložisko
         const cands = w.plots.filter(pl => !pl.owner).map(pl => {
             const cx = pl.x + pl.width / 2;
@@ -26,8 +26,15 @@ function makeBot(w, pid, opts) {
         const cost = c.pl.price + C.VRT_COST + C.SEISMIC_COST + drillEstimate + C.SILO_COST * o.silos + C.TRUCK_COST * o.trucksPerWell;
         if (p.money < cost + o.reserve) return;
         Sim.act(w, pid, { type: 'buyPlot', plotId: c.pl.id });
+        // Sdílená mapa: koupě je dražba, stavět jde až po vítězství (viz develop)
+        if (w.shared) { st.pending = { plot: c.pl, pk: c.pk }; return; }
+        develop(c.pl, c.pk);
+    }
+    function develop(pl, pk) {
+        const p = w.players[pid];
         p.money -= C.SEISMIC_COST; // průzkum
-        Sim.act(w, pid, { type: 'buildDerrick', plotId: c.pl.id });
+        Sim.act(w, pid, { type: 'buildDerrick', plotId: pl.id });
+        const c = { pl, pk };
         for (let i = 0; i < o.silos; i++) Sim.act(w, pid, { type: 'buildSilo', plotId: c.pl.id });
         const cx = c.pl.x + c.pl.width / 2;
         const tx = c.pk.x + c.pk.width / 2, ty = c.pk.y + c.pk.height / 2;
@@ -39,6 +46,14 @@ function makeBot(w, pid, opts) {
     function service() {
         const p = w.players[pid];
         if (p.over) return;
+        if (st.pending) { // dražba: vyhráli jsme, nebo nás přehodili
+            const { plot, pk } = st.pending;
+            const auction = w.auctions.find(a => a.plotId === plot.id);
+            if (plot.owner === pid) { st.pending = null; develop(plot, pk); }
+            else if (auction && auction.bidder !== pid && p.money > auction.amount + C.AUCTION_MIN_RAISE + o.reserve && auction.amount < plot.price * 2) {
+                Sim.act(w, pid, { type: 'bid', plotId: plot.id, amount: auction.amount + C.AUCTION_MIN_RAISE });
+            } else if (!auction || plot.owner) st.pending = null;
+        }
         w.pipeNetworks.forEach(n => {
             if (n.owner !== pid) return;
             if (n.drillState === 'kick') Sim.act(w, pid, { type: 'bop', plotId: n.derrickId });
