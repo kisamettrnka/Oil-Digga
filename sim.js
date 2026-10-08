@@ -171,25 +171,26 @@
     const BUYER_IDS = BUYERS.map(b => b.id);
 
     // --- Mimořádné zprávy ---
-    // Události ze světa na pár dní mění trh (násobí výkupní cenu, zavírají výkupce) nebo pravidla.
+    // Dobové (1880–1910) události na pár dní mění trh (násobí výkupní cenu, zavírají výkupce) nebo pravidla.
     // left = Rafinerie, right = Nádraží. Spouští se při přechodu dne; náhoda je odvozená ze seedu
     // a pořadí dne, takže v závodě mají všichni stejné zprávy ve stejný den.
     const NEWS = [
-        { key: 'tariffs', title: 'Trump uvalil cla na dovoz ropy', desc: 'Domácí ropa je žádanější: rafinerie přidává, export vázne.', days: 6, effects: { left: 1.35, right: 0.9 } },
-        { key: 'hormuz', title: 'Írán uzavřel Hormuzský průliv', desc: 'Svět se bojí nedostatku ropy: export letí vzhůru, ve městě to je znát míň.', days: 5, effects: { all: 1.2, right: 1.5 } },
-        { key: 'opec_cut', title: 'OPEC+ škrtá těžbu', desc: 'Méně ropy na trhu, všichni kupci přidávají.', days: 8, effects: { all: 1.25 } },
-        { key: 'opec_flood', title: 'OPEC zaplavil trh levnou ropou', desc: 'Cenová válka: kupci srážejí ceny.', days: 7, effects: { all: 0.7 } },
+        { key: 'tariffs', title: 'Kongres uvalil cla na dovoz ropy', desc: 'Domácí ropa je žádanější: rafinerie přidává, export vázne.', days: 6, effects: { left: 1.35, right: 0.9 } },
+        { key: 'hormuz', title: 'Válka na Balkáně: Evropa shání ropu', desc: 'Svět se bojí nedostatku: export letí vzhůru, ve městě to je znát míň.', days: 5, effects: { all: 1.2, right: 1.5 } },
+        { key: 'opec_cut', title: 'Pensylvánské vrty vysychají', desc: 'Méně ropy na trhu, všichni kupci přidávají.', days: 8, effects: { all: 1.25 } },
+        { key: 'opec_flood', title: 'Nový gejzír v Texasu zaplavil trh', desc: 'Cenová válka: kupci srážejí ceny.', days: 7, effects: { all: 0.7 } },
         { key: 'rail_strike', title: 'Stávka železničářů', desc: 'Nádraží nevykupuje, vozy jezdí jinam.', days: 3, effects: { rightClosed: true }, requires: 'right' },
         { key: 'refinery_fire', title: 'Požár v rafinerii Černé zlato', desc: 'Rafinerie stojí, ostatní kupci přidávají.', days: 3, effects: { leftClosed: true, lamps: 1.15, right: 1.15 } },
-        { key: 'sanctions', title: 'Sankce na ruskou ropu', desc: 'Evropa shání ropu jinde: export přes nádraží vynáší.', days: 6, effects: { right: 1.4 }, requires: 'right' },
-        { key: 'recession', title: 'Recese: lidé šetří', desc: 'Poptávka padá u všech kupců.', days: 10, effects: { all: 0.8 } },
-        { key: 'hurricane', title: 'Hurikán zavřel plošiny v Mexickém zálivu', desc: 'Konkurence stojí, ropa z pouště je zlatá.', days: 4, effects: { all: 1.3 } },
+        { key: 'sanctions', title: 'Standard Oil skupuje vše na východě', desc: 'Trust platí za export po trati víc než kdy dřív.', days: 6, effects: { right: 1.4 }, requires: 'right' },
+        { key: 'recession', title: 'Panika na burze: lidé šetří', desc: 'Poptávka padá u všech kupců.', days: 10, effects: { all: 0.8 } },
+        { key: 'hurricane', title: 'Hurikán zavřel přístav v Galvestonu', desc: 'Konkurence z pobřeží stojí, ropa z pouště je zlatá.', days: 4, effects: { all: 1.3 } },
+        { key: 'eco_law', title: 'Městská rada: pokuty za erupce dvojnásobné', desc: 'Radní mají dost ropy v ulicích.', days: 10, effects: { fineMult: 2 } },
+        { key: 'tax_break', title: 'Guvernér odpustil daň z pozemků', desc: 'Těžaři mají prázdniny od daní.', days: 5, effects: { taxMult: 0 } },
+        { key: 'driver_shortage', title: 'Vozkové odešli na zlatou horečku', desc: 'Chybí ruce na kozlíku, vozy jezdí pomaleji.', days: 5, effects: { truckSpeed: 0.7 }, maxEra: 1 },
+        { key: 'driver_shortage_auto', title: 'Šoféři stávkují za vyšší mzdu', desc: 'Kamiony jezdí s poloviční posádkou, pomaleji.', days: 5, effects: { truckSpeed: 0.7 }, minEra: 2 },
         { key: 'cold_winter', title: 'Tuhá zima', desc: 'Lidé svítí a topí: petrolejka a rafinerie přidávají.', days: 6, effects: { lamps: 1.5, left: 1.15 } },
         { key: 'edison', title: 'Edison rozsvítil první ulici', desc: 'Elektřina vytlačuje lampy, petrolejka bere míň.', days: 8, effects: { lamps: 0.6 }, minEra: 2 },
-        { key: 'ford_t', title: 'Ford spustil pásovou výrobu', desc: 'Aut přibývá, benzinka platí víc.', days: 8, effects: { garage: 1.5 }, requires: 'garage' },
-        { key: 'eco_law', title: 'Nový ekologický zákon', desc: 'Pokuty za erupce se zdvojnásobují.', days: 10, effects: { fineMult: 2 } },
-        { key: 'tax_break', title: 'Daňové prázdniny pro těžaře', desc: 'Stát odpustil daň z pozemků.', days: 5, effects: { taxMult: 0 } },
-        { key: 'driver_shortage', title: 'Řidiči odešli na zlatou horečku', desc: 'Chybí šoféři, kamiony jezdí pomaleji.', days: 5, effects: { truckSpeed: 0.7 } }
+        { key: 'ford_t', title: 'Ford spustil pásovou výrobu', desc: 'Aut přibývá, benzinka platí víc.', days: 8, effects: { garage: 1.5 }, requires: 'garage' }
     ];
     const NEWS_FIRST_DAY = 5;            // první zpráva kolem pátého dne
     const NEWS_GAP_MIN = 6;              // pak každých 6–11 dní
@@ -509,7 +510,7 @@
             const rand = dayRandom(world);
             const era = world.town ? world.town.era : 0;
             const pool = NEWS.filter(n => !news.active.some(a => a.key === n.key) && n.key !== news.lastKey &&
-                (!n.requires || world.market[n.requires]?.open) && era >= (n.minEra || 0));
+                (!n.requires || world.market[n.requires]?.open) && era >= (n.minEra || 0) && era <= (n.maxEra ?? 9));
             const pick = pool[Math.floor(rand() * pool.length)];
             news.active.push({ key: pick.key, title: pick.title, desc: pick.desc, days: pick.days, daysLeft: pick.days, effects: pick.effects });
             news.lastKey = pick.key;

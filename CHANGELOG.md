@@ -4,6 +4,13 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Průvodce první hrou
+- Nová sólo hra vede hráče desíti radami na lístku pod lištou zdrojů: claim, vrt, trasa vrtu, preventer a korunka, povoz, kupci a sklady, tlak, zakázky, mapa, éry. Tlačítko, o kterém je řeč, pulzuje. Průvodce jde přeskočit, po dokončení se už neukáže, v Předvolbách jde vypnout.
+
+### Dobové zprávy a nebe
+- Mimořádné zprávy jsou z let 1880–1910: cla Kongresu, válka na Balkáně, vysychající Pensylvánie, gejzír v Texasu, Standard Oil, panika na burze, hurikán v Galvestonu. Některé chodí jen v určité éře (vozkové vs. šoféři, Edison, Ford).
+- Nad táborem létá horkovzdušný balon, vzducholoď přiletí až s Železnicí a dvouplošník s Automobilem.
+
 ### Ropovod a vlečka
 - Vrt může mít vlastní odbyt bez vozů: od Boomtownu ropovod k libovolnému kupci (cena podle vzdálenosti, 40 bbl/den), od Železnice vlečka na nádraží ($700, 100 bbl/den). Staví se z Vrtného protokolu, kupec platí za stálý odběr o 8 % víc a stávka na něj nemá vliv.
 - Ropovod se zastaví, když má kupec zásobu na den a víc, aby mu nesrazil cenu (zásoba na půl dne); vozy mezitím odvezou zbytek jinam.

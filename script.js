@@ -93,12 +93,13 @@ const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
 // Předvolby hráče: patří jen tomuto prohlížeči, svět hry nikdy nemění
 const PREFS_KEY = 'oilDiggaPrefs';
-const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true };
+const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true, guide: true };
 const PREF_FIELDS = [
     { key: 'sound', label: 'Zvuk', options: [[true, 'Zapnutý'], [false, 'Vypnutý', 'klávesa M']] },
     { key: 'volume', label: 'Hlasitost', options: [[0.25, 'Tichá'], [0.5, 'Střední'], [0.85, 'Hlasitá']] },
     { key: 'shake', label: 'Otřesy', options: [[true, 'Ano', 'erupce a výbuchy třesou obrazem'], [false, 'Ne']] },
     { key: 'life', label: 'Život', options: [[true, 'Plný', 'chodci, provoz, letadla, ohňostroje'], [false, 'Úsporný', 'klidné město, méně kouře, šetří výkon']] },
+    { key: 'guide', label: 'Průvodce', options: [[true, 'Ano', 'rady krok za krokem v nové sólo hře'], [false, 'Ne']] },
     { key: 'newsFlash', label: 'Noviny', options: [[true, 'Zvláštní vydání', 'přes obrazovku'], [false, 'Telegramem', 'krátce v rohu']] },
     { key: 'ads', label: 'Reklamy', options: [[true, 'Zobrazovat'], [false, 'Skrýt']], visible: () => adsAvailable() }
 ];
@@ -199,6 +200,7 @@ function resetLocalUi() {
     document.getElementById('hud-toasts').innerHTML = '';
     document.getElementById('news-flash')?.classList.add('hidden');
     toggleSurveyMap(false);
+    resetGuide();
 }
 
 // Zrcadlí svět do globálních proměnných, které čte kreslení a HUD
@@ -674,13 +676,20 @@ function drawSkyLife(groundLevel) {
         ctx.stroke();
     }
 
-    // Reklamní vzducholoď s vlečným transparentem a světlometem na město
-    const blimp = flightProgress(90, 70, 20);
+    // Nebe podle éry: v táboře horkovzdušný balon, vzducholoď od Železnice, dvouplošník od Automobilu
     blimpHitRect = null;
-    if (blimp === null) blimpAd = undefined;
-    else {
-        if (blimpAd === undefined) blimpAd = pickAd(); // jedna reklama na celý přelet
-        drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+    if (townEra >= 2) {
+        // Reklamní vzducholoď s vlečným transparentem a světlometem na město
+        const blimp = flightProgress(90, 70, 20);
+        if (blimp === null) blimpAd = undefined;
+        else {
+            if (blimpAd === undefined) blimpAd = pickAd(); // jedna reklama na celý přelet
+            drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+        }
+    } else {
+        blimpAd = undefined;
+        const balloon = flightProgress(80, 60, 12);
+        if (balloon !== null) drawBalloon(-80 + balloon * (canvas.width + 200), backY - 90 + Math.sin(t * 0.5) * 10, t);
     }
 
     // Netopýři
@@ -700,8 +709,8 @@ function drawSkyLife(groundLevel) {
         }
     }
 
-    // Dvouplošník s navigačními světly a kouřovou stopou
-    const plane = flightProgress(27, 11, 0);
+    // Dvouplošník s navigačními světly a kouřovou stopou (až v automobilové éře)
+    const plane = townEra >= 3 ? flightProgress(27, 11, 0) : null;
     if (plane !== null) drawBiplane(canvas.width + 80 - plane * (canvas.width + 160), 58 + Math.sin(t * 1.4) * 8, -1);
 
     drawFireworks();
@@ -890,6 +899,46 @@ function drawBlimpBanner(ax, ay, t, ad) {
         drawGlow(l.x, l.y + 3, 9, '255, 190, 110', 0.7);
     }
     return w;
+}
+
+// Horkovzdušný balon s hořákem, který občas šlehne a prosvítí obal
+function drawBalloon(x, y, t) {
+    const burn = Math.sin(t * 1.3) > 0.7;
+    ctx.save();
+    const r = 26;
+    const skin = ctx.createRadialGradient(x - 6, y - 8, 4, x, y, r);
+    skin.addColorStop(0, burn ? '#b86a3a' : '#4a3038');
+    skin.addColorStop(0.6, burn ? '#6e3d33' : '#2f2230');
+    skin.addColorStop(1, '#1a1420');
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 1.15, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)'; // svislé pruhy
+    ctx.lineWidth = 1;
+    for (let k = -2; k <= 2; k++) {
+        ctx.beginPath();
+        ctx.ellipse(x, y, Math.abs(k) * r / 2.6 + 0.1, r * 1.15, 0, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(200, 210, 250, 0.45)'; // měsíc na boku
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 1.15, 0, Math.PI * 1.15, Math.PI * 1.6);
+    ctx.stroke();
+    ctx.strokeStyle = '#2a1c12'; // lana a koš
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y + r);
+    ctx.lineTo(x - 5, y + r + 22);
+    ctx.moveTo(x + 12, y + r);
+    ctx.lineTo(x + 5, y + r + 22);
+    ctx.stroke();
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(x - 7, y + r + 22, 14, 8);
+    if (burn) drawGlow(x, y + r + 10, 22, '255, 170, 70', 0.7);
+    else drawGlow(x, y + r + 12, 8, '255, 170, 70', 0.5);
+    ctx.restore();
 }
 
 function drawBiplane(x, y, dir) {
@@ -1325,6 +1374,7 @@ function updateUI() {
     renderRigPanel();
     renderContracts();
     renderPlayersPanel();
+    renderGuide();
 
     // Tlačítka
     const buttons = [
@@ -1576,6 +1626,7 @@ function toggleSurveyMap(force) {
     const next = force ?? !mapOpen;
     if (next === mapOpen) return;
     mapOpen = next;
+    if (mapOpen) guideMapOpened = true;
     document.getElementById('hud-map')?.classList.toggle('hidden', !mapOpen);
     document.getElementById('stage')?.classList.toggle('map-open', mapOpen);
     document.getElementById('map-btn')?.classList.toggle('active', mapOpen);
@@ -2166,6 +2217,67 @@ function showEraNews(e) {
         desc: e.desc,
         market: opened.length ? `nově kupuje ${opened.join(', ')}` : 'kupci berou víc ropy'
     });
+}
+
+// --- Průvodce první hrou ---
+// Jen sólo, dokud ho hráč nedokončí nebo nepřeskočí (localStorage), nebo nevypne v předvolbách.
+// Krok se posune, když je splněný; zvýrazní tlačítko, kterého se týká.
+const GUIDE_KEY = 'oilDiggaGuideDone';
+const GUIDE_STEPS = [
+    { title: 'Kup claim', text: 'Klikni na cedulku s cenou nad volným claimem. Cedule říká terén a šířku: kopec zdražuje stavby, řeka zlevňuje vodu, pod skálou je žula.', done: () => plots.some(p => isMine(p)) },
+    { title: 'Postav vrt', text: 'Zvol Vrt v objednávkovém listu dole a klikni na svůj claim.', done: () => plots.some(p => isMine(p) && p.hasVrt), hl: 'vrt-btn' },
+    { title: 'Naplánuj vrt', text: 'Klikej do podzemí: každý klik je bod trasy. Cedulka u kurzoru ukazuje cenu a čas, řez ukazuje horniny. Pískovec jde rychle, žula je drahá a tupí korunku.', done: () => pipeNetworks.some(n => isMine(n) && n.path.length > 1) },
+    { title: 'Trefit ložisko', text: 'Vrták jede sám a platí se za metr. Když narazí na plyn, klikni na vrt a zavři preventer. Tupou korunku vyměň ve Vrtném protokolu vlevo dole.', done: () => pipeNetworks.some(n => isMine(n) && n.pocket >= 0) },
+    { title: 'Kup povoz', text: 'Ropa teče do zásobníku vrtu. Kup povoz, sám si vybere kupce, který platí nejlíp.', done: () => trucksOwned > 0, hl: 'truck-btn' },
+    { title: 'První prodej', text: 'Kupci ve městě mají sklad: plný sklad platí míň, prázdný víc. Petrolejka platí nejvíc, ale málo bere, rafinerie bere pořád.', done: () => totalOilSold > 0 },
+    { title: 'Hlídej tlak', text: 'Plný zásobník zvedá tlak. Odvez ropu, nebo klikni na vrt a odpusť ventil, jinak přijde erupce a pokuta. Silo zásobník zvětší.', done: () => day >= 4 || plots.some(p => isMine(p) && p.siloCount > 0), hl: 'silo-btn' },
+    { title: 'Zakázky', text: 'Kupci posílají telegramy se zakázkou: pevná cena, termín, penále za nedodání. Ber jen to, co utěžíš.', done: () => world.contracts.active.some(c => c.owner === myId) || day >= 12 },
+    { title: 'Mapa průzkumu', text: 'Stiskni G: list s claimy, vrstvami a vším, co znáš. Seismika a georadar odhalí ložiska i plyn.', done: () => guideMapOpened, hl: 'map-btn' },
+    { title: 'Město roste', text: 'Dodaná ropa posouvá město do další éry: víc kupců, nádraží, kamiony místo povozů, ropovody. Teď už víš dost. Hodně štěstí.', done: () => false, final: true }
+];
+let guideStep = -1;
+let guideMapOpened = false;
+let guideLayoutKey = '';
+
+function guideDone() {
+    try { return localStorage.getItem(GUIDE_KEY) === '1'; } catch (e) { return false; }
+}
+
+function finishGuide() {
+    try { localStorage.setItem(GUIDE_KEY, '1'); } catch (e) { /* bez úložiště se průvodce ukáže znovu */ }
+    guideStep = -1;
+    renderGuide();
+}
+
+function resetGuide() {
+    guideMapOpened = false;
+    guideStep = !raceMode && !sharedMode && prefs.guide && !guideDone() ? 0 : -1;
+}
+
+function renderGuide() {
+    const box = document.getElementById('hud-guide');
+    if (!box) return;
+    if (guideStep >= 0 && (raceMode || sharedMode || !prefs.guide || isGameOver)) guideStep = -1;
+    while (guideStep >= 0 && guideStep < GUIDE_STEPS.length - 1 && GUIDE_STEPS[guideStep].done()) guideStep++;
+    const step = guideStep >= 0 ? GUIDE_STEPS[guideStep] : null;
+    const key = step ? `${guideStep}` : '';
+    if (key === guideLayoutKey) return;
+    document.querySelectorAll('.guide-hl').forEach(el => el.classList.remove('guide-hl'));
+    guideLayoutKey = key;
+    if (!step) {
+        box.classList.add('hidden');
+        return;
+    }
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="guide-head"><span class="guide-stamp">Rada ${guideStep + 1}/${GUIDE_STEPS.length}</span><span class="guide-title">${step.title}</span></div>` +
+        `<div class="guide-text">${step.text}</div>` +
+        `<div class="guide-actions">${step.final ? '<button class="rig-btn" data-guide="done">Hotovo</button>' : '<button class="guide-skip" data-guide="skip">Přeskočit průvodce</button>'}</div>`;
+    if (step.hl) document.getElementById(step.hl)?.classList.add('guide-hl');
+}
+
+function handleGuideClick(event) {
+    const button = event.target.closest('[data-guide]');
+    if (button) finishGuide();
 }
 
 // --- Mimořádné zprávy ---
@@ -5987,6 +6099,7 @@ function addEventListeners() {
     document.getElementById('hud-rig')?.addEventListener('click', handleRigPanelClick);
     document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
     document.getElementById('hud-players')?.addEventListener('click', handlePlayersClick);
+    document.getElementById('hud-guide')?.addEventListener('click', handleGuideClick);
     document.getElementById('map-btn')?.addEventListener('click', () => toggleSurveyMap());
     document.getElementById('map-close')?.addEventListener('click', () => toggleSurveyMap(false));
     document.getElementById('map-canvas')?.addEventListener('click', handleMapClick);
