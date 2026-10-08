@@ -17,7 +17,7 @@ let raceMode = null;
 // Globální proměnné níž (money, plots, trucks...) jsou jen zrcadlo světa pro kreslení a HUD,
 // plní je syncFromWorld(). Měnit stav jde jen přes doAction().
 const {
-    PLOT_COUNT, VRT_COST, SILO_COST, TRUCK_COST, TRUCK_CAPACITY, DRILL_SPEED, DRILL_COST_PER_PX, DRILL_MAX_RISE,
+    VRT_COST, SILO_COST, TRUCK_COST, TRUCK_CAPACITY, DRILL_SPEED, DRILL_COST_PER_PX, DRILL_MAX_RISE,
     BIT_COST, KICK_MS, CEMENT_COST, INJECT_COST_PER_S,
     MAX_SILOS_PER_PLOT, MAX_TRUCKS, MS_PER_DAY, SURVIVAL_TAX_STEP, TRUCK_LENGTH, TRUCK_GAP_PAD,
     VENT_MIN, PRESSURE_WARN, SEISMIC_COST, DRONE_COST, RADAR_COST, SEISMIC_RADIUS, SEISMIC_WAVE_MS,
@@ -76,7 +76,6 @@ const DEV = false;
 let mousePos = { x: 0, y: 0 };
 let currentBuildMode = null; // 'vrt', 'silo', 'seismic', 'radar'
 let selectedDerrickPlotId = null; // Pro pokládání potrubí
-let plotWidth;
 
 // Vozy a město (kupci se čtou přímo z world.market)
 let trucksOwned = 0;
@@ -139,7 +138,6 @@ function initializeGame() {
     }
 
     // Svět (sólo, náhodný); závod a sdílená mapa ho nahradí přes restartGame / net.js
-    plotWidth = OilSim.C.PLOT_WIDTH;
     world = OilSim.createWorld({ players: [{ id: myId, name: 'Ty' }] });
     syncFromWorld();
 
@@ -188,6 +186,7 @@ function resetLocalUi() {
     renderEventLog();
     document.getElementById('hud-toasts').innerHTML = '';
     document.getElementById('news-flash')?.classList.add('hidden');
+    toggleSurveyMap(false);
 }
 
 // Zrcadlí svět do globálních proměnných, které čte kreslení a HUD
@@ -1116,7 +1115,7 @@ function draw() {
 
     const structureY = groundLevel - STRUCTURE_BASE_OFFSET;
     plots.forEach(plot => {
-        const centerX = plot.x + plotWidth / 2;
+        const centerX = plot.x + plot.width / 2;
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
         drawSpill(plot, groundLevel);
         if (plot.hasVrt) {
@@ -1147,13 +1146,16 @@ function draw() {
     // Štítky zásobníků a manometry až nad kapkami a kouřem, ať jsou vždy čitelné
     plots.forEach(plot => {
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
-        if (plot.hasVrt && network && isMine(plot)) drawStorageChip(plot.x + plotWidth / 2, structureY - DERRICK_HEIGHT - 26, network);
+        if (plot.hasVrt && network && isMine(plot)) drawStorageChip(plot.x + plot.width / 2, structureY - DERRICK_HEIGHT - 26, network);
     });
 
     // Kreslení dočasných efektů a náhledů
     drawEffectsAndPreviews(groundLevel);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(getVignette(), 0, 0);
+
+    // Mapa průzkumu se překresluje, dokud je otevřená (ceny, vrták, nové nálezy)
+    if (mapOpen && performance.now() - mapLastPaint > 400) paintSurveyMap();
 
     // Aktualizace HTML UI
     updateUI();
@@ -1419,6 +1421,466 @@ function handleRigPanelClick(event) {
         return;
     }
     doAction({ type: button.dataset.act, plotId: selectedDerrickPlotId });
+}
+
+// --- Mapa geologického průzkumu ---
+// List papíru přes scénu: řez podzemím inkoustem, claimy jako sloupce s terénem a cenou, známá
+// ložiska a rizika hráče, jeho vrty a legenda. Kreslí se do vlastního plátna stejnými funkcemi
+// (paintLayer podvrhne ctx), při otevření a pak každou chvíli, dokud je mapa vidět.
+const MAP_W = 1600, MAP_H = 760;
+const MAP_SURFACE_Y = 190;         // povrch na mapě
+const MAP_BOTTOM_Y = 640;          // dno řezu
+const MAP_INK = '26, 18, 11';
+const MAP_BLUE = '#1b3a66';
+let mapOpen = false;
+let mapLastPaint = 0;
+
+function mapY(worldY) {
+    return MAP_SURFACE_Y + (worldY - OilSim.C.GROUND_LEVEL) * (MAP_BOTTOM_Y - MAP_SURFACE_Y) / (OilSim.C.WORLD_H - OilSim.C.GROUND_LEVEL);
+}
+
+function toggleSurveyMap(force) {
+    const next = force ?? !mapOpen;
+    if (next === mapOpen) return;
+    mapOpen = next;
+    document.getElementById('hud-map')?.classList.toggle('hidden', !mapOpen);
+    document.getElementById('stage')?.classList.toggle('map-open', mapOpen);
+    document.getElementById('map-btn')?.classList.toggle('active', mapOpen);
+    if (mapOpen) paintSurveyMap();
+}
+
+function paintSurveyMap() {
+    const mc = document.getElementById('map-canvas');
+    if (!mc || !world) return;
+    mapLastPaint = performance.now();
+    const main = ctx;
+    ctx = mc.getContext('2d');
+    try {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, MAP_W, MAP_H);
+        drawSurveyMap();
+    } finally {
+        ctx = main;
+    }
+}
+
+function inkText(text, x, y, font, align = 'left', color = INK) {
+    ctx.font = font;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+}
+
+function drawSurveyMap() {
+    const C = OilSim.C;
+    ctx.save();
+    // Hlavička listu
+    inkText('Geologický průzkum ropného pole', MAP_W / 2, 48, '30px "Rye", Georgia, serif', 'center');
+    inkText(`List č. ${((world.seed ?? 0) >>> 0) % 9000 + 1000} · okres Oil digga · měřítko 1 : 2 000`, MAP_W / 2, 70, 'italic 13px "Courier Prime", monospace', 'center', INK_SOFT);
+    inkText(`${day}. ${MONTH_FULL_NAMES[month]} · éra: ${OilSim.ERAS[townEra].name}`, MAP_W - 40, 48, '700 13px "Barlow Condensed", system-ui, sans-serif', 'right', INK_SOFT);
+    ctx.strokeStyle = `rgba(${MAP_INK}, 0.6)`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(40, 82);
+    ctx.lineTo(MAP_W - 40, 82);
+    ctx.stroke();
+
+    drawMapStrata();
+    drawMapPockets();
+    drawMapHazards();
+    drawMapWells();
+    drawMapClaims();
+    drawMapLegend();
+    ctx.restore();
+}
+
+// Vrstvy hornin: tenké tinty a inkoustové šrafy, popisky vlevo
+function drawMapStrata() {
+    const strata = world.strata;
+    const C = OilSim.C;
+    const bottom = MAP_BOTTOM_Y;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, MAP_SURFACE_Y, MAP_W, bottom - MAP_SURFACE_Y);
+    ctx.clip();
+    const curve = (bound, fallback) => {
+        const pts = [];
+        for (let x = 0; x <= MAP_W; x += 10) pts.push({ x, y: bound ? mapY(OilSim.strataBoundaryY(bound, x)) : fallback });
+        return pts;
+    };
+    strata.layers.forEach((kind, i) => {
+        const upper = curve(strata.bounds[i - 1], MAP_SURFACE_Y);
+        const lower = curve(strata.bounds[i], bottom);
+        ctx.save();
+        ctx.beginPath();
+        upper.forEach((p, k) => (k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        for (let k = lower.length - 1; k >= 0; k--) ctx.lineTo(lower[k].x, lower[k].y);
+        ctx.closePath();
+        const look = ROCK_LOOK[kind] || ROCK_LOOK.sand;
+        ctx.fillStyle = `rgba(${look.tint}, 0.10)`;
+        ctx.fill();
+        ctx.clip();
+        const top = Math.min(...upper.map(p => p.y)), low = Math.max(...lower.map(p => p.y));
+        drawRockHatch(kind, top, low, MAP_INK, seededRandom(31 + i * 7));
+        drawRockHatch(kind, top, low, MAP_INK, seededRandom(97 + i * 7));
+        ctx.restore();
+        const midY = (upper[4].y + lower[4].y) / 2;
+        inkText(OilSim.ROCKS[kind].name, 48, midY + 4, '700 12px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+    });
+    // Žulové čepice skalnatých claimů
+    plots.filter(p => p.terrain === 'rock').forEach(plot => {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(plot.x, MAP_SURFACE_Y, plot.width, mapY(OilSim.C.GROUND_LEVEL + plot.rockDepth) - MAP_SURFACE_Y);
+        ctx.clip();
+        drawRockHatch('granite', MAP_SURFACE_Y, mapY(OilSim.C.GROUND_LEVEL + plot.rockDepth), MAP_INK, seededRandom(500 + plot.id));
+        drawRockHatch('granite', MAP_SURFACE_Y, mapY(OilSim.C.GROUND_LEVEL + plot.rockDepth), MAP_INK, seededRandom(501 + plot.id));
+        ctx.restore();
+    });
+    ctx.setLineDash([8, 5]);
+    ctx.strokeStyle = `rgba(${MAP_INK}, 0.45)`;
+    ctx.lineWidth = 1;
+    strata.bounds.forEach(bound => {
+        const pts = curve(bound);
+        ctx.beginPath();
+        pts.forEach((p, k) => (k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    ctx.restore();
+    // Povrch a dno
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, MAP_SURFACE_Y);
+    ctx.lineTo(MAP_W, MAP_SURFACE_Y);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, MAP_BOTTOM_Y);
+    ctx.lineTo(MAP_W, MAP_BOTTOM_Y);
+    ctx.stroke();
+    // Hloubková stupnice vpravo (po 100 m)
+    for (let d = 0; d <= 500; d += 100) {
+        const y = mapY(OilSim.C.GROUND_LEVEL + d);
+        if (y > MAP_BOTTOM_Y) break;
+        ctx.beginPath();
+        ctx.moveTo(MAP_W - 30, y);
+        ctx.lineTo(MAP_W - 18, y);
+        ctx.stroke();
+        inkText(`${d} m`, MAP_W - 34, y + 4, '700 10px "Barlow Condensed", system-ui, sans-serif', 'right', INK_SOFT);
+    }
+}
+
+function traceMapPolygon(vertices) {
+    ctx.beginPath();
+    vertices.forEach((v, i) => (i ? ctx.lineTo(v.x, mapY(v.y)) : ctx.moveTo(v.x, mapY(v.y))));
+    ctx.closePath();
+}
+
+// Ložiska, která hráč zná: plná inkoustová skvrna s odhadem, ozvěna jen čárkovaný obrys
+function drawMapPockets() {
+    oilPockets.forEach(pocket => {
+        const known = DEV || pocket.tapped || pocket.revealed;
+        const echo = getPocketEcho(pocket);
+        if (!known && echo <= 0) return;
+        ctx.save();
+        traceMapPolygon(pocket.vertices);
+        if (known) {
+            ctx.fillStyle = pocket.oil <= 0 ? 'rgba(26, 18, 11, 0.18)' : 'rgba(26, 18, 11, 0.82)';
+            ctx.fill();
+            ctx.strokeStyle = INK;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            const cx = pocket.x + pocket.width / 2, cy = mapY(pocket.y + pocket.height / 2);
+            const label = pocket.oil <= 0 ? 'vyčerpáno' : `${Math.floor(pocket.oil).toLocaleString('cs-CZ')} bbl`;
+            inkText(label, cx, cy + 4, '700 11px "Barlow Condensed", system-ui, sans-serif', 'center', pocket.oil <= 0 ? INK_SOFT : PAPER_TOP);
+            if (pocket.tapped) inkText(`tlak ${Math.round(OilSim.pocketDrive(pocket) * 100)} %`, cx, cy + 16, '700 9px "Barlow Condensed", system-ui, sans-serif', 'center', PAPER_TOP);
+        } else {
+            ctx.setLineDash([5, 4]);
+            ctx.strokeStyle = `rgba(${MAP_INK}, ${0.4 + 0.5 * echo})`;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.setLineDash([]);
+            inkText(`${getPocketRichness(pocket)}?`, pocket.x + pocket.width / 2, mapY(pocket.y + pocket.height / 2) + 4, 'italic 11px "Courier Prime", monospace', 'center', INK_SOFT);
+        }
+        ctx.restore();
+    });
+    // Propojená pole, která hráč zná
+    (world.links || []).forEach(([ia, ib]) => {
+        const a = oilPockets[ia], b = oilPockets[ib];
+        if (!a || !b || !(DEV || ((a.tapped || a.revealed) && (b.tapped || b.revealed)))) return;
+        ctx.save();
+        ctx.setLineDash([2, 5]);
+        ctx.strokeStyle = `rgba(${MAP_INK}, 0.7)`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(a.x + a.width / 2, mapY(a.y + a.height / 2));
+        ctx.lineTo(b.x + b.width / 2, mapY(b.y + b.height / 2));
+        ctx.stroke();
+        ctx.restore();
+    });
+}
+
+function drawMapHazardGlyph(kind, x, y, r, spent) {
+    ctx.save();
+    ctx.strokeStyle = kind === 'gas' ? INK : MAP_BLUE;
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = 1.4;
+    ctx.globalAlpha = spent ? 0.35 : 1;
+    ctx.setLineDash(kind === 'gas' ? [3, 3] : []);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (kind === 'gas') {
+        for (let k = 0; k < 3; k++) {
+            ctx.beginPath();
+            ctx.arc(x + (k - 1) * r * 0.45, y + (k % 2 ? -1 : 1) * r * 0.25, 1.6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    } else {
+        for (let k = -1; k <= 1; k++) {
+            ctx.beginPath();
+            for (let dx = -r * 0.7; dx <= r * 0.7; dx += 3) {
+                const yy = y + k * r * 0.4 + Math.sin(dx * 0.8) * 1.5;
+                if (dx === -r * 0.7) ctx.moveTo(x + dx, yy); else ctx.lineTo(x + dx, yy);
+            }
+            ctx.stroke();
+        }
+    }
+    ctx.restore();
+}
+
+function drawMapHazards() {
+    hazards.forEach(h => {
+        if (!h.visible && !DEV) return;
+        drawMapHazardGlyph(h.kind, h.x, mapY(h.y), h.r * 0.9, h.spent);
+    });
+}
+
+// Vrty: trasa inkoustem, cizí šedě; na povrchu značka vrtu v barvě hráče
+function drawMapWells() {
+    pipeNetworks.forEach(network => {
+        if (network.derrickId < 0 || network.path.length < 1) return;
+        const mine = isMine(network);
+        ctx.save();
+        ctx.strokeStyle = mine ? INK : `rgba(${MAP_INK}, 0.4)`;
+        ctx.lineWidth = mine ? 3 : 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        const { done, plan, head } = splitDrillPath(network);
+        ctx.beginPath();
+        done.forEach((p, i) => (i ? ctx.lineTo(p.x, mapY(p.y)) : ctx.moveTo(p.x, mapY(p.y))));
+        ctx.stroke();
+        if (plan.length > 1 && mine) {
+            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            plan.forEach((p, i) => (i ? ctx.lineTo(p.x, mapY(p.y)) : ctx.moveTo(p.x, mapY(p.y))));
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+        if (head) { // korunka jako malý trojúhelník
+            ctx.fillStyle = network.drillState === 'kick' ? INK_RED : INK;
+            ctx.beginPath();
+            ctx.moveTo(head.x - 4, mapY(head.y) - 4);
+            ctx.lineTo(head.x + 4, mapY(head.y) - 4);
+            ctx.lineTo(head.x, mapY(head.y) + 4);
+            ctx.closePath();
+            ctx.fill();
+        }
+        // Značka vrtu na povrchu: trojnožka
+        const x0 = network.path[0].x;
+        ctx.strokeStyle = sharedMode ? playerColor(network.owner) : INK;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(x0 - 7, MAP_SURFACE_Y);
+        ctx.lineTo(x0, MAP_SURFACE_Y - 16);
+        ctx.lineTo(x0 + 7, MAP_SURFACE_Y);
+        ctx.moveTo(x0, MAP_SURFACE_Y - 16);
+        ctx.lineTo(x0, MAP_SURFACE_Y);
+        ctx.stroke();
+        ctx.restore();
+    });
+}
+
+// Terénní značka claimu na mapě: kopec oblouk, řeka vlnka, skála trojúhelníky, rovina čárka
+function drawTerrainGlyph(terrain, x, y) {
+    ctx.save();
+    ctx.strokeStyle = terrain === 'river' ? MAP_BLUE : INK;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    switch (terrain) {
+        case 'hill':
+            ctx.arc(x, y + 6, 10, Math.PI, 0);
+            ctx.moveTo(x - 5, y + 2);
+            ctx.arc(x, y + 6, 5, Math.PI * 1.15, Math.PI * 1.85);
+            break;
+        case 'river':
+            for (let k = 0; k < 2; k++) {
+                ctx.moveTo(x - 10, y + k * 5);
+                ctx.quadraticCurveTo(x - 5, y - 4 + k * 5, x, y + k * 5);
+                ctx.quadraticCurveTo(x + 5, y + 4 + k * 5, x + 10, y + k * 5);
+            }
+            break;
+        case 'rock':
+            ctx.moveTo(x - 10, y + 6); ctx.lineTo(x - 5, y - 3); ctx.lineTo(x, y + 6);
+            ctx.moveTo(x - 1, y + 6); ctx.lineTo(x + 5, y - 6); ctx.lineTo(x + 11, y + 6);
+            break;
+        default:
+            ctx.moveTo(x - 10, y + 4); ctx.lineTo(x + 10, y + 4);
+            ctx.moveTo(x - 6, y); ctx.lineTo(x + 2, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Claimy nad povrchem: hranice, číslo, terén, šířka a cena nebo razítko vlastníka
+function drawMapClaims() {
+    const top = 92, bottom = MAP_SURFACE_Y;
+    plots.forEach((plot, i) => {
+        const cx = plot.x + plot.width / 2;
+        ctx.save();
+        ctx.strokeStyle = `rgba(${MAP_INK}, 0.6)`;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(plot.x, top);
+        ctx.lineTo(plot.x, MAP_BOTTOM_Y);
+        if (i === plots.length - 1) {
+            ctx.moveTo(plot.x + plot.width, top);
+            ctx.lineTo(plot.x + plot.width, MAP_BOTTOM_Y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (plot.owner) { // vlastněný claim: jemný tón vlastníka
+            ctx.fillStyle = plot.owner === myId ? 'rgba(138, 28, 20, 0.08)' : `${playerColor(plot.owner)}22`;
+            ctx.fillRect(plot.x, top, plot.width, bottom - top);
+        }
+        inkText(`Claim ${i + 1}`, cx, top + 20, '15px "Rye", Georgia, serif', 'center');
+        drawTerrainGlyph(plot.terrain, cx - 28, top + 40);
+        inkText(`${OilSim.terrainOf(plot).name} · ${Math.round(plot.width)} m`, cx - 12, top + 46, '700 11px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+        const note = plot.terrain === 'hill' ? 'stavby 1,5×' : plot.terrain === 'river' ? 'levná voda' : plot.terrain === 'rock' ? `žula do ${plot.rockDepth} m` : '';
+        if (note) inkText(note, cx, top + 60, 'italic 10px "Courier Prime", monospace', 'center', INK_SOFT);
+        if (!plot.owner) {
+            const afford = money >= plot.price;
+            inkText(`$${plot.price}`, cx, top + 84, '800 18px "Barlow Condensed", system-ui, sans-serif', 'center', afford ? INK : INK_RED);
+            inkText('K PRODEJI', cx, top + 95, '700 8px "Barlow Condensed", system-ui, sans-serif', 'center', INK_SOFT);
+        } else {
+            // Razítko vlastníka
+            const name = plot.owner === myId ? 'MŮJ CLAIM' : (world.players[plot.owner]?.name || 'cizí').toUpperCase();
+            ctx.save();
+            ctx.translate(cx, top + 82);
+            ctx.rotate(-0.08);
+            ctx.font = '700 11px "Barlow Condensed", system-ui, sans-serif';
+            const w = Math.min(plot.width - 10, ctx.measureText(name).width + 14);
+            ctx.strokeStyle = plot.owner === myId ? INK_RED : playerColor(plot.owner);
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.85;
+            ctx.strokeRect(-w / 2, -9, w, 18);
+            ctx.fillStyle = ctx.strokeStyle;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(name, 0, 1);
+            ctx.restore();
+            if (plot.hasVrt) inkText('vrt postaven', cx, top + 100, 'italic 9px "Courier Prime", monospace', 'center', INK_SOFT);
+        }
+        ctx.restore();
+    });
+}
+
+function drawMapLegend() {
+    const y = MAP_BOTTOM_Y + 30;
+    inkText('Legenda', 48, y, '14px "Rye", Georgia, serif');
+    let x = 120;
+    Object.entries(OilSim.ROCKS).forEach(([kind, rock]) => {
+        ctx.save();
+        ctx.strokeStyle = `rgba(${MAP_INK}, 0.8)`;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y - 12, 34, 16);
+        ctx.beginPath();
+        ctx.rect(x, y - 12, 34, 16);
+        ctx.clip();
+        ctx.fillStyle = `rgba(${ROCK_LOOK[kind].tint}, 0.12)`;
+        ctx.fillRect(x, y - 12, 34, 16);
+        drawRockHatch(kind, y - 12, y + 4, MAP_INK, seededRandom(7));
+        drawRockHatch(kind, y - 12, y + 4, MAP_INK, seededRandom(8));
+        ctx.restore();
+        inkText(rock.name, x + 40, y, '700 11px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+        x += 40 + ctx.measureText(rock.name).width + 26;
+    });
+    // Ložisko, ozvěna, plyn, voda
+    ctx.save();
+    ctx.fillStyle = 'rgba(26, 18, 11, 0.82)';
+    ctx.beginPath();
+    ctx.ellipse(x + 16, y - 4, 14, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    inkText('známé ložisko', x + 36, y, '700 11px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+    x += 36 + ctx.measureText('známé ložisko').width + 26;
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(x + 16, y - 4, 14, 7, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    inkText('ozvěna seismiky', x + 36, y, '700 11px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+    x += 36 + ctx.measureText('ozvěna seismiky').width + 26;
+    drawMapHazardGlyph('gas', x + 10, y - 4, 9, false);
+    inkText('plyn', x + 26, y, '700 11px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+    x += 26 + ctx.measureText('plyn').width + 22;
+    drawMapHazardGlyph('water', x + 10, y - 4, 9, false);
+    inkText('voda', x + 26, y, '700 11px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+    // Terén
+    const y2 = y + 34;
+    let tx = 120;
+    Object.entries(OilSim.TERRAIN).forEach(([key, t]) => {
+        drawTerrainGlyph(key, tx + 12, y2 - 8);
+        const label = key === 'hill' ? `${t.name}: stavby ${t.buildMult}×, levnější claim`
+            : key === 'river' ? `${t.name}: vtláčení vody za ${Math.round(t.injectMult * 100)} %, dražší claim`
+                : key === 'rock' ? `${t.name}: žula pod povrchem, levný claim` : `${t.name}: nic zvláštního`;
+        inkText(label, tx + 30, y2, '700 11px "Barlow Condensed", system-ui, sans-serif', 'left', INK_SOFT);
+        tx += 30 + ctx.measureText(label).width + 30;
+    });
+    // Měřítko
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(MAP_W - 240, y2 - 4);
+    ctx.lineTo(MAP_W - 40, y2 - 4);
+    ctx.stroke();
+    for (let k = 0; k <= 2; k++) {
+        ctx.beginPath();
+        ctx.moveTo(MAP_W - 240 + k * 100, y2 - 9);
+        ctx.lineTo(MAP_W - 240 + k * 100, y2 + 1);
+        ctx.stroke();
+    }
+    inkText('0', MAP_W - 240, y2 + 12, '700 9px "Barlow Condensed", system-ui, sans-serif', 'center', INK_SOFT);
+    inkText('100 m', MAP_W - 140, y2 + 12, '700 9px "Barlow Condensed", system-ui, sans-serif', 'center', INK_SOFT);
+    inkText('200 m', MAP_W - 40, y2 + 12, '700 9px "Barlow Condensed", system-ui, sans-serif', 'center', INK_SOFT);
+}
+
+// Klik do mapy: volný claim koupí, vlastní vrt vybere a mapu zavře
+function handleMapClick(event) {
+    const mc = event.currentTarget;
+    const rect = mc.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / rect.width * MAP_W;
+    const y = (event.clientY - rect.top) / rect.height * MAP_H;
+    if (y < 92 || y > MAP_BOTTOM_Y) return;
+    const plot = getPlotAtX(x);
+    if (!plot) return;
+    if (!plot.owner) {
+        if (tryPurchasePlot(plot, getGroundLevel()) === 'bought') paintSurveyMap();
+    } else if (isMine(plot) && plot.hasVrt) {
+        selectedDerrickPlotId = plot.id;
+        toggleSurveyMap(false);
+        updateUI();
+    }
 }
 
 // --- Zakázky ---
@@ -1783,8 +2245,172 @@ function getVignette() {
 
 function drawSkyAndGround() {
     ctx.drawImage(getSceneCache(), 0, 0);
+    const claims = getClaimsCache();
+    if (claims) ctx.drawImage(claims, 0, 0);
     const strata = getStrataCache();
     if (strata) ctx.drawImage(strata, 0, 0);
+}
+
+// --- Terén claimů na desce: kopec, řeka s mostkem, balvany (statické, vlastní vrstva) ---
+let claimsCache = null;
+let claimsKey = '';
+
+function claimsStateKey() {
+    return plots.map(p => `${p.id}:${p.terrain}:${Math.round(p.x)}:${Math.round(p.width)}`).join();
+}
+
+function getClaimsCache() {
+    if (!plots.length) return null;
+    const key = claimsStateKey();
+    if (key !== claimsKey || !claimsCache) {
+        claimsKey = key;
+        claimsCache = paintLayer(claimsCache || createLayer(), () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const groundLevel = getGroundLevel();
+            plots.forEach(plot => drawClaimTerrain(plot, groundLevel, seededRandom(977 + plot.id * 31)));
+        });
+    }
+    return claimsCache;
+}
+
+function drawClaimTerrain(plot, groundLevel, rand) {
+    const frontY = groundLevel - ROAD_DEPTH - 4;
+    const backY = getTownLayout(groundLevel).promenadeY + 10;
+    const cx = plot.x + plot.width / 2;
+    switch (plot.terrain) {
+        case 'hill': drawHill(cx, frontY, backY, plot.width, groundLevel, rand); break;
+        case 'river': drawRiver(cx + (rand() - 0.5) * plot.width * 0.3, frontY, backY, groundLevel, rand); break;
+        case 'rock': drawOutcrop(plot, frontY, backY, groundLevel, rand); break;
+    }
+}
+
+// Kopec: měkký pahorek s vrstevnicemi, měsíc osvětluje jednu stranu
+function drawHill(cx, frontY, backY, width, groundLevel, rand) {
+    const y = backY + (frontY - backY) * (0.45 + rand() * 0.2);
+    const s = slabScaleAt(y, groundLevel);
+    const rx = Math.min(width * 0.44, 96) * s, ry = 34 * s;
+    const lit = Math.sign(MOON_X - cx) || 1;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 10, 0.28)'; // stín na odvrácené straně
+    ctx.beginPath();
+    ctx.ellipse(cx - lit * 8 * s, y + 6 * s, rx * 1.05, ry * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const mound = ctx.createRadialGradient(cx + lit * rx * 0.35, y - ry * 0.5, 2, cx, y, rx);
+    mound.addColorStop(0, '#8d7d82');
+    mound.addColorStop(0.55, '#5c5064');
+    mound.addColorStop(1, '#3a3346');
+    ctx.fillStyle = mound;
+    ctx.beginPath();
+    ctx.ellipse(cx, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(200, 210, 245, 0.26)'; // vrstevnice
+    ctx.lineWidth = 1;
+    [0.78, 0.52, 0.26].forEach((f, i) => {
+        ctx.beginPath();
+        ctx.ellipse(cx + lit * (1 - f) * 6 * s, y - (1 - f) * ry * 0.5, rx * f, ry * f, 0, 0, Math.PI * 2);
+        ctx.stroke();
+    });
+    ctx.strokeStyle = 'rgba(210, 220, 255, 0.7)'; // měsíční hrana
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.ellipse(cx, y, rx, ry, 0, lit > 0 ? -Math.PI * 0.95 : -Math.PI * 0.55, lit > 0 ? -Math.PI * 0.55 : -Math.PI * 0.05);
+    ctx.stroke();
+    for (let i = 0; i < 6; i++) { // keře
+        const a = rand() * Math.PI * 2, r = rand() * 0.8;
+        ctx.fillStyle = 'rgba(20, 30, 22, 0.75)';
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(a) * rx * r, y + Math.sin(a) * ry * r, (2 + rand() * 2) * s, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// Řeka: tmavá stuha odzadu k silnici, pod silnicí propustek a dřevěný mostek
+function drawRiver(x, frontY, backY, groundLevel, rand) {
+    const pts = [];
+    for (let y = backY; y <= groundLevel + 1; y += 10) {
+        const s = slabScaleAt(y, groundLevel);
+        pts.push({ y, x: slabXAt(x + Math.sin(y * 0.05 + rand() * 0.2) * 14, y, groundLevel), half: 7 * s });
+    }
+    ctx.save();
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p.x - p.half, p.y) : ctx.moveTo(p.x - p.half, p.y)));
+    for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i].x + pts[i].half, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(8, 10, 24, 0.9)'; // koryto
+    ctx.fill();
+    ctx.clip();
+    const water = ctx.createLinearGradient(0, backY, 0, groundLevel);
+    water.addColorStop(0, 'rgba(60, 90, 140, 0.55)');
+    water.addColorStop(1, 'rgba(90, 130, 190, 0.7)');
+    ctx.fillStyle = water;
+    ctx.fillRect(0, backY, canvas.width, groundLevel - backY + 2);
+    ctx.strokeStyle = 'rgba(200, 220, 255, 0.35)'; // odlesky měsíce
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 14; i++) {
+        const p = pts[Math.floor(rand() * pts.length)];
+        ctx.beginPath();
+        ctx.moveTo(p.x - p.half * 0.6 + rand() * p.half, p.y);
+        ctx.lineTo(p.x - p.half * 0.6 + rand() * p.half + 4, p.y);
+        ctx.stroke();
+    }
+    ctx.restore();
+    // Břehy
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p.x - p.half - 1, p.y) : ctx.moveTo(p.x - p.half - 1, p.y)));
+    ctx.stroke();
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p.x + p.half + 1, p.y) : ctx.moveTo(p.x + p.half + 1, p.y)));
+    ctx.stroke();
+    // Mostek přes silnici: prkna přes celý pás silnice, zábradlí
+    const roadTop = groundLevel - ROAD_DEPTH;
+    const bx = slabXAt(x, roadTop + ROAD_DEPTH / 2, groundLevel);
+    ctx.fillStyle = '#3b2a1c';
+    ctx.fillRect(bx - 16, roadTop - 1, 32, ROAD_DEPTH + 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    for (let y = roadTop + 2; y < groundLevel; y += 4) ctx.fillRect(bx - 16, y, 32, 1);
+    ctx.fillStyle = '#2a1c12';
+    ctx.fillRect(bx - 17, roadTop - 6, 2, ROAD_DEPTH + 6);
+    ctx.fillRect(bx + 15, roadTop - 6, 2, ROAD_DEPTH + 6);
+    ctx.fillStyle = 'rgba(200, 210, 250, 0.4)';
+    ctx.fillRect(bx - 17, roadTop - 6, 34, 1);
+    // Řeka pokračuje pod hranou řezu jako pramínek do skály
+    ctx.fillStyle = 'rgba(90, 130, 190, 0.5)';
+    ctx.fillRect(slabXAt(x, groundLevel, groundLevel) - 3, groundLevel, 6, LIP_HEIGHT * 0.8);
+}
+
+// Skalnatý claim: balvany na povrchu, pod ním je žula (kreslí drawStrata)
+function drawOutcrop(plot, frontY, backY, groundLevel, rand) {
+    for (let i = 0; i < 6 + Math.floor(rand() * 4); i++) {
+        const y = backY + rand() * (frontY - backY);
+        const s = slabScaleAt(y, groundLevel);
+        const x = slabXAt(plot.x + 14 + rand() * (plot.width - 28), y, groundLevel);
+        const r = (6 + rand() * 9) * s;
+        const lit = Math.sign(MOON_X - x) || 1;
+        ctx.fillStyle = 'rgba(0, 0, 10, 0.35)';
+        ctx.beginPath();
+        ctx.ellipse(x - lit * 3, y + 2, r * 1.1, r * 0.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        const n = 5 + Math.floor(rand() * 3);
+        for (let k = 0; k < n; k++) {
+            const a = Math.PI + (k / n) * Math.PI * 2;
+            const rr = r * (0.75 + rand() * 0.3);
+            const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr * 0.65 - r * 0.2;
+            if (k) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+        }
+        ctx.closePath();
+        const rock = ctx.createLinearGradient(x - lit * r, 0, x + lit * r, 0);
+        rock.addColorStop(0, '#2f2730');
+        rock.addColorStop(1, '#7a7488');
+        ctx.fillStyle = rock;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+    }
 }
 
 // --- Vrstvy hornin jako geologický řez: šrafy podle horniny (mění se s mapou, proto vlastní vrstva) ---
@@ -1802,7 +2428,7 @@ function getStrataCache() {
     const strata = world?.strata;
     if (!strata) return null;
     // Na sdílené mapě přichází svět znovu s každou zprávou: klíč z obsahu, ne z reference
-    const key = strata.layers.join() + strata.bounds.map(b => b.y.toFixed(1) + b.phase.toFixed(2)).join();
+    const key = strata.layers.join() + strata.bounds.map(b => b.y.toFixed(1) + b.phase.toFixed(2)).join() + '|' + claimsStateKey();
     if (key !== strataKey || !strataCache) {
         strataKey = key;
         strataCache = paintLayer(strataCache || createLayer(), () => {
@@ -1852,6 +2478,31 @@ function drawStrata(strata, groundLevel) {
             ctx.fillText(OilSim.ROCKS[kind].name.toUpperCase(), 12, midY);
         }
     });
+    // Žulové čepice skalnatých claimů hned pod povrchem
+    plots.filter(p => p.terrain === 'rock').forEach(plot => {
+        const bottom = groundLevel + plot.rockDepth;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(plot.x, topY - 10);
+        ctx.lineTo(plot.x + plot.width, topY - 10);
+        for (let x = plot.x + plot.width; x >= plot.x; x -= 12) ctx.lineTo(x, bottom + Math.sin(x * 0.07 + plot.id) * 5);
+        ctx.closePath();
+        const look = ROCK_LOOK.granite;
+        ctx.fillStyle = `rgba(${look.tint}, 0.34)`;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(${look.ink}, 0.35)`;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.clip();
+        drawRockHatch('granite', topY, bottom + 6, look.ink, seededRandom(500 + plot.id));
+        ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(${look.ink}, 0.5)`;
+        ctx.fillText('ŽULA', plot.x + plot.width / 2, topY + (bottom - topY) / 2);
+        ctx.restore();
+    });
+
     // Hranice vrstev: tenká čárkovaná linka
     ctx.setLineDash([10, 6]);
     ctx.lineWidth = 1.2;
@@ -2761,9 +3412,9 @@ const PLOT_SIGN_FONT = 'bold 18px "Rye", Georgia, serif';
 
 function getPlotSignRect(plot, groundLevel) {
     const signWidth = 92;
-    const signHeight = 32;
+    const signHeight = 42;
     const postHeight = PLOT_SIGN_POST;
-    const signX = Math.round(plot.x + (plotWidth / 2) - (signWidth / 2));
+    const signX = Math.round(plot.x + (plot.width / 2) - (signWidth / 2));
     const signY = Math.round(groundLevel - STRUCTURE_BASE_OFFSET - postHeight - signHeight);
     return { plotId: plot.id, x: signX, y: signY, width: signWidth, height: signHeight };
 }
@@ -2779,7 +3430,7 @@ function getPlotSignHitbox(sign) {
 
 function isPlotSurfaceHovered(plot, groundLevel) {
     return mousePos.y <= groundLevel &&
-        mousePos.x >= plot.x && mousePos.x < plot.x + plotWidth;
+        mousePos.x >= plot.x && mousePos.x < plot.x + plot.width;
 }
 
 function isPlotSignHovered(sign) {
@@ -2796,8 +3447,8 @@ function drawPlotPurchaseHighlight(plot, groundLevel, canAfford) {
     beam.addColorStop(1, `rgba(${color}, 0.16)`);
     ctx.fillStyle = beam;
     ctx.fillRect(slabBackX(plot.x, groundLevel), 0,
-        slabBackX(plot.x + plotWidth, groundLevel) - slabBackX(plot.x, groundLevel), backY);
-    traceSlabQuad(plot.x, plot.x + plotWidth, groundLevel);
+        slabBackX(plot.x + plot.width, groundLevel) - slabBackX(plot.x, groundLevel), backY);
+    traceSlabQuad(plot.x, plot.x + plot.width, groundLevel);
     ctx.fillStyle = `rgba(${color}, 0.16)`;
     ctx.fill();
     ctx.strokeStyle = `rgba(${color}, 0.7)`;
@@ -2883,7 +3534,7 @@ function isPointInRect(point, rect) {
 function getPlotAtX(x) {
     if (x < 0 || x > canvas.width) return null;
     for (const plot of plots) {
-        if (x >= plot.x && x < plot.x + plotWidth) {
+        if (x >= plot.x && x < plot.x + plot.width) {
             return plot;
         }
     }
@@ -2898,7 +3549,7 @@ function getPlotAtPosition(x, y, groundLevel) {
 function getPurchasablePlotAt(clickPos, groundLevel) {
     if (clickPos.y > groundLevel) return null;
     return plots.find(p => p.owner === null &&
-        clickPos.x >= p.x && clickPos.x < p.x + plotWidth) || null;
+        clickPos.x >= p.x && clickPos.x < p.x + p.width) || null;
 }
 
 function tryPurchasePlot(plot, groundLevel) {
@@ -2917,7 +3568,7 @@ function drawPlots(groundLevel) {
     const fieldBackY = getTownLayout(groundLevel).promenadeY + 8; // pole pozemků začínají za promenádou
     ctx.lineWidth = 1.5;
     ctx.setLineDash([8, 10]);
-    for (let i = 1; i < PLOT_COUNT; i++) {
+    for (let i = 1; i < plots.length; i++) {
         const x = plots[i].x;
         // Na desce se hranice sbíhají k úběžníku, v podzemí jdou kolmo dolů
         ctx.strokeStyle = 'rgba(255, 225, 180, 0.22)';
@@ -2940,7 +3591,7 @@ function drawPlots(groundLevel) {
         const mine = plot.owner === myId;
         const color = sharedMode ? playerColor(plot.owner) : '#ffb347';
         ctx.save();
-        traceSlabQuad(plot.x + 3, plot.x + plotWidth - 3, groundLevel, groundLevel - ROAD_DEPTH, fieldBackY);
+        traceSlabQuad(plot.x + 3, plot.x + plot.width - 3, groundLevel, groundLevel - ROAD_DEPTH, fieldBackY);
         ctx.fillStyle = mine ? 'rgba(30, 14, 8, 0.32)' : 'rgba(10, 10, 25, 0.28)';
         ctx.fill();
         ctx.globalAlpha = 0.3;
@@ -2949,7 +3600,7 @@ function drawPlots(groundLevel) {
         ctx.stroke();
         ctx.globalAlpha = 0.65;
         ctx.fillStyle = color;
-        ctx.fillRect(plot.x + 4, groundLevel, plotWidth - 8, 2);
+        ctx.fillRect(plot.x + 4, groundLevel, plot.width - 8, 2);
         ctx.globalAlpha = 1;
         const fy = fieldBackY + 34;
         const fx = slabXAt(plot.x + 10, fy, groundLevel) + 4;
@@ -2997,7 +3648,7 @@ function drawPlots(groundLevel) {
             }
 
             const postBase = groundLevel - STRUCTURE_BASE_OFFSET;
-            const postX = Math.round(plot.x + (plotWidth / 2) - 2);
+            const postX = Math.round(plot.x + (plot.width / 2) - 2);
             ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // stín sloupku
             ctx.beginPath();
             ctx.ellipse(postX + 2, postBase, 9, 2.5, 0, 0, Math.PI * 2);
@@ -3028,7 +3679,11 @@ function drawPlots(groundLevel) {
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillStyle = canAfford ? '#ffd98a' : '#ff8a70';
-            ctx.fillText(`$${plot.price}`, plot.x + plotWidth / 2, signY + signHeight / 2 + 1);
+            ctx.fillText(`$${plot.price}`, plot.x + plot.width / 2, signY + signHeight / 2 - 4);
+            // Terén a šířka claimu drobně pod cenou
+            ctx.font = '700 8.5px "Barlow Condensed", system-ui, sans-serif';
+            ctx.fillStyle = 'rgba(255, 225, 180, 0.7)';
+            ctx.fillText(`${OilSim.terrainOf(plot).name.toUpperCase()} · ${Math.round(plot.width)} m`, plot.x + plot.width / 2, signY + signHeight - 8);
 
             if (plotBlinkTimers[plot.id] && plotBlinkTimers[plot.id] % 4 < 2) {
                 ctx.fillStyle = 'rgba(255, 60, 40, 0.4)';
@@ -3038,7 +3693,7 @@ function drawPlots(groundLevel) {
         } else if (plot.id === lastBoughtPlotId && lastBoughtHighlightTimer > 0) {
             // Zvýraznění právě koupeného pozemku: zablikne plocha desky, NE vrt!
             ctx.save();
-            traceSlabQuad(plot.x, plot.x + plotWidth, groundLevel);
+            traceSlabQuad(plot.x, plot.x + plot.width, groundLevel);
             ctx.fillStyle = `rgba(255, 200, 90, ${0.35 * lastBoughtHighlightTimer / 30})`;
             ctx.fill();
             ctx.restore();
@@ -3047,7 +3702,7 @@ function drawPlots(groundLevel) {
         if (currentBuildMode === 'vrt' && plot.owner === myId && !plot.hasVrt) {
             const px = plot.x;
             const py = groundLevel;
-            if (mousePos.x >= px && mousePos.x <= px + plotWidth && mousePos.y >= 0 && mousePos.y <= py) {
+            if (mousePos.x >= px && mousePos.x <= px + plot.width && mousePos.y >= 0 && mousePos.y <= py) {
                 hoveredBuildable = true;
             }
         }
@@ -4702,6 +5357,22 @@ function toggleSound() {
     }
 }
 
+// Cena stavby u kurzoru, když ji terén mění (kopec)
+function drawBuildCostLabel(plot, base, groundLevel) {
+    const cost = plotBuildCost(plot, base);
+    if (cost === base) return;
+    const label = `$${cost} · ${OilSim.terrainOf(plot).name.toLowerCase()}`;
+    ctx.save();
+    ctx.font = '700 12px "Barlow Condensed", system-ui, sans-serif';
+    const lw = ctx.measureText(label).width + 14;
+    fillPaper(mousePos.x + 12, mousePos.y - 24, lw, 20, 2, -0.03);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = money >= cost ? INK : INK_RED;
+    ctx.fillText(label, mousePos.x + 19, mousePos.y - 14);
+    ctx.restore();
+}
+
 // Odhad vrtání k bodu pod kurzorem: horniny po cestě dávají cenu a čas, strmé stoupání nejde
 function estimateDrill(from, to) {
     const len = Math.hypot(to.x - from.x, to.y - from.y);
@@ -4756,8 +5427,9 @@ function drawEffectsAndPreviews(groundLevel) {
         if (hoveredPlot && hoveredPlot.owner === myId && !hoveredPlot.hasVrt) {
             ctx.save();
             ctx.globalAlpha = 0.6;
-            drawDerrick(hoveredPlot.x + plotWidth / 2, groundLevel - STRUCTURE_BASE_OFFSET, -1, false);
+            drawDerrick(hoveredPlot.x + hoveredPlot.width / 2, groundLevel - STRUCTURE_BASE_OFFSET, -1, false);
             ctx.restore();
+            drawBuildCostLabel(hoveredPlot, VRT_COST, groundLevel);
             newCursor = 'pointer';
         } else {
             newCursor = 'not-allowed';
@@ -4767,9 +5439,10 @@ function drawEffectsAndPreviews(groundLevel) {
         if (hoveredPlot && hoveredPlot.owner === myId && hoveredPlot.hasVrt) {
             ctx.save();
             ctx.globalAlpha = 0.6;
-            drawSilo(hoveredPlot.x + plotWidth / 2 + SILO_OFFSET_X + hoveredPlot.siloCount * SILO_STEP,
+            drawSilo(hoveredPlot.x + hoveredPlot.width / 2 + SILO_OFFSET_X + hoveredPlot.siloCount * SILO_STEP,
                 groundLevel - STRUCTURE_BASE_OFFSET + 4 + hoveredPlot.siloCount * 2, 0);
             ctx.restore();
+            drawBuildCostLabel(hoveredPlot, SILO_COST, groundLevel);
             newCursor = 'pointer';
         } else {
             newCursor = 'not-allowed';
@@ -4780,7 +5453,7 @@ function drawEffectsAndPreviews(groundLevel) {
         newCursor = network && network.pocket >= 0 ? 'default' : 'crosshair';
         if (startPlot && !(network && network.pocket >= 0)) {
             const lastPoint = network?.path[network.path.length - 1] || {
-                x: startPlot.x + plotWidth / 2,
+                x: startPlot.x + startPlot.width / 2,
                 y: groundLevel
             };
             if (mousePos.y > groundLevel) drawDrillPreview(lastPoint, mousePos);
@@ -4897,6 +5570,9 @@ function cancelBuildMode(clearDerrick = true) {
 function addEventListeners() {
     document.getElementById('hud-rig')?.addEventListener('click', handleRigPanelClick);
     document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
+    document.getElementById('map-btn')?.addEventListener('click', () => toggleSurveyMap());
+    document.getElementById('map-close')?.addEventListener('click', () => toggleSurveyMap(false));
+    document.getElementById('map-canvas')?.addEventListener('click', handleMapClick);
     // Odkazy z inzerátů: v Discordu musí ven přes SDK, ne přes href
     document.addEventListener('click', (event) => {
         if (!event.target.closest?.('a.np-ad')) return;
@@ -5006,7 +5682,8 @@ function addEventListeners() {
 
     window.addEventListener('keydown', (event) => {
         if (event.key === 'm' || event.key === 'M') toggleSound();
-        if (event.key === 'Escape') cancelBuildMode();
+        if (event.key === 'Escape') { if (mapOpen) toggleSurveyMap(false); else cancelBuildMode(); }
+        if ((event.key === 'g' || event.key === 'G') && !event.repeat) toggleSurveyMap();
         handleCameraKey(event);
     });
 
@@ -5089,13 +5766,18 @@ function handleCanvasClick(event) {
     }
 }
 
+// Cena stavby na claimu: kopec zdražuje
+function plotBuildCost(plot, base) {
+    return Math.round(base * OilSim.terrainOf(plot).buildMult);
+}
+
 function handleBuildModeClick(clickPos, plot, groundLevel) {
     switch (currentBuildMode) {
         case 'vrt':
-            if (isMine(plot) && !plot.hasVrt && money >= VRT_COST) doAction({ type: 'buildDerrick', plotId: plot.id });
+            if (isMine(plot) && !plot.hasVrt && money >= plotBuildCost(plot, VRT_COST)) doAction({ type: 'buildDerrick', plotId: plot.id });
             break;
         case 'silo':
-            if (isMine(plot) && plot.hasVrt && plot.siloCount < MAX_SILOS_PER_PLOT && money >= SILO_COST) {
+            if (isMine(plot) && plot.hasVrt && plot.siloCount < MAX_SILOS_PER_PLOT && money >= plotBuildCost(plot, SILO_COST)) {
                 doAction({ type: 'buildSilo', plotId: plot.id });
             }
             break;
@@ -5230,7 +5912,7 @@ function drawGusherJet(x, topY) {
 // Kaluž ropy na desce kolem vrtu: lesklá, odráží měsíc a lampu
 function drawSpill(plot, groundLevel) {
     if (!(plot.spill > 0.01)) return;
-    const cx = plot.x + plotWidth / 2;
+    const cx = plot.x + plot.width / 2;
     const cy = groundLevel - STRUCTURE_BASE_OFFSET + 6;
     const k = plot.spill;
     ctx.save();

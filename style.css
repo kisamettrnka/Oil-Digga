@@ -499,6 +499,7 @@ button:disabled {
 .paper,
 .telegram,
 .ledger,
+.survey,
 #hud-rig,
 #hud-contracts,
 #hud-goals,
@@ -1690,4 +1691,35 @@ button:disabled {
         width: 15em;
         font-size: 0.8em;
     }
+}
+
+/* --- Mapa geologického průzkumu: velký list papíru přes scénu, kresba v plátně --- */
+#hud-map {
+    cursor: default;
+}
+.survey {
+    width: min(94%, 1500px);
+    padding: 0.8em 1em 0.6em;
+    border-radius: 0.1em;
+    transform: rotate(-0.3deg);
+    pointer-events: auto;
+}
+.survey canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    cursor: pointer;
+}
+.survey-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1em;
+    margin-top: 0.4em;
+    font-size: 0.9em;
+}
+#stage.map-open #hud-rig,
+#stage.map-open #hud-contracts,
+#stage.map-open #hud-toasts {
+    display: none;
 }

@@ -16,7 +16,9 @@
         WORLD_H: 900,
         GROUND_RATIO: 0.44,          // povrch (přední hrana desky) ve 44 % výšky světa
         POCKET_BOTTOM_MARGIN: 125,   // spodní pás zakrývá panel nástrojů, ložiska jsou nad ním
-        PLOT_COUNT: 8,
+        // Claimy: nepravidelné šířky mezi okrajovými kupci, terén mění cenu a stavbu
+        CLAIM_MIN: 7,
+        CLAIM_RANGE: 3,              // 7–9 claimů
         SIDE_MARGIN: 110,            // šířka budovy výkupce + mezera
         VRT_COST: 350,
         SILO_COST: 250,
@@ -96,7 +98,7 @@
         MAX_SHARED_PLAYERS: 4
     };
     C.GROUND_LEVEL = Math.floor(C.WORLD_H * C.GROUND_RATIO);
-    C.PLOT_WIDTH = (C.WORLD_W - 2 * C.SIDE_MARGIN) / C.PLOT_COUNT;
+    C.CLAIM_SPAN = C.WORLD_W - 2 * C.SIDE_MARGIN;
 
     // Pravidla: v závodě a na sdílené mapě tvrdší, sólo zůstává přívětivé
     const RULES = {
@@ -105,6 +107,15 @@
     };
 
     const PLAYER_COLORS = ['#ffb45a', '#6ec6ff', '#7ee08a', '#ff7aa8'];
+
+    // Terén claimu: kopec zdražuje stavby, řeka zlevňuje vtláčení vody, skála má pod povrchem žulu
+    // (pomalý a drahý začátek vrtu), rovina nic. Cena pozemku to zohledňuje.
+    const TERRAIN = {
+        flat: { name: 'Rovina', priceMult: 1, buildMult: 1, injectMult: 1 },
+        hill: { name: 'Kopec', priceMult: 0.8, buildMult: 1.5, injectMult: 1 },
+        river: { name: 'Řeka', priceMult: 1.25, buildMult: 1, injectMult: 0.35 },
+        rock: { name: 'Skála', priceMult: 0.65, buildMult: 1, injectMult: 1 }
+    };
 
     // Horniny: speed = násobek rychlosti vrtání, wear = opotřebení korunky, cost = násobek ceny za pixel
     const ROCKS = {
@@ -222,18 +233,7 @@
             world.playerOrder.push(p.id);
         });
 
-        for (let i = 0; i < C.PLOT_COUNT; i++) {
-            world.plots.push({
-                id: i,
-                x: C.SIDE_MARGIN + i * C.PLOT_WIDTH,
-                y: C.GROUND_LEVEL,
-                owner: null,
-                hasVrt: false,
-                siloCount: 0,
-                spill: 0,
-                price: 50 + Math.floor(rand() * 451) // 50 až 500
-            });
-        }
+        world.plots = createClaims(rand);
 
         const numberOfPockets = 5 + Math.floor(rand() * 5);
         for (let i = 0; i < numberOfPockets; i++) {
@@ -294,6 +294,37 @@
             };
         });
         return market;
+    }
+
+    // Claimy: pás mezi kupci rozdělený na 7–9 dílů různé šířky, každý s terénem.
+    // Cena roste se šířkou (víc místa = víc ložisek pod ním) a s terénem.
+    function createClaims(rand) {
+        const count = C.CLAIM_MIN + Math.floor(rand() * C.CLAIM_RANGE);
+        const weights = [];
+        for (let i = 0; i < count; i++) weights.push(0.7 + rand() * 1.0);
+        const sum = weights.reduce((a, b) => a + b, 0);
+        const plots = [];
+        let x = C.SIDE_MARGIN;
+        for (let i = 0; i < count; i++) {
+            const width = C.CLAIM_SPAN * weights[i] / sum;
+            const r = rand();
+            const terrain = r < 0.45 ? 'flat' : r < 0.65 ? 'hill' : r < 0.82 ? 'river' : 'rock';
+            const base = (60 + rand() * 300) * (width / (C.CLAIM_SPAN / 8));
+            plots.push({
+                id: i,
+                x, width,
+                y: C.GROUND_LEVEL,
+                terrain,
+                rockDepth: terrain === 'rock' ? 70 + Math.floor(rand() * 50) : 0, // žulová čepice pod povrchem
+                owner: null,
+                hasVrt: false,
+                siloCount: 0,
+                spill: 0,
+                price: Math.max(40, Math.min(650, Math.round(base * TERRAIN[terrain].priceMult)))
+            });
+            x += width;
+        }
+        return plots;
     }
 
     // Propojená pole: sousední ložiska spojí propustná vrstva (každé nejvýš jedno spojení)
@@ -473,7 +504,7 @@
 
     function getNetworkPickupX(world, network) {
         const plot = getPlot(world, network.derrickId);
-        return plot ? plot.x + C.PLOT_WIDTH / 2 : C.WORLD_W / 2;
+        return plot ? plotCenterX(plot) : C.WORLD_W / 2;
     }
 
     function canVentRig(network) {
@@ -490,9 +521,24 @@
             bound.amp * 0.4 * Math.sin(x * bound.freq * 2.7 + bound.phase * 1.3);
     }
 
+    function plotAtX(world, x) {
+        return world.plots.find(p => x >= p.x && x < p.x + p.width) || null;
+    }
+
+    function terrainOf(plot) {
+        return TERRAIN[plot && plot.terrain] || TERRAIN.flat;
+    }
+
+    function plotCenterX(plot) {
+        return plot.x + plot.width / 2;
+    }
+
     function rockAt(world, x, y) {
         const strata = world.strata;
         if (!strata) return 'sand';
+        // Skalnatý claim: žulová čepice hned pod povrchem
+        const plot = plotAtX(world, x);
+        if (plot && plot.terrain === 'rock' && y < C.GROUND_LEVEL + plot.rockDepth) return 'granite';
         let i = 0;
         while (i < strata.bounds.length && y > strataBoundaryY(strata.bounds[i], x)) i++;
         return strata.layers[i];
@@ -665,8 +711,9 @@
     function buildDerrick(world, player, plotId) {
         const plot = ownedPlot(world, player, plotId);
         if (!plot || plot.hasVrt) return fail('plot');
-        if (player.money < C.VRT_COST) return fail('money');
-        player.money -= C.VRT_COST;
+        const cost = Math.round(C.VRT_COST * terrainOf(plot).buildMult);
+        if (player.money < cost) return fail('money');
+        player.money -= cost;
         plot.hasVrt = true;
         emit(world, { type: 'derrick_built', playerId: player.id, plotId: plot.id });
         return { ok: true };
@@ -675,8 +722,9 @@
     function buildSilo(world, player, plotId) {
         const plot = ownedPlot(world, player, plotId);
         if (!plot || !plot.hasVrt || plot.siloCount >= C.MAX_SILOS_PER_PLOT) return fail('plot');
-        if (player.money < C.SILO_COST) return fail('money');
-        player.money -= C.SILO_COST;
+        const cost = Math.round(C.SILO_COST * terrainOf(plot).buildMult);
+        if (player.money < cost) return fail('money');
+        player.money -= cost;
         plot.siloCount++;
         const network = getNetworkForPlot(world, plot.id);
         if (network) network.oilCapacity += C.SILO_CAPACITY_BONUS;
@@ -723,7 +771,7 @@
         if (network && network.pocket >= 0) return fail('pumping');
         const lastPoint = network
             ? network.path[network.path.length - 1]
-            : { x: plot.x + C.PLOT_WIDTH / 2, y: C.GROUND_LEVEL };
+            : { x: plotCenterX(plot), y: C.GROUND_LEVEL };
         // Vrták neumí stoupat strmě vzhůru
         if (lastPoint.y - y > Math.abs(x - lastPoint.x) * C.DRILL_MAX_RISE) return fail('angle');
         if (Math.hypot(x - lastPoint.x, y - lastPoint.y) < 4) return fail('point');
@@ -732,7 +780,7 @@
                 id: world.nextNetworkId++,
                 derrickId: plot.id,
                 owner: player.id,
-                path: [{ x: plot.x + C.PLOT_WIDTH / 2, y: C.GROUND_LEVEL }],
+                path: [{ x: plotCenterX(plot), y: C.GROUND_LEVEL }],
                 drilled: 0,          // kolik px trasy je vyvrtáno
                 drillState: 'drilling', // drilling | idle | kick | shut | swap | worn | done
                 drillTimer: 0,
@@ -836,7 +884,7 @@
         if (!plot) return fail('plot');
         if (player.money < C.SEISMIC_COST) return fail('money');
         player.money -= C.SEISMIC_COST;
-        const cx = Math.max(plot.x + 10, Math.min(plot.x + C.PLOT_WIDTH - 10, Number(x) || plot.x + C.PLOT_WIDTH / 2));
+        const cx = Math.max(plot.x + 10, Math.min(plot.x + plot.width - 10, Number(x) || plotCenterX(plot)));
         world.tools.waves.push({ x: cx, y: C.GROUND_LEVEL, age: 0, owner: player.id, hit: [] });
         emit(world, { type: 'seismic', playerId: player.id, plotId: plot.id, x: cx });
         return { ok: true };
@@ -1191,7 +1239,7 @@
             if (!network.injecting) return;
             const pocket = world.oilPockets[network.pocket];
             const player = world.players[network.owner];
-            const cost = C.INJECT_COST_PER_S * s;
+            const cost = C.INJECT_COST_PER_S * terrainOf(getPlot(world, network.derrickId)).injectMult * s;
             if (!pocket || pocket.oil <= 0 || !player || player.money < cost) {
                 network.injecting = false;
                 network.isPumping = !!pocket && pocket.oil > 0;
@@ -1502,10 +1550,10 @@
     }
 
     return {
-        C, RULES, PLAYER_COLORS, NEWS, ROCKS, ERAS, BUYERS, BUYER_IDS,
+        C, RULES, PLAYER_COLORS, NEWS, ROCKS, ERAS, BUYERS, BUYER_IDS, TERRAIN,
         seededRandom, createWorld, act, step, serialize,
         getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
         isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll,
-        eraThreshold, truckSpeed, quoteAtStock, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
+        eraThreshold, truckSpeed, quoteAtStock, plotAtX, terrainOf, plotCenterX, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
     };
 });

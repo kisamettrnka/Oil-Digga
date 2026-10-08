@@ -15,7 +15,7 @@ function makeBot(w, pid, opts) {
         if (p.over || st.wells.length >= o.maxWells) return;
         // nejlevnější volný pozemek, nad kterým (do 250 px) je netěžené ložisko
         const cands = w.plots.filter(pl => !pl.owner).map(pl => {
-            const cx = pl.x + C.PLOT_WIDTH / 2;
+            const cx = pl.x + pl.width / 2;
             const pk = w.oilPockets.filter(k => k.oil > 1500).sort((a, b) =>
                 Math.hypot(a.x + a.width / 2 - cx, a.y - C.GROUND_LEVEL) - Math.hypot(b.x + b.width / 2 - cx, b.y - C.GROUND_LEVEL))[0];
             return { pl, pk, d: pk ? Math.abs(pk.x + pk.width / 2 - cx) : 1e9 };
@@ -29,7 +29,7 @@ function makeBot(w, pid, opts) {
         p.money -= C.SEISMIC_COST; // průzkum
         Sim.act(w, pid, { type: 'buildDerrick', plotId: c.pl.id });
         for (let i = 0; i < o.silos; i++) Sim.act(w, pid, { type: 'buildSilo', plotId: c.pl.id });
-        const cx = c.pl.x + C.PLOT_WIDTH / 2;
+        const cx = c.pl.x + c.pl.width / 2;
         const tx = c.pk.x + c.pk.width / 2, ty = c.pk.y + c.pk.height / 2;
         // nejdřív svisle, pak šikmo (vrták neumí stoupat)
         Sim.act(w, pid, { type: 'drill', plotId: c.pl.id, x: cx + (tx - cx) * 0.3, y: C.GROUND_LEVEL + (ty - C.GROUND_LEVEL) * 0.5 });

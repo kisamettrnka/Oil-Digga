@@ -50,6 +50,8 @@ Hotovo: kupci ve městě se skladem a poptávkou podle éry, éry podle dodané 
 
 ## Fáze 4: claimy a geologická mapa
 
+Hotovo: nepravidelné claimy s terénem (kopec, řeka, skála), mapa geologického průzkumu s legendou, šrafované vrstvy. Výběr claimu jde přímo z mapy.
+
 - Pozemky jsou nepravidelné claimy různé šířky s terénem (kopec = dražší stavba, řeka = levná voda pro vtláčení, skála = žula pod povrchem).
 - Výběr claimu na mapě geologického průzkumu. Podzemí po průzkumu vypadá jako ručně kreslená geologická mapa: šrafy podle horniny, legenda, vrstevnice. Šrafování vrstev je od fáze 1, legenda a mapa přibudou tady.
 

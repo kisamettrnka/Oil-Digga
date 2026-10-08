@@ -31,9 +31,10 @@ app.use(express.json({ limit: '4kb' }));
 function noStore(res) {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
 }
+// root: send kontroluje tečkové adresáře jen v relativní cestě, ne v cestě k repu (worktree pod .claude/)
 const sendRootFile = file => (req, res) => {
     noStore(res);
-    res.sendFile(path.join(ROOT, file));
+    res.sendFile(file, { root: ROOT });
 };
 const staticDir = dir => express.static(dir, { index: false, setHeaders: noStore });
 

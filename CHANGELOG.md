@@ -4,6 +4,10 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Claimy a mapa průzkumu
+- Pozemky jsou nepravidelné claimy různé šířky s terénem: Rovina, Kopec (vrt a silo stojí 1,5×, claim levnější), Řeka (vtláčení vody za 35 %, claim dražší) a Skála (žula pod povrchem, pomalý začátek vrtu, claim nejlevnější). Cedule ukazuje terén a šířku, kopce, řeky s mostkem a balvany jsou vidět na desce.
+- Nová mapa geologického průzkumu (tlačítko vpravo nahoře nebo klávesa G): papírový list s claimy, vrstvami hornin, známými ložisky, plynem a vodou, trasami vrtů a legendou. Kliknutím na claim ho koupíš nebo otevřeš protokol svého vrtu.
+
 ### Reklamní vzducholoď
 - Vzducholoď nad městem vleče plátěný transparent s lampami, reklamu na sesterský projekt priceguessr.eu. Klik na vzducholoď otevře web (v Discordu přes jeho vlastní dialog).
 - Pouštní kurýr tiskne stejný inzerát v rámečku, v mimořádném vydání i na výsledkové straně, kde je kliknutelný.

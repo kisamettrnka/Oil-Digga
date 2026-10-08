@@ -30,7 +30,7 @@ function pocketCenter(pk) {
 }
 function tapNearest(w, pid, plotId) {
     const plot = w.plots[plotId];
-    const cx = plot.x + C.PLOT_WIDTH / 2;
+    const cx = plot.x + plot.width / 2;
     const pk = w.oilPockets.filter(p => !p.tappedBy.length).sort((a, b) => Math.abs(a.x + a.width / 2 - cx) - Math.abs(b.x + b.width / 2 - cx))[0];
     return drillTo(w, pid, plotId, pocketCenter(pk));
 }
@@ -40,6 +40,7 @@ function plainWorld(seed, rock = 'sand') {
     w.hazards = [];
     w.links = [];
     w.strata = { bounds: [], layers: [rock] };
+    w.plots.forEach(p => { p.terrain = 'flat'; p.rockDepth = 0; });
     w.players.player.money = 100000;
     Sim.act(w, 'player', { type: 'buyPlot', plotId: 3 });
     Sim.act(w, 'player', { type: 'buildDerrick', plotId: 3 });
@@ -47,7 +48,7 @@ function plainWorld(seed, rock = 'sand') {
     w.news.nextInDays = 9999;
     return w;
 }
-const rigX = w => w.plots[3].x + C.PLOT_WIDTH / 2;
+const rigX = w => w.plots[3].x + w.plots[3].width / 2;
 
 t('same seed = same world', () => {
     const a = Sim.createWorld({ seed: 42 }), b = Sim.createWorld({ seed: 42 });
@@ -421,7 +422,7 @@ t('reservoir: rate declines as the pocket drains, injection lifts it', () => {
     const pk = w.oilPockets[0];
     w.oilPockets = [pk];
     const x = pocketCenter(pk).x;
-    w.plots[3].x = x - C.PLOT_WIDTH / 2;
+    w.plots[3].x = x - w.plots[3].width / 2;
     assert.ok(drillTo(w, 'player', 3, pocketCenter(pk)).struck);
     const n = Sim.getNetworkForPlot(w, 3);
     pk.oil = pk.maxOil;
@@ -432,7 +433,7 @@ t('reservoir: rate declines as the pocket drains, injection lifts it', () => {
     // druhý vrt do stejného ložiska vtláčí vodu
     Sim.act(w, 'player', { type: 'buyPlot', plotId: 4 });
     Sim.act(w, 'player', { type: 'buildDerrick', plotId: 4 });
-    w.plots[4].x = x - C.PLOT_WIDTH / 2 + 30;
+    w.plots[4].x = x - w.plots[4].width / 2 + 30;
     assert.ok(drillTo(w, 'player', 4, pocketCenter(pk)).struck, 'second well into the same pocket');
     const injector = Sim.getNetworkForPlot(w, 4);
     assert.ok(Sim.act(w, 'player', { type: 'inject', plotId: 4 }).ok);
@@ -464,6 +465,55 @@ t('strata and hazards are generated from the seed', () => {
     assert.ok(w.hazards.some(h => h.kind === 'gas') && w.hazards.some(h => h.kind === 'water'));
     assert.ok(Sim.ROCKS[Sim.rockAt(w, 800, C.GROUND_LEVEL + 50)]);
     assert.deepStrictEqual(Sim.createWorld({ seed: 31 }).hazards, w.hazards);
+});
+
+t('claims: 7-9 irregular widths fill the span, terrain changes price and costs', () => {
+    const w = Sim.createWorld({ seed: 51 });
+    assert.ok(w.plots.length >= 7 && w.plots.length <= 9, 'count ' + w.plots.length);
+    const span = w.plots.reduce((s, p) => s + p.width, 0);
+    assert.ok(Math.abs(span - C.CLAIM_SPAN) < 0.01, 'claims fill the span');
+    assert.ok(w.plots.every((p, i) => i === 0 || Math.abs(p.x - (w.plots[i - 1].x + w.plots[i - 1].width)) < 0.01), 'contiguous');
+    assert.ok(Math.max(...w.plots.map(p => p.width)) > Math.min(...w.plots.map(p => p.width)) * 1.3, 'widths differ');
+    assert.ok(w.plots.every(p => Sim.TERRAIN[p.terrain]));
+    // Kopec: vrt a silo stojí 1,5×
+    const hill = w.plots[2];
+    hill.terrain = 'hill';
+    w.players.player.money = 10000;
+    Sim.act(w, 'player', { type: 'buyPlot', plotId: hill.id });
+    const before = w.players.player.money;
+    Sim.act(w, 'player', { type: 'buildDerrick', plotId: hill.id });
+    assert.strictEqual(before - w.players.player.money, Math.round(C.VRT_COST * 1.5));
+    // Skála: žula pod povrchem jen v tom claimu
+    const rock = w.plots[4];
+    rock.terrain = 'rock';
+    rock.rockDepth = 80;
+    const cx = rock.x + rock.width / 2;
+    assert.strictEqual(Sim.rockAt(w, cx, C.GROUND_LEVEL + 40), 'granite');
+    assert.notStrictEqual(Sim.rockAt(w, cx, C.GROUND_LEVEL + 200), 'granite');
+    const flatPlot = w.plots.find(p => p.terrain !== 'rock');
+    assert.notStrictEqual(Sim.rockAt(w, flatPlot.x + flatPlot.width / 2, C.GROUND_LEVEL + 40), 'granite');
+});
+
+t('claims: river makes injection cheap', () => {
+    const w = plainWorld(52);
+    const pk = w.oilPockets[0];
+    w.oilPockets = [pk];
+    const x = pocketCenter(pk).x;
+    w.plots[3].x = x - w.plots[3].width / 2;
+    assert.ok(drillTo(w, 'player', 3, pocketCenter(pk)).struck);
+    const costOn = terrain => {
+        w.plots[3].terrain = terrain;
+        const n = Sim.getNetworkForPlot(w, 3);
+        n.injecting = true;
+        n.isPumping = false;
+        const money = w.players.player.money;
+        Sim.step(w, 1000);
+        n.injecting = false;
+        return money - w.players.player.money;
+    };
+    const flat = costOn('flat');
+    const river = costOn('river');
+    assert.ok(Math.abs(river - flat * Sim.TERRAIN.river.injectMult) < 0.01, `river ${river} vs flat ${flat}`);
 });
 
 console.log(out.join('\n'));
