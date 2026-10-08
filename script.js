@@ -93,12 +93,13 @@ const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
 // Předvolby hráče: patří jen tomuto prohlížeči, svět hry nikdy nemění
 const PREFS_KEY = 'oilDiggaPrefs';
-const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, newsFlash: true, ads: true };
+const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true };
 const PREF_FIELDS = [
     { key: 'sound', label: 'Zvuk', options: [[true, 'Zapnutý'], [false, 'Vypnutý', 'klávesa M']] },
     { key: 'volume', label: 'Hlasitost', options: [[0.25, 'Tichá'], [0.5, 'Střední'], [0.85, 'Hlasitá']] },
     { key: 'shake', label: 'Otřesy', options: [[true, 'Ano', 'erupce a výbuchy třesou obrazem'], [false, 'Ne']] },
-    { key: 'newsFlash', label: 'Noviny', options: [[true, 'Zvláštní vydání', 'přes obrazovku'], [false, 'Jen do pásky']] },
+    { key: 'life', label: 'Život', options: [[true, 'Plný', 'chodci, provoz, letadla, ohňostroje'], [false, 'Úsporný', 'klidné město, méně kouře, šetří výkon']] },
+    { key: 'newsFlash', label: 'Noviny', options: [[true, 'Zvláštní vydání', 'přes obrazovku'], [false, 'Telegramem', 'krátce v rohu']] },
     { key: 'ads', label: 'Reklamy', options: [[true, 'Zobrazovat'], [false, 'Skrýt']], visible: () => adsAvailable() }
 ];
 let prefs = loadPrefs();
@@ -500,7 +501,7 @@ function updateAmbient(frameMs) {
     const dt = frameMs / 1000;
     ambientClock += dt;
 
-    if (ambientClock >= nextFireworkAt) { // občas někdo ve městě slaví
+    if (prefs.life && ambientClock >= nextFireworkAt) { // občas někdo ve městě slaví
         const groundLevel = getGroundLevel();
         launchFirework(120 + Math.random() * (canvas.width - 240), getSlabBackY(groundLevel) + 40);
         nextFireworkAt = ambientClock + 9 + Math.random() * 10;
@@ -572,6 +573,11 @@ function flightProgress(period, duration, offset) {
 }
 
 function drawSkyLife(groundLevel) {
+    if (!prefs.life) { // úsporný život: prázdná obloha, jen ohňostroje z erupcí
+        blimpHitRect = null;
+        drawFireworks();
+        return;
+    }
     const t = ambientClock;
     const backY = getSlabBackY(groundLevel);
 
@@ -942,6 +948,7 @@ function wrapX(x, span) {
 const STREET_GROUPS = [230, 610, 1010, 1380];
 
 function drawTownLife(groundLevel) {
+    if (!prefs.life) return;
     const t = ambientClock;
     const L = getTownLayout(groundLevel);
     const s = L.streetScale;
@@ -982,6 +989,7 @@ function drawTownLife(groundLevel) {
 // Přední řada domů a promenáda před městem (pomalé procházky v obou směrech)
 function drawTownFront(groundLevel) {
     ctx.drawImage(getTownFrontCache(), 0, 0);
+    if (!prefs.life) return;
     const t = ambientClock;
     const L = getTownLayout(groundLevel);
     const s = slabScaleAt(L.promenadeY, groundLevel);
@@ -1549,9 +1557,10 @@ function daysText(n) {
 // Velký pruh "Mimořádné zprávy" se znělkou, po chvíli zmizí (zpráva zůstane v seznamu běžících)
 function showBreakingNews(e) {
     const box = document.getElementById('news-flash');
-    if (!box || !prefs.newsFlash) {
+    const market = e.market || `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
+    if (!box || !prefs.newsFlash) { // bez zvláštního vydání aspoň telegram s titulkem a dopadem na trh
         playSound('news');
-        logEvent(`Zprávy: ${e.title}`);
+        notify(`Zprávy: ${e.title}`, market, 'news', 'news');
         return;
     }
     // Zvláštní vydání novin: hlavička, datum, titulek, článek a "burza" s dopadem
@@ -1562,7 +1571,7 @@ function showBreakingNews(e) {
     box.querySelector('.np-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
     box.querySelector('.np-headline').textContent = e.title;
     box.querySelector('.np-lead').textContent = e.desc;
-    box.querySelector('.np-market span').textContent = e.market || `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
+    box.querySelector('.np-market span').textContent = market;
     box.classList.remove('hidden', 'leaving');
     void box.offsetWidth; // restart animace, když přijde další zpráva hned po předchozí
     box.classList.add('show');
@@ -2751,6 +2760,7 @@ function drawCliff(groundLevel, rand) {
 
 // Kouř z komínů města a prach v měsíčním světle; jen kresba, poloha je funkcí času
 function drawAmbientDust() {
+    if (!prefs.life) return;
     const t = performance.now() / 1000;
     const groundLevel = getGroundLevel();
     ctx.save();
@@ -4492,6 +4502,7 @@ function getTruckBaseY(truck, groundLevel) {
 
 // --- Částice ---
 function spawnParticle(particle) {
+    if (!prefs.life && Math.random() < 0.6) return; // úsporný život: zhruba třetina kouře a páry
     if (particles.length >= MAX_PARTICLES) particles.shift();
     particles.push(particle);
 }
