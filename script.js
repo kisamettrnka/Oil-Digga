@@ -4172,27 +4172,58 @@ function drawOilPockets(groundLevel) {
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'; // vyhloubená dutina ve skále
             ctx.lineWidth = 12;
             ctx.stroke();
-            const oil = ctx.createRadialGradient(cx, cy + pocket.height * 0.1, 2, cx, cy, size * 0.6);
-            if (pumping) {
-                oil.addColorStop(0, `rgba(255, 200, 100, ${0.25 + 0.7 * heat})`);
-                oil.addColorStop(0.35, `rgba(220, 90, 25, ${0.35 + 0.5 * heat})`);
-                oil.addColorStop(1, 'rgba(25, 8, 3, 0.96)');
-            } else {
-                oil.addColorStop(0, `rgba(60, 42, 30, ${0.6 + fillRatio * 0.35})`);
-                oil.addColorStop(1, `rgba(6, 4, 3, ${0.7 + fillRatio * 0.28})`);
-            }
-            ctx.fillStyle = oil;
-            ctx.fill();
             ctx.strokeStyle = pumping ? `rgba(255, 170, 70, ${0.4 + 0.5 * heat})` : 'rgba(255, 190, 120, 0.25)';
             ctx.lineWidth = pumping ? 2 : 1.2;
             ctx.stroke();
             ctx.clip();
-            if (pumping) { // bublinky stoupající ke stropu dutiny
+            // Prázdná dutina: tmavá skála s kapkami ropy na stěnách
+            ctx.fillStyle = 'rgba(14, 9, 7, 0.94)';
+            ctx.fillRect(pocket.x - 10, pocket.y - 10, pocket.width + 20, pocket.height + 20);
+            const rand = seededRandom(pocket.id * 131 + 7);
+            ctx.fillStyle = 'rgba(70, 45, 30, 0.5)';
+            for (let k = 0; k < 10; k++) {
+                ctx.fillRect(pocket.x + rand() * pocket.width, pocket.y + rand() * pocket.height, 1.5 + rand() * 2, 3 + rand() * 6);
+            }
+            // Hladina ropy: s těžbou klesá ode stropu dutiny ke dnu
+            const levelY = pocket.y + pocket.height * (1 - fillRatio);
+            const wobble = pumping ? 1.5 : 0.6;
+            if (fillRatio > 0) {
+                const oil = ctx.createLinearGradient(0, levelY, 0, pocket.y + pocket.height);
+                if (pumping) {
+                    oil.addColorStop(0, `rgba(255, 190, 90, ${0.35 + 0.55 * heat})`);
+                    oil.addColorStop(0.25, `rgba(220, 90, 25, ${0.5 + 0.4 * heat})`);
+                    oil.addColorStop(1, 'rgba(30, 10, 4, 0.98)');
+                } else {
+                    oil.addColorStop(0, 'rgba(90, 60, 40, 0.95)');
+                    oil.addColorStop(1, 'rgba(8, 5, 3, 0.98)');
+                }
+                ctx.fillStyle = oil;
+                ctx.beginPath();
+                ctx.moveTo(pocket.x - 10, levelY + wobble);
+                for (let x = pocket.x - 10; x <= pocket.x + pocket.width + 10; x += 6) {
+                    ctx.lineTo(x, levelY + Math.sin(x * 0.12 + t * 1.6) * wobble);
+                }
+                ctx.lineTo(pocket.x + pocket.width + 10, pocket.y + pocket.height + 10);
+                ctx.lineTo(pocket.x - 10, pocket.y + pocket.height + 10);
+                ctx.closePath();
+                ctx.fill();
+                // Lesk na hladině
+                ctx.strokeStyle = pumping ? `rgba(255, 220, 150, ${0.35 + 0.4 * heat})` : 'rgba(255, 230, 200, 0.22)';
+                ctx.lineWidth = 1.2;
+                ctx.beginPath();
+                for (let x = pocket.x - 10; x <= pocket.x + pocket.width + 10; x += 6) {
+                    const y = levelY + Math.sin(x * 0.12 + t * 1.6) * wobble;
+                    if (x === pocket.x - 10) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            }
+            if (pumping && fillRatio > 0) { // bublinky stoupající k hladině
                 ctx.globalCompositeOperation = 'lighter';
                 for (let b = 0; b < 6; b++) {
                     const life = (t * 0.4 + b / 6 + cx * 0.01) % 1;
                     const bx = cx + Math.sin(b * 2.3 + cx) * pocket.width * 0.3;
-                    const by = cy + pocket.height * 0.4 - life * pocket.height * 0.8;
+                    const by = pocket.y + pocket.height - 4 - life * (pocket.y + pocket.height - levelY - 6);
+                    if (by <= levelY) continue;
                     ctx.fillStyle = `rgba(255, 210, 120, ${0.5 * (1 - life) * heat})`;
                     ctx.beginPath();
                     ctx.arc(bx, by, 1.5 + b % 3, 0, Math.PI * 2);
@@ -4200,10 +4231,16 @@ function drawOilPockets(groundLevel) {
                 }
                 ctx.globalCompositeOperation = 'source-over';
             }
-            ctx.fillStyle = 'rgba(255, 230, 200, 0.10)'; // lesk hladiny
-            ctx.beginPath();
-            ctx.ellipse(cx - pocket.width * 0.15, cy - pocket.height * 0.22, pocket.width * 0.22, pocket.height * 0.08, -0.2, 0, Math.PI * 2);
-            ctx.fill();
+            // Rysky na stěně dutiny: původní hladina a čtvrtiny, ať je pokles vidět i bez štítku
+            ctx.strokeStyle = 'rgba(255, 220, 180, 0.22)';
+            ctx.lineWidth = 1;
+            [0.25, 0.5, 0.75].forEach(f => {
+                const y = pocket.y + pocket.height * (1 - f);
+                ctx.beginPath();
+                ctx.moveTo(pocket.x + pocket.width * 0.06, y);
+                ctx.lineTo(pocket.x + pocket.width * 0.06 + 7, y);
+                ctx.stroke();
+            });
             ctx.restore();
         }
     });
@@ -4292,6 +4329,12 @@ function drawPocketChip(pocket, pumping) {
     ctx.font = '700 14px "Courier Prime", monospace';
     ctx.fillStyle = INK;
     ctx.fillText(Math.floor(pocket.oil).toLocaleString('cs-CZ'), x + 34, y + 30);
+    // Ukazatel zbytku ložiska podél spodní hrany štítku
+    const left = pocket.maxOil > 0 ? Math.max(0, Math.min(1, pocket.oil / pocket.maxOil)) : 0;
+    ctx.fillStyle = 'rgba(40, 28, 16, 0.18)';
+    ctx.fillRect(x + 34, y + h - 5, w - 44, 2);
+    ctx.fillStyle = left < 0.25 ? INK_RED : INK;
+    ctx.fillRect(x + 34, y + h - 5, (w - 44) * left, 2);
     ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillStyle = pocket.oil <= 0 ? INK_RED : (pumping ? INK_RED : '#1b3a66');

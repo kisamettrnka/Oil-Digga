@@ -4,6 +4,9 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Ubývání ložiska
+- Ložisko je dutina ve skále s hladinou ropy, která s těžbou klesá ode stropu ke dnu (s ryskami po čtvrtinách); vyčerpané zůstane prázdná tmavá dutina. Cedulka ložiska má ukazatel zbytku, pod čtvrtinou červený.
+
 ### Volba kupce, kalendář v multiplayeru, kratší dražby
 - Vrtný protokol, Zakázky, Soupeři a průvodce jsou větší a čitelnější.
 - Na každém ceníku je razítko „Vozit sem“: všechny tvé vozy pak jezdí k tomu kupci (dokud nezavře), další klik to zruší a vozy si zase vybírají podle ceny.
