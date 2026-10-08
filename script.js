@@ -91,7 +91,18 @@ let lastDayIncome = 0;
 // Částice (kouř z aut, "+$" při prodeji) a zvuk
 const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
-let soundMuted = false;
+// Předvolby hráče: patří jen tomuto prohlížeči, svět hry nikdy nemění
+const PREFS_KEY = 'oilDiggaPrefs';
+const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true };
+const PREF_FIELDS = [
+    { key: 'sound', label: 'Zvuk', options: [[true, 'Zapnutý'], [false, 'Vypnutý', 'klávesa M']] },
+    { key: 'volume', label: 'Hlasitost', options: [[0.25, 'Tichá'], [0.5, 'Střední'], [0.85, 'Hlasitá']] },
+    { key: 'shake', label: 'Otřesy', options: [[true, 'Ano', 'erupce a výbuchy třesou obrazem'], [false, 'Ne']] },
+    { key: 'life', label: 'Život', options: [[true, 'Plný', 'chodci, provoz, letadla, ohňostroje'], [false, 'Úsporný', 'klidné město, méně kouře, šetří výkon']] },
+    { key: 'newsFlash', label: 'Noviny', options: [[true, 'Zvláštní vydání', 'přes obrazovku'], [false, 'Telegramem', 'krátce v rohu']] },
+    { key: 'ads', label: 'Reklamy', options: [[true, 'Zobrazovat'], [false, 'Skrýt']], visible: () => adsAvailable() }
+];
+let prefs = loadPrefs();
 let audioCtx = null;
 
 // Herní čas
@@ -560,7 +571,7 @@ function updateAmbient(frameMs) {
     const dt = frameMs / 1000;
     ambientClock += dt;
 
-    if (ambientClock >= nextFireworkAt) { // občas někdo ve městě slaví
+    if (prefs.life && ambientClock >= nextFireworkAt) { // občas někdo ve městě slaví
         const groundLevel = getGroundLevel();
         launchFirework(120 + Math.random() * (canvas.width - 240), getSlabBackY(groundLevel) + 40);
         nextFireworkAt = ambientClock + 9 + Math.random() * 10;
@@ -632,6 +643,11 @@ function flightProgress(period, duration, offset) {
 }
 
 function drawSkyLife(groundLevel) {
+    if (!prefs.life) { // úsporný život: prázdná obloha, jen ohňostroje z erupcí
+        blimpHitRect = null;
+        drawFireworks();
+        return;
+    }
     const t = ambientClock;
     const backY = getSlabBackY(groundLevel);
 
@@ -656,7 +672,11 @@ function drawSkyLife(groundLevel) {
     // Reklamní vzducholoď s vlečným transparentem a světlometem na město
     const blimp = flightProgress(90, 70, 20);
     blimpHitRect = null;
-    if (blimp !== null) drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+    if (blimp === null) blimpAd = undefined;
+    else {
+        if (blimpAd === undefined) blimpAd = pickAd(); // jedna reklama na celý přelet
+        drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+    }
 
     // Netopýři
     const bats = flightProgress(34, 16, 5);
@@ -706,8 +726,10 @@ function drawBlimp(x, y, groundLevel) {
     ctx.fill();
     ctx.restore();
 
-    drawBlimpBanner(x - 80, y + 2, t);
-    blimpHitRect = { x: x - 80 - BLIMP_AD_W - 30, y: y - 26, width: BLIMP_AD_W + 30 + 80 + 76, height: 56 };
+    if (blimpAd) {
+        const w = drawBlimpBanner(x - 80, y + 2, t, blimpAd);
+        blimpHitRect = { x: x - 80 - w - 30, y: y - 26, width: w + 30 + 80 + 76, height: 56 };
+    }
     const body = ctx.createLinearGradient(0, y - 22, 0, y + 22);
     body.addColorStop(0, '#5c5e78');
     body.addColorStop(0.5, '#3a3b52');
@@ -749,16 +771,27 @@ function drawBlimp(x, y, groundLevel) {
     if (!blink) drawGlow(x - 70, y - 14, 8, '255, 255, 255', 0.6);
 }
 
-// Plátěný transparent na lanech za ocasem, vlní se ve větru a nasvěcují ho lampy na spodní hraně
-const AD_URL = 'https://priceguessr.eu';
-const BLIMP_AD = ['HÁDEJ CENY · ', 'priceguessr.eu'];
-const BLIMP_AD_W = 236;
-function openAdLink() {
-    if (typeof Net !== 'undefined' && Net.openLink) Net.openLink(AD_URL);
-    else window.open(AD_URL, '_blank', 'noopener');
+// Reklamy z ads.js: náhodná reklama s transparentem, jinak null (jediné místo je vzducholoď)
+function adsAvailable() {
+    const config = typeof OIL_ADS !== 'undefined' ? OIL_ADS : null;
+    return !!config?.enabled;
 }
-function drawBlimpBanner(ax, ay, t) {
-    const w = BLIMP_AD_W, h = 26, segs = 28;
+function pickAd() {
+    if (!prefs.ads || !adsAvailable()) return null;
+    const ads = (OIL_ADS.ads || []).filter(ad => ad.url && ad.banner);
+    return ads.length ? ads[Math.floor(Math.random() * ads.length)] : null;
+}
+function openAdLink(url) {
+    if (typeof Net !== 'undefined' && Net.openLink) Net.openLink(url);
+    else window.open(url, '_blank', 'noopener');
+}
+// Plátěný transparent na lanech za ocasem, vlní se ve větru a nasvěcují ho lampy na spodní hraně
+// Vrací šířku plátna, ať zásah myší sedí i na delší nebo kratší text
+function drawBlimpBanner(ax, ay, t, ad) {
+    const parts = ad.banner;
+    const text = parts.join('');
+    ctx.font = '700 16px "Barlow Condensed", system-ui, sans-serif';
+    const w = Math.max(120, ctx.measureText(text).width + 68), h = 26, segs = 28;
     const x0 = ax - 24; // přední (pravý) okraj plátna
     const wave = u => Math.sin(t * 3.2 - u * 7) * 4 * (0.2 + u);
     ctx.strokeStyle = 'rgba(16, 14, 22, 0.9)';
@@ -830,11 +863,10 @@ function drawBlimpBanner(ax, ay, t) {
     ctx.font = '700 16px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const text = BLIMP_AD.join('');
     let cx = x0 - w / 2 - ctx.measureText(text).width / 2;
     for (let i = 0; i < text.length; i++) {
         const cw = ctx.measureText(text[i]).width;
-        ctx.fillStyle = i < BLIMP_AD[0].length ? INK : INK_RED;
+        ctx.fillStyle = i < parts[0].length ? INK : INK_RED;
         ctx.fillText(text[i], cx, ay + 1 + wave((x0 - cx - cw / 2) / w));
         cx += cw;
     }
@@ -852,6 +884,7 @@ function drawBlimpBanner(ax, ay, t) {
         ctx.fillRect(l.x - 1.5, l.y + 2, 3, 3);
         drawGlow(l.x, l.y + 3, 9, '255, 190, 110', 0.7);
     }
+    return w;
 }
 
 function drawBiplane(x, y, dir) {
@@ -985,6 +1018,7 @@ function wrapX(x, span) {
 const STREET_GROUPS = [230, 610, 1010, 1380];
 
 function drawTownLife(groundLevel) {
+    if (!prefs.life) return;
     const t = ambientClock;
     const L = getTownLayout(groundLevel);
     const s = L.streetScale;
@@ -1025,6 +1059,7 @@ function drawTownLife(groundLevel) {
 // Přední řada domů a promenáda před městem (pomalé procházky v obou směrech)
 function drawTownFront(groundLevel) {
     ctx.drawImage(getTownFrontCache(), 0, 0);
+    if (!prefs.life) return;
     const t = ambientClock;
     const L = getTownLayout(groundLevel);
     const s = slabScaleAt(L.promenadeY, groundLevel);
@@ -1093,6 +1128,7 @@ function resetCamera(instant = false) {
 }
 
 function shakeCamera(strength) {
+    if (!prefs.shake) return;
     camera.shake = Math.max(camera.shake, strength);
 }
 
@@ -2139,16 +2175,20 @@ function daysText(n) {
 // Velký pruh "Mimořádné zprávy" se znělkou, po chvíli zmizí (zpráva zůstane v seznamu běžících)
 function showBreakingNews(e) {
     const box = document.getElementById('news-flash');
-    if (!box) return;
+    const market = e.market || `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
+    if (!box || !prefs.newsFlash) { // bez zvláštního vydání aspoň telegram s titulkem a dopadem na trh
+        playSound('news');
+        notify(`Zprávy: ${e.title}`, market, 'news', 'news');
+        return;
+    }
     // Zvláštní vydání novin: hlavička, datum, titulek, článek a "burza" s dopadem
     box.innerHTML = '<div class="np-masthead">Pouštní kurýr</div>' +
         '<div class="np-dateline"><span>Zvláštní vydání</span><span class="np-date"></span><span>Cena 5 centů</span></div>' +
-        '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>' +
-        newspaperAdHtml();
+        '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>';
     box.querySelector('.np-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
     box.querySelector('.np-headline').textContent = e.title;
     box.querySelector('.np-lead').textContent = e.desc;
-    box.querySelector('.np-market span').textContent = e.market || `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
+    box.querySelector('.np-market span').textContent = market;
     box.classList.remove('hidden', 'leaving');
     void box.offsetWidth; // restart animace, když přijde další zpráva hned po předchozí
     box.classList.add('show');
@@ -2156,14 +2196,6 @@ function showBreakingNews(e) {
     newsFlashTimer = setTimeout(() => box.classList.add('leaving'), NEWS_FLASH_MS);
     playSound('news');
     logEvent(`Zprávy: ${e.title}`);
-}
-
-// Rámečkový inzerát na sesterský projekt; v novinách je to jediná reklama, která do světa patří
-function newspaperAdHtml() {
-    return `<a class="np-ad" href="${AD_URL}" target="_blank" rel="noopener">` +
-        '<span class="np-ad-kicker">Inzerce</span><b>Uhodnete, co to stojí?</b>' +
-        '<span>Zboží všeho druhu, cena tajná, tipuje celá osada. Zábava zdarma, v Čechách i za mořem.</span>' +
-        '<i>priceguessr.eu</i></a>';
 }
 
 // Seznam běžících zpráv pod horní lištou
@@ -2185,6 +2217,7 @@ const MAX_TOASTS = 2;
 // Oznámení vlevo nahoře; zároveň se zapíše do deníku událostí
 // --- Ikony (vlastní SVG, žádné emoji): tah currentColor, viewBox 24 ---
 const ICONS = {
+    prefs: '<path d="M5 4v16M12 4v16M19 4v16"/><path d="M3 15h4M10 8h4M17 13h4"/>',
     flag: '<path d="M6 21V4M6 4h11l-2.5 4L17 12H6"/>',
     derrick: '<path d="M8 21 11 4h2l3 17M9.5 13h5M10.4 8.5h3.2M8.6 18l6.6-6M15.4 18l-6.6-6M5 21h14"/>',
     gusher: '<path d="M12 21v-6M9 21h6M12 15c-3-3-3-6 0-11 3 5 3 8 0 11Z"/><path d="M5 9l2 1M19 9l-2 1M6 4l2 2M18 4l-2 2"/>',
@@ -3517,6 +3550,7 @@ function drawCliff(groundLevel, rand) {
 
 // Kouř z komínů města a prach v měsíčním světle; jen kresba, poloha je funkcí času
 function drawAmbientDust() {
+    if (!prefs.life) return;
     const t = performance.now() / 1000;
     const groundLevel = getGroundLevel();
     ctx.save();
@@ -3559,7 +3593,8 @@ function drawGlow(x, y, radius, color, alpha) {
 
 // Přidám globální pole pro hitboxy cedulí
 let plotSignHitboxes = [];
-let blimpHitRect = null; // reklamní vzducholoď (klik otevře odkaz), jen když je na obloze
+let blimpHitRect = null; // reklamní vzducholoď (klik otevře odkaz), jen když je na obloze a nese reklamu
+let blimpAd; // reklama na transparentu; undefined = pro tento přelet ještě nevylosováno, null = bez reklamy
 let plotsHoverPointer = false; // myš je nad cedulí nebo stavitelným pozemkem
 
 const PLOT_SIGN_PAD = 10;
@@ -5302,6 +5337,7 @@ function getTruckBaseY(truck, groundLevel) {
 
 // --- Částice ---
 function spawnParticle(particle) {
+    if (!prefs.life && Math.random() < 0.6) return; // úsporný život: zhruba třetina kouře a páry
     if (particles.length >= MAX_PARTICLES) particles.shift();
     particles.push(particle);
 }
@@ -5398,7 +5434,6 @@ function emitDerrickSmoke(dt) {
 // Zvuky se syntetizují (žádné soubory): kovový FM zvonek a filtrovaný šum.
 // Prodej = pokladna: cvaknutí šuplíku a dva tóny zvonku; strike = zvonková arpeggia;
 // build = dřevěné ťuknutí; boom = hluboký výbuch nálože.
-const MASTER_VOLUME = 0.5;
 const SALE_SOUND_GAP_MS = 140; // víc prodejů naráz nezní jako kulomet
 let lastSaleSoundAt = 0;
 let noiseBuffer = null;
@@ -5527,7 +5562,7 @@ const SOUNDS = {
 };
 
 function playSound(kind) {
-    if (soundMuted || !SOUNDS[kind]) return;
+    if (!prefs.sound || !SOUNDS[kind]) return;
     if (kind === 'sale') {
         const now = performance.now();
         if (now - lastSaleSoundAt < SALE_SOUND_GAP_MS) return;
@@ -5537,7 +5572,7 @@ function playSound(kind) {
         const ac = getAudioContext();
         if (!ac) return;
         const out = ac.createGain();
-        out.gain.value = MASTER_VOLUME;
+        out.gain.value = prefs.volume;
         out.connect(ac.destination);
         SOUNDS[kind](ac, out, ac.currentTime + 0.005);
     } catch (e) {
@@ -5546,11 +5581,25 @@ function playSound(kind) {
 }
 
 function toggleSound() {
-    soundMuted = !soundMuted;
+    setPref('sound', !prefs.sound);
+}
+
+function updateSoundButton() {
     const btn = document.getElementById('sound-btn');
-    if (btn) {
-        btn.innerHTML = iconSvg(soundMuted ? 'soundOff' : 'soundOn');
-        btn.classList.toggle('muted', soundMuted);
+    if (!btn) return;
+    btn.innerHTML = iconSvg(prefs.sound ? 'soundOn' : 'soundOff');
+    btn.classList.toggle('muted', !prefs.sound);
+}
+
+// --- Předvolby: uložení, formulář a promítnutí do hry ---
+function loadPrefs() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+        // Jen známé klíče se známými hodnotami; staré nebo rozbité uložení nic nerozbije
+        const valid = PREF_FIELDS.filter(f => f.options.some(([value]) => value === saved[f.key]));
+        return { ...DEFAULT_PREFS, ...Object.fromEntries(valid.map(f => [f.key, saved[f.key]])) };
+    } catch (e) {
+        return { ...DEFAULT_PREFS };
     }
 }
 
@@ -5568,6 +5617,44 @@ function drawBuildCostLabel(plot, base, groundLevel) {
     ctx.fillStyle = money >= cost ? INK : INK_RED;
     ctx.fillText(label, mousePos.x + 19, mousePos.y - 14);
     ctx.restore();
+}
+
+function setPref(key, value) {
+    prefs[key] = value;
+    try {
+        localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {
+        // Bez úložiště platí předvolby jen do zavření hry
+    }
+    if (key === 'sound') updateSoundButton();
+    if (key === 'volume') playSound('sale'); // ukázka nové hlasitosti
+    if (key === 'ads') blimpAd = undefined; // vzducholoď si reklamu vylosuje znovu (nebo poletí bez ní)
+    renderPrefs();
+}
+
+function renderPrefs() {
+    const box = document.getElementById('prefs-fields');
+    if (!box) return;
+    box.innerHTML = PREF_FIELDS.filter(f => !f.visible || f.visible()).map(f => `
+        <div class="form-field"><div class="form-label">${f.label}</div><div class="prefs-choices">${f.options.map(([value, name, note], i) => `
+            <button class="length-btn${prefs[f.key] === value ? ' active' : ''}" data-key="${f.key}" data-index="${i}">${name}${note ? `<small>${note}</small>` : ''}</button>`).join('')}
+        </div></div>`).join('');
+}
+
+function togglePrefs(open) {
+    const overlay = document.getElementById('prefs');
+    if (!overlay) return;
+    const show = open ?? overlay.classList.contains('hidden');
+    if (show) renderPrefs();
+    overlay.classList.toggle('hidden', !show);
+}
+
+function handlePrefsClick(event) {
+    const btn = event.target.closest('button[data-key]');
+    if (!btn) return;
+    const field = PREF_FIELDS.find(f => f.key === btn.dataset.key);
+    const option = field?.options[Number(btn.dataset.index)];
+    if (option) setPref(field.key, option[0]);
 }
 
 // Odhad vrtání k bodu pod kurzorem: horniny po cestě dávají cenu a čas, strmé stoupání nejde
@@ -5771,12 +5858,11 @@ function addEventListeners() {
     document.getElementById('map-btn')?.addEventListener('click', () => toggleSurveyMap());
     document.getElementById('map-close')?.addEventListener('click', () => toggleSurveyMap(false));
     document.getElementById('map-canvas')?.addEventListener('click', handleMapClick);
-    // Odkazy z inzerátů: v Discordu musí ven přes SDK, ne přes href
-    document.addEventListener('click', (event) => {
-        if (!event.target.closest?.('a.np-ad')) return;
-        event.preventDefault();
-        openAdLink();
-    });
+    // Předvolby hráče a jejich tlačítko
+    updateSoundButton();
+    document.getElementById('prefs-btn')?.addEventListener('click', () => togglePrefs());
+    document.getElementById('prefs-close')?.addEventListener('click', () => togglePrefs(false));
+    document.getElementById('prefs-fields')?.addEventListener('click', handlePrefsClick);
     // Pohyb myši
     canvas.addEventListener('pointermove', (event) => {
         const pos = getCanvasPosition(event);
@@ -5880,7 +5966,12 @@ function addEventListeners() {
 
     window.addEventListener('keydown', (event) => {
         if (event.key === 'm' || event.key === 'M') toggleSound();
-        if (event.key === 'Escape') { if (mapOpen) toggleSurveyMap(false); else cancelBuildMode(); }
+        if (event.key === 'o' || event.key === 'O') togglePrefs();
+        if (event.key === 'Escape') {
+            if (!document.getElementById('prefs')?.classList.contains('hidden')) togglePrefs(false);
+            else if (mapOpen) toggleSurveyMap(false);
+            else cancelBuildMode();
+        }
         if ((event.key === 'g' || event.key === 'G') && !event.repeat) toggleSurveyMap();
         handleCameraKey(event);
     });
@@ -5937,8 +6028,8 @@ function handleCanvasClick(event) {
     updatePlotSignHitboxes(groundLevel);
 
     // Reklamní vzducholoď: klik otevře inzerovaný web
-    if (!currentBuildMode && blimpHitRect && isPointInRect(clickPos, blimpHitRect)) {
-        openAdLink();
+    if (!currentBuildMode && blimpHitRect && blimpAd && isPointInRect(clickPos, blimpHitRect)) {
+        openAdLink(blimpAd.url);
         return;
     }
 

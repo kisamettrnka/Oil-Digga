@@ -64,13 +64,14 @@
                 </div>
             </div>
 
-            <!-- Vpravo nahoře: kamera a zvuk -->
+            <!-- Vpravo nahoře: kamera, zvuk a předvolby -->
             <div id="hud-corner">
                 <button id="lobby-btn" class="hud-icon-btn hidden" title="Zpět do lobby"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15.5 14.2c3 .2 5.5 2.5 5.5 5.8"/></svg></button>
                 <button id="map-btn" class="hud-icon-btn" title="Mapa geologického průzkumu (G)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2V6Z"/><path d="M9 4v14M15 6v14"/><path d="M5 12c2-1.5 3 1 5-.5s3 .5 5-1 3 .5 5-1"/></svg></button>
                 <button id="zoom-out" class="hud-icon-btn" title="Oddálit (−)">−</button>
                 <button id="zoom-reset" class="hud-icon-btn" title="Celý pohled (0)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
                 <button id="zoom-in" class="hud-icon-btn" title="Přiblížit (+), táhni myší pro posun">+</button>
+                <button id="prefs-btn" class="hud-icon-btn" title="Předvolby (O)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16"/><path d="M3 15h4M10 8h4M17 13h4"/></svg></button>
                 <button id="sound-btn" class="hud-icon-btn" title="Zvuk (M)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></svg></button>
             </div>
 
@@ -183,6 +184,15 @@
                     </div>
                 </div>
             </div>
+            <!-- Předvolby hráče: formulář připíchnutý přes scénu (script.js plní volby) -->
+            <div id="prefs" class="overlay hidden">
+                <section class="sheet form prefs-sheet">
+                    <header class="sheet-head">Předvolby</header>
+                    <div id="prefs-fields"></div>
+                    <div class="fine-print">Platí jen pro tebe a v tomhle prohlížeči. Klávesa O formulář otevře i zavře.</div>
+                    <div class="board-actions"><button id="prefs-close" class="stamp-btn">Hotovo</button></div>
+                </section>
+            </div>
             <div id="race-countdown" class="hidden"></div>
             <!-- Výsledky závodu: titulní strana novin -->
             <div id="race-results" class="overlay dim hidden">
@@ -191,11 +201,6 @@
                     <div class="np-dateline"><span>Zvláštní vydání</span><span id="results-date"></span><span>Cena 5 centů</span></div>
                     <div id="results-title" class="np-headline">Průběžné pořadí</div>
                     <div id="results-list"></div>
-                    <a class="np-ad" href="https://priceguessr.eu" target="_blank" rel="noopener">
-                        <span class="np-ad-kicker">Inzerce</span><b>Uhodnete, co to stojí?</b>
-                        <span>Zboží všeho druhu, cena tajná, tipuje celá osada. Zábava zdarma, v Čechách i za mořem.</span>
-                        <i>priceguessr.eu</i>
-                    </a>
                     <div class="np-footer">
                         <button id="results-reset" class="stamp-btn hidden">Zpět do lobby</button>
                         <div id="results-wait" class="typed">Další kolo spustí hostitel.</div>
@@ -206,7 +211,7 @@
     </div>
     <script>
         // Skripty se verzují stejně jako CSS; SDK je zabalené esbuildem (npm run build)
-        ['dist/discord-sdk.js', 'sim.js', 'net.js', 'script.js'].forEach(function (src) {
+        ['dist/discord-sdk.js', 'ads.js', 'sim.js', 'net.js', 'script.js'].forEach(function (src) {
             document.write('<script src="' + src + '?v=' + window.ASSET_VERSION + '"><\/script>');
         });
     </script>
