@@ -4,6 +4,9 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Předvolby
+- Nové tlačítko vpravo nahoře (nebo klávesa O) otevře formulář Předvolby: zvuk, hlasitost, otřesy obrazu, zvláštní vydání novin přes obrazovku nebo jen do pásky a zobrazování reklam. Volby si hra pamatuje v prohlížeči.
+
 ### Reklamní vzducholoď
 - Vzducholoď nad městem vleče plátěný transparent s lampami, reklamu na sesterský projekt priceguessr.eu. Klik na vzducholoď otevře web (v Discordu přes jeho vlastní dialog).
 - Pouštní kurýr tiskne stejný inzerát v rámečku, v mimořádném vydání i na výsledkové straně, kde je kliknutelný.

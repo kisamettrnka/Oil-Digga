@@ -64,12 +64,13 @@
                 </div>
             </div>
 
-            <!-- Vpravo nahoře: kamera a zvuk -->
+            <!-- Vpravo nahoře: kamera, zvuk a předvolby -->
             <div id="hud-corner">
                 <button id="lobby-btn" class="hud-icon-btn hidden" title="Zpět do lobby"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15.5 14.2c3 .2 5.5 2.5 5.5 5.8"/></svg></button>
                 <button id="zoom-out" class="hud-icon-btn" title="Oddálit (−)">−</button>
                 <button id="zoom-reset" class="hud-icon-btn" title="Celý pohled (0)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
                 <button id="zoom-in" class="hud-icon-btn" title="Přiblížit (+), táhni myší pro posun">+</button>
+                <button id="prefs-btn" class="hud-icon-btn" title="Předvolby (O)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16M12 4v16M19 4v16"/><path d="M3 15h4M10 8h4M17 13h4"/></svg></button>
                 <button id="sound-btn" class="hud-icon-btn" title="Zvuk (M)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></svg></button>
             </div>
 
@@ -168,6 +169,15 @@
                         <button id="lobby-invite" class="tag-btn hidden">Pozvat</button>
                     </div>
                 </div>
+            </div>
+            <!-- Předvolby hráče: formulář připíchnutý přes scénu (script.js plní volby) -->
+            <div id="prefs" class="overlay hidden">
+                <section class="sheet form prefs-sheet">
+                    <header class="sheet-head">Předvolby</header>
+                    <div id="prefs-fields"></div>
+                    <div class="fine-print">Platí jen pro tebe a v tomhle prohlížeči. Klávesa O formulář otevře i zavře.</div>
+                    <div class="board-actions"><button id="prefs-close" class="stamp-btn">Hotovo</button></div>
+                </section>
             </div>
             <div id="race-countdown" class="hidden"></div>
             <!-- Výsledky závodu: titulní strana novin -->

@@ -1293,6 +1293,18 @@ button:disabled {
 .length-btn:disabled:not(.active) {
     opacity: 0.55;
 }
+/* Předvolby hráče: jeden list z kanceláře, nad lobby i výsledky */
+#prefs {
+    z-index: 60;
+}
+.prefs-sheet {
+    width: min(30em, 90%);
+}
+.prefs-choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15em 0.9em;
+}
 #lobby-target-field.hidden {
     display: none;
 }

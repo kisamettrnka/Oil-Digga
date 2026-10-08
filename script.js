@@ -91,7 +91,17 @@ let lastDayIncome = 0;
 // Částice (kouř z aut, "+$" při prodeji) a zvuk
 const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
-let soundMuted = false;
+// Předvolby hráče: patří jen tomuto prohlížeči, svět hry nikdy nemění
+const PREFS_KEY = 'oilDiggaPrefs';
+const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, newsFlash: true, ads: true };
+const PREF_FIELDS = [
+    { key: 'sound', label: 'Zvuk', options: [[true, 'Zapnutý'], [false, 'Vypnutý', 'klávesa M']] },
+    { key: 'volume', label: 'Hlasitost', options: [[0.25, 'Tichá'], [0.5, 'Střední'], [0.85, 'Hlasitá']] },
+    { key: 'shake', label: 'Otřesy', options: [[true, 'Ano', 'erupce a výbuchy třesou obrazem'], [false, 'Ne']] },
+    { key: 'newsFlash', label: 'Noviny', options: [[true, 'Zvláštní vydání', 'přes obrazovku'], [false, 'Jen do pásky']] },
+    { key: 'ads', label: 'Reklamy', options: [[true, 'Zobrazovat'], [false, 'Skrýt']], visible: () => adsAvailable() }
+];
+let prefs = loadPrefs();
 let audioCtx = null;
 
 // Herní čas
@@ -685,18 +695,21 @@ function drawBlimp(x, y, groundLevel) {
     if (!blink) drawGlow(x - 70, y - 14, 8, '255, 255, 255', 0.6);
 }
 
-// Plátěný transparent na lanech za ocasem, vlní se ve větru a nasvěcují ho lampy na spodní hraně
 // Reklamy z ads.js: náhodná reklama, která na dané místo smí a má pro něj text, jinak null
-function pickAd(place, field) {
+function adsAvailable() {
     const config = typeof OIL_ADS !== 'undefined' ? OIL_ADS : null;
-    if (!config || !config.enabled || !config.places?.[place]) return null;
-    const ads = (config.ads || []).filter(ad => ad.url && ad[field]);
+    return !!config?.enabled && Object.values(config.places || {}).some(Boolean);
+}
+function pickAd(place, field) {
+    if (!prefs.ads || !adsAvailable() || !OIL_ADS.places[place]) return null;
+    const ads = (OIL_ADS.ads || []).filter(ad => ad.url && ad[field]);
     return ads.length ? ads[Math.floor(Math.random() * ads.length)] : null;
 }
 function openAdLink(url) {
     if (typeof Net !== 'undefined' && Net.openLink) Net.openLink(url);
     else window.open(url, '_blank', 'noopener');
 }
+// Plátěný transparent na lanech za ocasem, vlní se ve větru a nasvěcují ho lampy na spodní hraně
 // Vrací šířku plátna, ať zásah myší sedí i na delší nebo kratší text
 function drawBlimpBanner(ax, ay, t, ad) {
     const parts = ad.banner;
@@ -1037,6 +1050,7 @@ function resetCamera(instant = false) {
 }
 
 function shakeCamera(strength) {
+    if (!prefs.shake) return;
     camera.shake = Math.max(camera.shake, strength);
 }
 
@@ -1535,7 +1549,11 @@ function daysText(n) {
 // Velký pruh "Mimořádné zprávy" se znělkou, po chvíli zmizí (zpráva zůstane v seznamu běžících)
 function showBreakingNews(e) {
     const box = document.getElementById('news-flash');
-    if (!box) return;
+    if (!box || !prefs.newsFlash) {
+        playSound('news');
+        logEvent(`Zprávy: ${e.title}`);
+        return;
+    }
     // Zvláštní vydání novin: hlavička, datum, titulek, článek a "burza" s dopadem
     box.innerHTML = '<div class="np-masthead">Pouštní kurýr</div>' +
         '<div class="np-dateline"><span>Zvláštní vydání</span><span class="np-date"></span><span>Cena 5 centů</span></div>' +
@@ -1552,6 +1570,12 @@ function showBreakingNews(e) {
     newsFlashTimer = setTimeout(() => box.classList.add('leaving'), NEWS_FLASH_MS);
     playSound('news');
     logEvent(`Zprávy: ${e.title}`);
+}
+
+// Inzerát na výsledkové straně závodu (z ads.js; prázdné, když je reklama vypnutá)
+function renderResultsAd() {
+    const box = document.getElementById('results-ad');
+    if (box) box.innerHTML = newspaperAdHtml(pickAd('results', 'headline'));
 }
 
 // Rámečkový inzerát z ads.js; v novinách je to jediná reklama, která do světa patří
@@ -1583,6 +1607,7 @@ const MAX_TOASTS = 2;
 // Oznámení vlevo nahoře; zároveň se zapíše do deníku událostí
 // --- Ikony (vlastní SVG, žádné emoji): tah currentColor, viewBox 24 ---
 const ICONS = {
+    prefs: '<path d="M5 4v16M12 4v16M19 4v16"/><path d="M3 15h4M10 8h4M17 13h4"/>',
     flag: '<path d="M6 21V4M6 4h11l-2.5 4L17 12H6"/>',
     derrick: '<path d="M8 21 11 4h2l3 17M9.5 13h5M10.4 8.5h3.2M8.6 18l6.6-6M15.4 18l-6.6-6M5 21h14"/>',
     gusher: '<path d="M12 21v-6M9 21h6M12 15c-3-3-3-6 0-11 3 5 3 8 0 11Z"/><path d="M5 9l2 1M19 9l-2 1M6 4l2 2M18 4l-2 2"/>',
@@ -4563,7 +4588,6 @@ function emitDerrickSmoke(dt) {
 // Zvuky se syntetizují (žádné soubory): kovový FM zvonek a filtrovaný šum.
 // Prodej = pokladna: cvaknutí šuplíku a dva tóny zvonku; strike = zvonková arpeggia;
 // build = dřevěné ťuknutí; boom = hluboký výbuch nálože.
-const MASTER_VOLUME = 0.5;
 const SALE_SOUND_GAP_MS = 140; // víc prodejů naráz nezní jako kulomet
 let lastSaleSoundAt = 0;
 let noiseBuffer = null;
@@ -4692,7 +4716,7 @@ const SOUNDS = {
 };
 
 function playSound(kind) {
-    if (soundMuted || !SOUNDS[kind]) return;
+    if (!prefs.sound || !SOUNDS[kind]) return;
     if (kind === 'sale') {
         const now = performance.now();
         if (now - lastSaleSoundAt < SALE_SOUND_GAP_MS) return;
@@ -4702,7 +4726,7 @@ function playSound(kind) {
         const ac = getAudioContext();
         if (!ac) return;
         const out = ac.createGain();
-        out.gain.value = MASTER_VOLUME;
+        out.gain.value = prefs.volume;
         out.connect(ac.destination);
         SOUNDS[kind](ac, out, ac.currentTime + 0.005);
     } catch (e) {
@@ -4711,12 +4735,67 @@ function playSound(kind) {
 }
 
 function toggleSound() {
-    soundMuted = !soundMuted;
+    setPref('sound', !prefs.sound);
+}
+
+function updateSoundButton() {
     const btn = document.getElementById('sound-btn');
-    if (btn) {
-        btn.innerHTML = iconSvg(soundMuted ? 'soundOff' : 'soundOn');
-        btn.classList.toggle('muted', soundMuted);
+    if (!btn) return;
+    btn.innerHTML = iconSvg(prefs.sound ? 'soundOn' : 'soundOff');
+    btn.classList.toggle('muted', !prefs.sound);
+}
+
+// --- Předvolby: uložení, formulář a promítnutí do hry ---
+function loadPrefs() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+        // Jen známé klíče se známými hodnotami; staré nebo rozbité uložení nic nerozbije
+        const valid = PREF_FIELDS.filter(f => f.options.some(([value]) => value === saved[f.key]));
+        return { ...DEFAULT_PREFS, ...Object.fromEntries(valid.map(f => [f.key, saved[f.key]])) };
+    } catch (e) {
+        return { ...DEFAULT_PREFS };
     }
+}
+
+function setPref(key, value) {
+    prefs[key] = value;
+    try {
+        localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {
+        // Bez úložiště platí předvolby jen do zavření hry
+    }
+    if (key === 'sound') updateSoundButton();
+    if (key === 'volume') playSound('sale'); // ukázka nové hlasitosti
+    if (key === 'ads') {
+        blimpAd = undefined; // vzducholoď si reklamu vylosuje znovu (nebo poletí bez ní)
+        renderResultsAd();
+    }
+    renderPrefs();
+}
+
+function renderPrefs() {
+    const box = document.getElementById('prefs-fields');
+    if (!box) return;
+    box.innerHTML = PREF_FIELDS.filter(f => !f.visible || f.visible()).map(f => `
+        <div class="form-field"><div class="form-label">${f.label}</div><div class="prefs-choices">${f.options.map(([value, name, note], i) => `
+            <button class="length-btn${prefs[f.key] === value ? ' active' : ''}" data-key="${f.key}" data-index="${i}">${name}${note ? `<small>${note}</small>` : ''}</button>`).join('')}
+        </div></div>`).join('');
+}
+
+function togglePrefs(open) {
+    const overlay = document.getElementById('prefs');
+    if (!overlay) return;
+    const show = open ?? overlay.classList.contains('hidden');
+    if (show) renderPrefs();
+    overlay.classList.toggle('hidden', !show);
+}
+
+function handlePrefsClick(event) {
+    const btn = event.target.closest('button[data-key]');
+    if (!btn) return;
+    const field = PREF_FIELDS.find(f => f.key === btn.dataset.key);
+    const option = field?.options[Number(btn.dataset.index)];
+    if (option) setPref(field.key, option[0]);
 }
 
 // Odhad vrtání k bodu pod kurzorem: horniny po cestě dávají cenu a čas, strmé stoupání nejde
@@ -4921,9 +5000,12 @@ function addEventListeners() {
         event.preventDefault();
         openAdLink(link.getAttribute('href'));
     });
-    // Inzerát na výsledkové straně závodu (z ads.js; prázdné, když je reklama vypnutá)
-    const resultsAd = document.getElementById('results-ad');
-    if (resultsAd) resultsAd.innerHTML = newspaperAdHtml(pickAd('results', 'headline'));
+    // Inzerát na výsledkové straně závodu, předvolby hráče a jejich tlačítko
+    renderResultsAd();
+    updateSoundButton();
+    document.getElementById('prefs-btn')?.addEventListener('click', () => togglePrefs());
+    document.getElementById('prefs-close')?.addEventListener('click', () => togglePrefs(false));
+    document.getElementById('prefs-fields')?.addEventListener('click', handlePrefsClick);
     // Pohyb myši
     canvas.addEventListener('pointermove', (event) => {
         const pos = getCanvasPosition(event);
@@ -5027,7 +5109,11 @@ function addEventListeners() {
 
     window.addEventListener('keydown', (event) => {
         if (event.key === 'm' || event.key === 'M') toggleSound();
-        if (event.key === 'Escape') cancelBuildMode();
+        if (event.key === 'o' || event.key === 'O') togglePrefs();
+        if (event.key === 'Escape') {
+            if (!document.getElementById('prefs')?.classList.contains('hidden')) togglePrefs(false);
+            else cancelBuildMode();
+        }
         handleCameraKey(event);
     });
 
