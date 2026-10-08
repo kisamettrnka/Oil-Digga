@@ -16,6 +16,22 @@ function serializeRounded(world) {
     });
 }
 
+// Pohled jednoho hráče: ložiska a rizika, která nezná, jdou jen jako { id, hidden } bez tvaru
+// a obsahu, aby je nešlo vyčíst z devtools. Zbytek světa je společný.
+function serializeFor(world, playerId) {
+    const clock = world.tools.clock;
+    const view = {
+        ...world,
+        oilPockets: world.oilPockets.map(p => {
+            const known = p.tappedBy.length > 0 || p.revealedBy.includes(playerId) || (p.echo[playerId] || 0) > clock;
+            return known ? p : { id: p.id, hidden: true, oil: 0, maxOil: 0, tappedBy: [], revealedBy: [], echo: {} };
+        }),
+        hazards: world.hazards.map(h => (h.hit || h.revealedBy.includes(playerId)
+            ? h : { id: h.id, kind: h.kind, hidden: true, hit: false, spent: !!h.spent, revealedBy: [] }))
+    };
+    return serializeRounded(view);
+}
+
 class SharedGame {
     constructor(room, racers, startInMs) {
         this.room = room;
@@ -46,7 +62,7 @@ class SharedGame {
             type: 'shared_start', raceId: this.raceId, months, mode, target,
             startIn: Math.max(0, this.startAt - Date.now())
         });
-        player.ws.send(`${head.slice(0, -1)},"world":${serializeRounded(this.world)}}`);
+        player.ws.send(`${head.slice(0, -1)},"world":${serializeFor(this.world, player.id)}}`);
     }
 
     hasPlayer(id) {
@@ -128,9 +144,9 @@ class SharedGame {
     broadcast() {
         const events = JSON.stringify(this.pendingEvents);
         this.pendingEvents = [];
-        const message = `{"type":"snapshot","raceId":${this.raceId},"events":${events},"world":${serializeRounded(this.world)}}`;
         for (const p of this.room.players.values()) {
-            if (p.connected && p.ws && p.ws.readyState === 1 && this.hasPlayer(p.id)) p.ws.send(message);
+            if (!(p.connected && p.ws && p.ws.readyState === 1 && this.hasPlayer(p.id))) continue;
+            p.ws.send(`{"type":"snapshot","raceId":${this.raceId},"events":${events},"world":${serializeFor(this.world, p.id)}}`);
         }
     }
 
@@ -145,4 +161,4 @@ class SharedGame {
     }
 }
 
-module.exports = { SharedGame, serializeRounded, TICK_MS };
+module.exports = { SharedGame, serializeRounded, serializeFor, TICK_MS };

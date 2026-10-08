@@ -42,7 +42,13 @@ const last = (w, type) => [...w.inbox].reverse().find(m => m.type === type);
         assert.strictEqual(snap.world.plots[2].owner, 'a');
         assert.strictEqual(snap.world.plots[5].owner, 'b');
         assert.ok(snap.world.players.a.money < 50000);
-        // klientská kopie jde krokovat (predikce)
+        // Neznámá ložiska jsou v snapshotu skrytá (bez tvaru), známá s tvarem; kopie jde dál krokovat
+        assert.ok(snap.world.oilPockets.some(p => p.hidden && !p.vertices), 'unknown pockets hidden');
+        w.oilPockets[0].revealedBy.push('b');
+        await wait(300);
+        const snap2 = last(b, 'snapshot');
+        assert.ok(!snap2.world.oilPockets[0].hidden && snap2.world.oilPockets[0].vertices, 'revealed pocket visible to b');
+        assert.ok(last(a, 'snapshot').world.oilPockets[0].hidden, 'still hidden for a');
         snap.world.events = [];
         Sim.step(snap.world, 16);
         room.backToLobby();

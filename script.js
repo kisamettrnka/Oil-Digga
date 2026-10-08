@@ -248,7 +248,7 @@ function syncFromWorld() {
     });
     // Rizika v hornině: vidí je, kdo je navrtal (všichni) nebo odhalil georadarem
     hazards = world.hazards || [];
-    hazards.forEach(h => { h.visible = h.hit || h.revealedBy.includes(myId); });
+    hazards.forEach(h => { h.visible = !h.hidden && (h.hit || h.revealedBy.includes(myId)); });
 }
 
 function isMine(thing) {
@@ -266,11 +266,17 @@ function playerColor(id) {
 // Jediná cesta ke změně stavu: lokálně hned přes sim.js, na sdílené mapě po síti na server
 function doAction(action) {
     if (!world) return { ok: false };
-    if (sharedMode) {
-        if (typeof Net !== 'undefined') Net.sendAction(action);
-        return { ok: true, pending: true };
-    }
     uiDirty = true;
+    if (sharedMode) {
+        // Sdílená mapa: akce jde na server a zároveň se hned provede v místní kopii, ať reaguje bez
+        // čekání na snapshot; místní události se zahodí (přijdou ze serveru), snapshot stav opraví
+        if (typeof Net !== 'undefined') Net.sendAction(action);
+        const local = OilSim.act(world, myId, action);
+        world.events.splice(0);
+        syncFromWorld();
+        updateUI();
+        return { ...local, pending: true };
+    }
     const result = OilSim.act(world, myId, action);
     // Sólo: herní čas se rozběhne první koupí pozemku
     if (result.ok && action.type === 'buyPlot' && !raceMode) startGameLoop();

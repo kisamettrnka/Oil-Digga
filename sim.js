@@ -670,6 +670,7 @@
 
     // Vzdálenost bodu od ložiska (od jeho obrysu, uvnitř 0)
     function distanceToPocket(x, y, pocket) {
+        if (!pocket.vertices) return Infinity; // skryté ložisko v kopii hráče
         if (isPointInPolygon({ x, y }, pocket.vertices)) return 0;
         let best = Infinity;
         const v = pocket.vertices;
@@ -686,7 +687,7 @@
     // každý pak těží podle tlaku ložiska, takže se ložisko vyprázdní rychleji.
     function findHitPocket(world, start, end) {
         for (const pocket of world.oilPockets) {
-            if (isSegmentIntersectingPolygon(start, end, pocket.vertices)) return pocket;
+            if (pocket.vertices && isSegmentIntersectingPolygon(start, end, pocket.vertices)) return pocket;
         }
         return null;
     }
@@ -1184,7 +1185,7 @@
         });
         let hazards = 0;
         world.hazards.forEach(h => {
-            if (h.spent || Math.hypot(h.x - x, h.y - y) > C.RADAR_RADIUS + h.r || h.revealedBy.includes(player.id)) return;
+            if (h.hidden || h.spent || Math.hypot(h.x - x, h.y - y) > C.RADAR_RADIUS + h.r || h.revealedBy.includes(player.id)) return;
             h.revealedBy.push(player.id);
             hazards++;
         });
@@ -1455,7 +1456,7 @@
 
         network.hits = network.hits || [];
         for (const hazard of world.hazards) {
-            if (hazard.spent || network.hits.includes(hazard.id) || !segmentHitsCircle(from, to, hazard)) continue;
+            if (hazard.hidden || hazard.spent || network.hits.includes(hazard.id) || !segmentHitsCircle(from, to, hazard)) continue;
             network.hits.push(hazard.id);
             hazard.hit = true;
             if (hazard.kind === 'gas') {
@@ -1503,7 +1504,7 @@
         const s = dt / 1000;
         (world.links || []).forEach(([ia, ib]) => {
             const a = world.oilPockets[ia], b = world.oilPockets[ib];
-            if (!a || !b) return;
+            if (!a || !b || a.hidden || b.hidden) return;
             const fa = a.oil / a.maxOil, fb = b.oil / b.maxOil;
             const balance = (fa - fb) * a.maxOil * b.maxOil / (a.maxOil + b.maxOil); // přesun do vyrovnání
             let flow = C.MIGRATE_RATE * (fa - fb) * Math.min(a.maxOil, b.maxOil) * s;
@@ -1820,6 +1821,7 @@
         tools.drones.forEach(drone => {
             drone.x += C.DRONE_SPEED * dt / 1000;
             world.oilPockets.forEach(pocket => {
+                if (pocket.hidden) return;
                 const cx = pocket.x + pocket.width / 2;
                 if (Math.abs(cx - drone.x) < C.DRONE_BEAM_HALF + pocket.width / 2) echoPocket(world, pocket, drone.owner);
             });
