@@ -7,7 +7,8 @@
     "start": "npm run build && node --env-file-if-exists=.env server/index.js",
     "dev": "npm run build && node --env-file-if-exists=.env --watch server/index.js",
     "static": "http-server -p 3000 -c-1 -o",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "balance": "node scripts/balance.js"
   },
   "keywords": [],
   "author": "",

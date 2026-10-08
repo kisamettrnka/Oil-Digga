@@ -500,6 +500,7 @@ button:disabled {
 .telegram,
 .ledger,
 #hud-rig,
+#hud-contracts,
 #hud-goals,
 #hud-race,
 #hud-rig,
@@ -1552,5 +1553,86 @@ button:disabled {
     }
     #hud-rig .rig-hint {
         display: none;
+    }
+}
+
+/* --- Zakázky: telegramy kupců ve městě, přijímají se razítkem --- */
+#hud-contracts {
+    position: absolute;
+    top: 19.6em;
+    right: 7.6%;
+    width: 18.5em;
+    padding: 0.55em 0.8em 0.6em;
+    transform: rotate(-0.5deg);
+    border-radius: 0.15em;
+    font-size: 0.88em;
+}
+#hud-contracts .ct-title {
+    font-family: 'Rye', Georgia, serif;
+    font-size: 1.05em;
+    padding-bottom: 0.25em;
+    border-bottom: 1px solid rgba(26, 18, 11, 0.45);
+}
+#hud-contracts .ct-item {
+    padding: 0.45em 0 0.4em;
+    border-bottom: 1px dashed rgba(26, 18, 11, 0.35);
+}
+#hud-contracts .ct-item:last-child {
+    border-bottom: none;
+}
+#hud-contracts .ct-wire {
+    font-family: 'Courier Prime', monospace;
+    font-weight: 700;
+    font-size: 0.82em;
+    text-transform: uppercase;
+    line-height: 1.35;
+}
+#hud-contracts .ct-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5em;
+    margin-top: 0.3em;
+    font: 700 0.85em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+#hud-contracts .ct-accept {
+    --stamp: var(--stamp-green);
+    padding: 0.1em 0.55em 0.05em;
+    font: 700 1em 'Barlow Condensed', system-ui, sans-serif;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--stamp);
+    background: rgba(255, 240, 210, 0.12);
+    border: 3px double var(--stamp);
+    border-radius: 0.2em;
+    transform: rotate(-3deg);
+    cursor: pointer;
+}
+#hud-contracts .ct-accept:hover:not(:disabled) { background: rgba(255, 240, 210, 0.3); }
+#hud-contracts .ct-accept:disabled { opacity: 0.4; cursor: default; }
+#hud-contracts .ct-bar {
+    height: 0.35em;
+    margin-top: 0.3em;
+    background: rgba(26, 18, 11, 0.12);
+    border: 1px solid rgba(26, 18, 11, 0.5);
+}
+#hud-contracts .ct-bar > i {
+    display: block;
+    height: 100%;
+    background: var(--ink);
+}
+#hud-contracts .ct-item.urgent .ct-bar > i { background: var(--stamp-red); }
+#hud-contracts .ct-item.mine .ct-wire::before {
+    content: 'Rozjednáno · ';
+    color: var(--stamp-red);
+}
+@container (max-width: 1200px) {
+    #hud-contracts {
+        top: 16.5em;
+        width: 15em;
+        font-size: 0.8em;
     }
 }

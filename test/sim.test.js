@@ -220,7 +220,7 @@ t('news: price multiplier, closed buyer and tax break apply', () => {
     w.time.started = true;
     w.time.dayTimer = C.MS_PER_DAY - 1;
     Sim.step(w, 2); // přechod dne přepočítá ceny
-    assert.ok(Math.abs(w.market.left.quote - w.market.left.price * 1.6) < 0.01, 'hormuz +60 %');
+    assert.ok(Math.abs(w.market.left.quote - w.market.left.price * 1.2) < 0.01, 'hormuz +20 % in town');
     w.news.active = [];
     add('rail_strike');
     add('tax_break');
@@ -230,22 +230,93 @@ t('news: price multiplier, closed buyer and tax break apply', () => {
     assert.strictEqual(Sim.getLandTax(w), 0);
 });
 
-t('news: trucks avoid a closed buyer and turn around', () => {
+t('news: trucks avoid a closed buyer', () => {
     const w = Sim.createWorld({ seed: 7 });
     w.players.player.money = 100000;
     Sim.act(w, 'player', { type: 'buyPlot', plotId: 3 });
     Sim.act(w, 'player', { type: 'buildDerrick', plotId: 3 });
     tapNearest(w, 'player', 3);
     Sim.act(w, 'player', { type: 'buyTruck' });
-    Sim.act(w, 'player', { type: 'assignTruck', company: 'right', delta: 1 });
-    const strike = Sim.NEWS.find(x => x.key === 'rail_strike');
-    w.news.active.push({ ...strike, daysLeft: 99 });
+    const fire = Sim.NEWS.find(x => x.key === 'refinery_fire');
+    w.news.active.push({ ...fire, daysLeft: 99 });
     w.news.nextInDays = 999;
     w.time.started = true;
     for (let i = 0; i < 3000; i++) Sim.step(w, 16);
     const sales = w.events.filter(e => e.type === 'sale');
     assert.ok(sales.length > 0, 'sold something');
-    assert.ok(sales.every(e => e.company === 'left'), 'only the open refinery buys');
+    assert.ok(sales.every(e => e.company !== 'left'), 'the burning refinery does not buy');
+});
+
+t('market: full stock lowers the price, the town consumes it', () => {
+    const w = Sim.createWorld({ seed: 40 });
+    w.time.started = true;
+    const b = w.market.lamps;
+    const fresh = b.quote;
+    b.stock = b.demand * 3;
+    Sim.step(w, 16);
+    assert.ok(b.quote < fresh * 0.6, `flooded ${b.quote} vs ${fresh}`);
+    const stock = b.stock;
+    Sim.step(w, C.MS_PER_DAY / 2);
+    assert.ok(Math.abs(stock - b.stock - b.demand / 2) < 1, 'half a day of demand consumed');
+    assert.ok(!w.market.right.open && w.market.right.closed, 'rail depot comes later');
+});
+
+t('market: trucks spread loads to the buyer that pays more', () => {
+    const w = Sim.createWorld({ seed: 41 });
+    w.time.started = true;
+    // prázdná petrolejka platí víc než přeplněná rafinerie
+    w.market.lamps.stock = 0;
+    w.market.left.stock = w.market.left.demand * 4;
+    const truck = { id: 99, owner: 'player', x: 400, state: 'to_company', oil: 100, targetCompany: null, facing: 1 };
+    w.trucks.push(truck);
+    Sim.step(w, 16);
+    assert.strictEqual(truck.targetCompany, 'lamps');
+});
+
+t('town: deliveries move the era, open the rail depot and switch to trucks', () => {
+    const w = plainWorld(42);
+    assert.strictEqual(w.town.era, 0);
+    const wagon = Sim.truckSpeed(w);
+    w.trucks.push({ id: 5, owner: 'player', x: 60, state: 'to_company', oil: 100, targetCompany: 'left', facing: -1 });
+    w.town.delivered = Sim.ERAS[2].delivered - 50;
+    w.trucks[0].x = 50;
+    Sim.step(w, 16);
+    assert.strictEqual(w.town.era, 2);
+    assert.ok(w.events.filter(e => e.type === 'era').length === 2, 'boomtown and rail announced');
+    assert.ok(w.market.right.open && !w.market.right.closed, 'rail depot buys');
+    assert.ok(Sim.truckSpeed(w) > wagon, 'trucks replace wagons');
+});
+
+t('contracts: offer, accept, deliver at the contract price', () => {
+    const w = plainWorld(43);
+    w.contracts.nextInDays = 1;
+    w.time.dayTimer = C.MS_PER_DAY - 1;
+    Sim.step(w, 2);
+    const offer = w.contracts.offers[0];
+    assert.ok(offer, 'an offer arrived');
+    assert.ok(w.events.some(e => e.type === 'contract_offer'));
+    assert.ok(Sim.act(w, 'player', { type: 'acceptContract', id: offer.id }).ok);
+    assert.ok(!Sim.act(w, 'player', { type: 'acceptContract', id: offer.id }).ok, 'taken');
+    const buyer = w.market[offer.buyer];
+    const truck = { id: 7, owner: 'player', x: buyer.x + 1, state: 'to_company', oil: offer.amount, targetCompany: offer.buyer, facing: -1 };
+    w.trucks.push(truck);
+    const money = w.players.player.money;
+    Sim.step(w, 16);
+    assert.ok(w.events.some(e => e.type === 'contract_done'));
+    assert.ok(Math.abs(w.players.player.money - money - offer.amount * offer.price) < 1, 'paid the contract price');
+    assert.strictEqual(w.contracts.active.length, 0);
+});
+
+t('contracts: missing the deadline costs a penalty', () => {
+    const w = plainWorld(44);
+    w.contracts.offers.push({ id: 50, buyer: 'left', amount: 400, price: 1.5, days: 1, expiresIn: 3 });
+    assert.ok(Sim.act(w, 'player', { type: 'acceptContract', id: 50 }).ok);
+    const money = w.players.player.money;
+    w.time.dayTimer = C.MS_PER_DAY - 1;
+    Sim.step(w, 2);
+    const failed = w.events.find(e => e.type === 'contract_failed');
+    assert.ok(failed && failed.penalty === Math.round(400 * 1.5 * C.CONTRACT_PENALTY));
+    assert.ok(w.players.player.money < money - failed.penalty + 1);
 });
 
 t('drilling takes time and is paid per pixel', () => {

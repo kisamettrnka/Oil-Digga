@@ -1,6 +1,6 @@
 # Oil digga
 
-Ropný tycoon jako Discord Activity: kup pozemky, najdi ložiska, postav vrty a vozi ropu k výkupcům.
+Ropný tycoon jako Discord Activity: kup pozemky, najdi ložiska, postav vrty a vozi ropu kupcům ve městě, které s tvou ropou roste.
 V Discordu se hráči z hlasového kanálu sejdou v lobby a závodí na stejné mapě o nejvíc peněz za rok.
 
 ## Spuštění lokálně

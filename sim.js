@@ -45,11 +45,11 @@
         OIL_PER_SECOND: 10,
         MIN_DRIVE: 0.12,             // i vyčerpané ložisko trochu teče
         DECLINE_EXP: 1.3,            // tlak = počáteční tlak × naplnění^DECLINE_EXP
-        INJECT_COST_PER_S: 5,        // vtláčení vody: $/s
-        INJECT_BOOST_PER_S: 0.018,   // o kolik vtláčení zvedá tlak ložiska za sekundu
-        INJECT_BOOST_MAX: 0.5,
+        INJECT_COST_PER_S: 3.5,      // vtláčení vody: $/s
+        INJECT_BOOST_PER_S: 0.03,    // o kolik vtláčení zvedá tlak ložiska za sekundu
+        INJECT_BOOST_MAX: 0.7,
         BOOST_DECAY_PER_S: 0.004,    // bez vtláčení tlak zase opadá
-        INJECT_WATER_PER_S: 0.002,   // vtláčení pomalu zavodňuje celé ložisko
+        INJECT_WATER_PER_S: 0.0004,  // vtláčení pomalu zavodňuje celé ložisko (~25 % za 60 dní)
         MIGRATE_RATE: 0.001,         // propojená ložiska: tok podle rozdílu naplnění
         LINK_MAX_DIST: 300,
         MAX_SILOS_PER_PLOT: 4,
@@ -81,8 +81,18 @@
         ECHO_MS: 8000,
         RICH_MEDIUM_OIL: 8500,
         RICH_LARGE_OIL: 11500,
-        // Sdílená mapa: každá dodávka trochu sráží výkupní cenu (hráči si konkurují)
-        SHARED_SALE_PRICE_DROP: 0.02,
+        // Město jako trh: cena kupce klesá, když má plný sklad (dny zásoby podle poptávky)
+        STOCK_DAYS: 2,               // při zásobě na tolik dní je cena základní × 0,65
+        SHARED_DEMAND_PER_PLAYER: 0.4, // sdílená mapa: poptávka roste s počtem hráčů (míň než hráčů, ať si konkurují)
+        WAGON_SPEED_MULT: 0.72,      // povozy do éry železnice jezdí pomaleji než kamiony
+        // Zakázky telegramem
+        CONTRACT_FIRST_DAY: 4,
+        CONTRACT_GAP_MIN: 5,
+        CONTRACT_GAP_RANGE: 5,
+        CONTRACT_OFFER_DAYS: 3,      // jak dlouho nabídka visí
+        MAX_CONTRACT_OFFERS: 2,
+        MAX_ACTIVE_CONTRACTS: 2,
+        CONTRACT_PENALTY: 0.3,       // penále = podíl hodnoty nedodané ropy
         MAX_SHARED_PLAYERS: 4
     };
     C.GROUND_LEVEL = Math.floor(C.WORLD_H * C.GROUND_RATIO);
@@ -107,20 +117,45 @@
     const SHALLOW_ROCKS = ['sand', 'clay', 'sand', 'shale'];
     const DEEP_ROCKS = ['shale', 'lime', 'granite', 'lime', 'sand'];
 
+    // --- Město jako trh ---
+    // Éry posouvá ropa dodaná do města (delivered); každá éra zvedá poptávku a otevírá nové kupce.
+    // Na sdílené mapě se prahy násobí počtem hráčů, ať město neroste čtyřikrát rychleji.
+    const ERAS = [
+        { key: 'camp', name: 'Tábor', delivered: 0, desc: 'Stany, boudy a petrolejové lampy.' },
+        { key: 'boom', name: 'Boomtown', delivered: 1500, desc: 'Dřevěné domy, saloon a víc světla. Rafinerie a petrolejka berou víc.' },
+        { key: 'rail', name: 'Železnice', delivered: 7000, desc: 'Přijela trať: nádraží vykupuje ropu na export, povozy nahradily kamiony.' },
+        { key: 'auto', name: 'Automobil', delivered: 20000, desc: 'Elektřina, cihlové bloky a první auta. Otevřela benzinka.' }
+    ];
+
+    // Kupci: x = místo vykládky na silnici, era = od které éry kupují, demand = barelů/den podle éry.
+    // Role: obchody ve městě (petrolejka, benzinka) platí nejvíc, ale malou poptávku rychle zaplní;
+    // rafinerie je velký stálý odběratel; nádraží vyváží, poptávka je obrovská a nezahltí se,
+    // cena je nižší a hýbou s ní hlavně světové zprávy.
+    const BUYERS = [
+        { id: 'left', name: 'Rafinerie', sub: 'velký odběr', x: 50, era: 0, base: 1.05, demand: [110, 160, 210, 260] },
+        { id: 'lamps', name: 'Petrolejka', sub: 'málo, ale draze', x: 800, era: 0, base: 1.3, demand: [35, 50, 40, 25] },
+        { id: 'right', name: 'Nádraží', sub: 'export bez limitu', x: C.WORLD_W - 50, era: 2, base: 0.92, demand: [0, 0, 700, 900] },
+        { id: 'garage', name: 'Benzinka', sub: 'málo, nejdráž', x: 972, era: 3, base: 1.4, demand: [0, 0, 0, 50] }
+    ];
+    const BUYER_IDS = BUYERS.map(b => b.id);
+
     // --- Mimořádné zprávy ---
     // Události ze světa na pár dní mění trh (násobí výkupní cenu, zavírají výkupce) nebo pravidla.
     // left = Rafinerie, right = Nádraží. Spouští se při přechodu dne; náhoda je odvozená ze seedu
     // a pořadí dne, takže v závodě mají všichni stejné zprávy ve stejný den.
     const NEWS = [
         { key: 'tariffs', title: 'Trump uvalil cla na dovoz ropy', desc: 'Domácí ropa je žádanější: rafinerie přidává, export vázne.', days: 6, effects: { left: 1.35, right: 0.9 } },
-        { key: 'hormuz', title: 'Írán uzavřel Hormuzský průliv', desc: 'Svět se bojí nedostatku ropy, ceny letí vzhůru.', days: 5, effects: { left: 1.6, right: 1.6 } },
-        { key: 'opec_cut', title: 'OPEC+ škrtá těžbu', desc: 'Méně ropy na trhu, oba výkupci přidávají.', days: 8, effects: { left: 1.25, right: 1.25 } },
-        { key: 'opec_flood', title: 'OPEC zaplavil trh levnou ropou', desc: 'Cenová válka: výkupci srážejí ceny.', days: 7, effects: { left: 0.7, right: 0.7 } },
-        { key: 'rail_strike', title: 'Stávka železničářů', desc: 'Nádraží nevykupuje, kamiony jezdí do rafinerie.', days: 3, effects: { rightClosed: true } },
-        { key: 'refinery_fire', title: 'Požár v rafinerii Černé zlato', desc: 'Rafinerie stojí, výkup jen na nádraží.', days: 3, effects: { leftClosed: true, right: 1.15 } },
-        { key: 'sanctions', title: 'Sankce na ruskou ropu', desc: 'Evropa shání ropu jinde: export přes nádraží vynáší.', days: 6, effects: { right: 1.4 } },
-        { key: 'recession', title: 'Recese: lidé méně jezdí autem', desc: 'Poptávka padá u obou výkupců.', days: 10, effects: { left: 0.8, right: 0.8 } },
-        { key: 'hurricane', title: 'Hurikán zavřel plošiny v Mexickém zálivu', desc: 'Konkurence stojí, ropa z pouště je zlatá.', days: 4, effects: { left: 1.3, right: 1.3 } },
+        { key: 'hormuz', title: 'Írán uzavřel Hormuzský průliv', desc: 'Svět se bojí nedostatku ropy: export letí vzhůru, ve městě to je znát míň.', days: 5, effects: { all: 1.2, right: 1.5 } },
+        { key: 'opec_cut', title: 'OPEC+ škrtá těžbu', desc: 'Méně ropy na trhu, všichni kupci přidávají.', days: 8, effects: { all: 1.25 } },
+        { key: 'opec_flood', title: 'OPEC zaplavil trh levnou ropou', desc: 'Cenová válka: kupci srážejí ceny.', days: 7, effects: { all: 0.7 } },
+        { key: 'rail_strike', title: 'Stávka železničářů', desc: 'Nádraží nevykupuje, vozy jezdí jinam.', days: 3, effects: { rightClosed: true }, requires: 'right' },
+        { key: 'refinery_fire', title: 'Požár v rafinerii Černé zlato', desc: 'Rafinerie stojí, ostatní kupci přidávají.', days: 3, effects: { leftClosed: true, lamps: 1.15, right: 1.15 } },
+        { key: 'sanctions', title: 'Sankce na ruskou ropu', desc: 'Evropa shání ropu jinde: export přes nádraží vynáší.', days: 6, effects: { right: 1.4 }, requires: 'right' },
+        { key: 'recession', title: 'Recese: lidé šetří', desc: 'Poptávka padá u všech kupců.', days: 10, effects: { all: 0.8 } },
+        { key: 'hurricane', title: 'Hurikán zavřel plošiny v Mexickém zálivu', desc: 'Konkurence stojí, ropa z pouště je zlatá.', days: 4, effects: { all: 1.3 } },
+        { key: 'cold_winter', title: 'Tuhá zima', desc: 'Lidé svítí a topí: petrolejka a rafinerie přidávají.', days: 6, effects: { lamps: 1.5, left: 1.15 } },
+        { key: 'edison', title: 'Edison rozsvítil první ulici', desc: 'Elektřina vytlačuje lampy, petrolejka bere míň.', days: 8, effects: { lamps: 0.6 }, minEra: 2 },
+        { key: 'ford_t', title: 'Ford spustil pásovou výrobu', desc: 'Aut přibývá, benzinka platí víc.', days: 8, effects: { garage: 1.5 }, requires: 'garage' },
         { key: 'eco_law', title: 'Nový ekologický zákon', desc: 'Pokuty za erupce se zdvojnásobují.', days: 10, effects: { fineMult: 2 } },
         { key: 'tax_break', title: 'Daňové prázdniny pro těžaře', desc: 'Stát odpustil daň z pozemků.', days: 5, effects: { taxMult: 0 } },
         { key: 'driver_shortage', title: 'Řidiči odešli na zlatou horečku', desc: 'Chybí šoféři, kamiony jezdí pomaleji.', days: 5, effects: { truckSpeed: 0.7 } }
@@ -158,12 +193,10 @@
             trucks: [],
             players: {},
             playerOrder: [],
-            market: {
-                // price = základní cena (náhodná procházka), quote = cena po vlivu zpráv, closed = nevykupuje
-                left: { price: 1, quote: 1, mult: 1, closed: false, trend: 0, history: [1] },
-                right: { price: 1, quote: 1, mult: 1, closed: false, trend: 0, history: [1] },
-                timer: 0
-            },
+            // Kupci ve městě (world.market[id]): price = cena podle zásoby a šumu, quote = po vlivu zpráv
+            market: createMarket(players.length, shared),
+            town: { era: 0, delivered: 0 },
+            contracts: { offers: [], active: [], nextInDays: C.CONTRACT_FIRST_DAY, nextId: 0 },
             time: { day: 1, month: 1, dayTimer: 0, started: false, dayIndex: 0 },
             news: { active: [], nextInDays: NEWS_FIRST_DAY },
             tools: { clock: 0, waves: [], pulses: [], drones: [] },
@@ -181,7 +214,6 @@
                 revenue: 0,
                 sold: 0,
                 trucksOwned: 0,
-                assigned: { left: 0, right: 0 },
                 revenueAtDayStart: 0,
                 lastDayIncome: 0,
                 over: false,
@@ -243,7 +275,25 @@
 
         // Náhoda trhu se nesdílí přes síť (funkce se do JSON nezapíše); klient na sdílené mapě trh nepočítá
         world._market = seed == null ? Math.random : seededRandom((seed ^ 0x9E3779B9) >>> 0);
+        updateQuotes(world);
+        BUYER_IDS.forEach(id => { world.market[id].history = [world.market[id].quote]; });
         return world;
+    }
+
+    function createMarket(playerCount, shared) {
+        const market = { order: BUYER_IDS.slice(), timer: 0, demandMult: shared ? 1 + C.SHARED_DEMAND_PER_PLAYER * Math.max(0, playerCount - 1) : 1 };
+        BUYERS.forEach(b => {
+            market[b.id] = {
+                id: b.id, name: b.name, sub: b.sub, x: b.x, era: b.era, base: b.base,
+                open: b.era === 0,   // kupec už ve městě je (éra)
+                noise: 1,            // náhodná procházka kolem 1
+                trend: 0,
+                stock: b.demand[0] * market.demandMult, // zásoba na den: cena začíná na základní úrovni
+                demand: b.demand[0] * market.demandMult,
+                price: b.base, quote: b.base, mult: 1, closed: b.era !== 0, history: []
+            };
+        });
+        return market;
     }
 
     // Propojená pole: sousední ložiska spojí propustná vrstva (každé nejvýš jedno spojení)
@@ -309,10 +359,22 @@
                 return;
             }
         };
-        const gas = 3 + Math.floor(rand() * 3);
+        // Plynová čepice: plyn se drží nad ropou, takže vrták k ložisku do ní často narazí.
+        // Hlubší ložiska ji mají častěji. Kapsa leží těsně nad stropem ložiska, kousek vedle středu.
+        pockets.forEach(p => {
+            const depth = (p.y - C.GROUND_LEVEL) / (maxY - C.GROUND_LEVEL);
+            if (rand() > 0.3 + 0.4 * depth) return;
+            const r = 14 + rand() * 10;
+            const x = p.x + p.width * (0.25 + rand() * 0.5);
+            const y = p.y - r + 4;
+            if (y - r < minY || hazards.some(h => Math.hypot(h.x - x, h.y - y) < h.r + r + 6)) return;
+            hazards.push({ id: hazards.length, kind: 'gas', x, y, r, hit: false, revealedBy: [] });
+        });
+        const gas = 2 + Math.floor(rand() * 2);
         for (let i = 0; i < gas; i++) place('gas', 16 + rand() * 14, minY + (maxY - minY) * 0.35);
-        const water = 2 + Math.floor(rand() * 3);
-        for (let i = 0; i < water; i++) place('water', 22 + rand() * 16, minY);
+        // Zvodnělé vrstvy: širší kapsy v mělčí půlce, kudy vede většina vrtů
+        const water = 4 + Math.floor(rand() * 3);
+        for (let i = 0; i < water; i++) place('water', 26 + rand() * 18, minY);
         return hazards;
     }
 
@@ -337,14 +399,38 @@
         return (world.news?.active || []).some(n => n.effects[name]);
     }
 
-    // Přepočte výkupní ceny po vlivu zpráv (price -> quote) a zavřené výkupce
+    // Násobek ceny podle zásoby: prázdný sklad platí víc, přeplněný míň
+    function stockFactor(stock, demand) {
+        const days = stock / Math.max(1, demand * C.STOCK_DAYS);
+        return Math.max(0.35, Math.min(1.4, 1.35 - 0.7 * days));
+    }
+
+    function buyerDef(id) {
+        return BUYERS.find(b => b.id === id);
+    }
+
+    // Přepočte poptávku, ceny po vlivu zásoby, šumu a zpráv (price -> quote) a zavřené kupce
     function updateQuotes(world) {
         const m = world.market;
-        ['left', 'right'].forEach(side => {
-            m[side].mult = newsEffect(world, side);
-            m[side].closed = newsFlag(world, side + 'Closed');
-            m[side].quote = Math.max(0.1, Math.min(5, m[side].price * m[side].mult));
+        const era = world.town ? world.town.era : 0;
+        BUYER_IDS.forEach(id => {
+            const b = m[id];
+            b.open = era >= b.era;
+            b.demand = buyerDef(id).demand[era] * (m.demandMult || 1);
+            b.mult = newsEffect(world, id) * newsEffect(world, 'all');
+            b.closed = !b.open || newsFlag(world, id + 'Closed');
+            b.price = b.base * b.noise * stockFactor(b.stock, b.demand);
+            b.quote = Math.max(0.1, Math.min(5, b.price * b.mult));
         });
+    }
+
+    // Cena, kterou by kupec dal při dané zásobě (odhad pro vozy, které teprve jedou)
+    function quoteAtStock(buyer, stock) {
+        return Math.max(0.1, Math.min(5, buyer.base * buyer.noise * stockFactor(stock, buyer.demand) * buyer.mult));
+    }
+
+    function openBuyers(world) {
+        return world.market.order.map(id => world.market[id]).filter(b => !b.closed);
     }
 
     function getBlowoutFine(world) {
@@ -365,7 +451,9 @@
         news.nextInDays--;
         if (news.nextInDays <= 0 && news.active.length < MAX_ACTIVE_NEWS) {
             const rand = dayRandom(world);
-            const pool = NEWS.filter(n => !news.active.some(a => a.key === n.key) && n.key !== news.lastKey);
+            const era = world.town ? world.town.era : 0;
+            const pool = NEWS.filter(n => !news.active.some(a => a.key === n.key) && n.key !== news.lastKey &&
+                (!n.requires || world.market[n.requires]?.open) && era >= (n.minEra || 0));
             const pick = pool[Math.floor(rand() * pool.length)];
             news.active.push({ key: pick.key, title: pick.title, desc: pick.desc, days: pick.days, daysLeft: pick.days, effects: pick.effects });
             news.lastKey = pick.key;
@@ -540,7 +628,7 @@
             case 'buildDerrick': return buildDerrick(world, player, action.plotId);
             case 'buildSilo': return buildSilo(world, player, action.plotId);
             case 'buyTruck': return buyTruck(world, player);
-            case 'assignTruck': return assignTruck(player, action.company, action.delta);
+            case 'acceptContract': return acceptContract(world, player, action.id);
             case 'drill': return addDrillPoint(world, player, action.plotId, action.x, action.y);
             case 'drillStop': return stopDrill(world, player, action.plotId);
             case 'bop': return closePreventer(world, player, action.plotId);
@@ -609,15 +697,16 @@
         return { ok: true };
     }
 
-    function assignTruck(player, company, delta) {
-        if (company !== 'left' && company !== 'right') return fail('company');
-        const a = player.assigned;
-        if (delta > 0) {
-            if (a.left + a.right >= player.trucksOwned) return fail('limit');
-            a[company]++;
-        } else if (a[company] > 0) {
-            a[company]--;
-        }
+    // Zakázka z telegramu: kdo ji přijme první, ten ji má (sdílená mapa)
+    function acceptContract(world, player, id) {
+        const c = world.contracts;
+        const offer = c.offers.find(o => o.id === id);
+        if (!offer) return fail('contract');
+        if (c.active.filter(a => a.owner === player.id).length >= C.MAX_ACTIVE_CONTRACTS) return fail('limit');
+        c.offers = c.offers.filter(o => o !== offer);
+        const contract = { id: offer.id, buyer: offer.buyer, amount: offer.amount, price: offer.price, daysLeft: offer.days, delivered: 0, owner: player.id };
+        c.active.push(contract);
+        emit(world, { type: 'contract_taken', playerId: player.id, id: offer.id, buyer: offer.buyer, amount: offer.amount, price: offer.price, days: offer.days });
         return { ok: true };
     }
 
@@ -794,6 +883,7 @@
         if (!world.time.started || world.over) return;
         stepCalendar(world, dt);
         if (world._market) stepMarket(world, dt);
+        stepBuyers(world, dt);
         stepDrilling(world, dt);
         stepReservoir(world, dt);
         stepPumping(world, dt);
@@ -809,6 +899,7 @@
         time.day++;
         time.dayIndex++;
         stepNews(world);
+        stepContracts(world);
         const landTax = getLandTax(world);
         world.playerOrder.forEach(id => {
             const player = world.players[id];
@@ -861,23 +952,119 @@
         world.over = true;
     }
 
+    // Šum cen: každých PRICE_UPDATE_INTERVAL se pohne náhodná procházka a zapíše historie
     function stepMarket(world, dt) {
         const m = world.market;
         m.timer += dt;
         if (m.timer <= C.PRICE_UPDATE_INTERVAL) return;
         m.timer = 0;
         const rnd = world._market;
-        const leftDelta = (rnd() - 0.45 + m.left.trend * 0.15) * 0.12;
-        const rightDelta = (rnd() - 0.45 + m.right.trend * 0.15) * 0.12;
-        m.left.price = Math.max(0.25, Math.min(2.80, m.left.price + leftDelta));
-        m.right.price = Math.max(0.25, Math.min(2.80, m.right.price + rightDelta));
-        m.left.trend = Math.max(-1, Math.min(1, m.left.trend + (rnd() - 0.5) * 0.4));
-        m.right.trend = Math.max(-1, Math.min(1, m.right.trend + (rnd() - 0.5) * 0.4));
-        updateQuotes(world);
-        ['left', 'right'].forEach(side => {
-            m[side].history.push(m[side].quote);
-            if (m[side].history.length > C.PRICE_HISTORY_LEN) m[side].history.shift();
+        BUYER_IDS.forEach(id => {
+            const b = m[id];
+            b.noise = Math.max(0.75, Math.min(1.3, b.noise + (rnd() - 0.5 + b.trend * 0.15) * 0.06));
+            b.trend = Math.max(-1, Math.min(1, b.trend + (rnd() - 0.5) * 0.4));
         });
+        updateQuotes(world);
+        BUYER_IDS.forEach(id => {
+            const b = m[id];
+            b.history.push(b.quote);
+            if (b.history.length > C.PRICE_HISTORY_LEN) b.history.shift();
+        });
+    }
+
+    // Město spotřebovává zásoby kupců podle poptávky (běží i u klienta na sdílené mapě)
+    function stepBuyers(world, dt) {
+        const m = world.market;
+        BUYER_IDS.forEach(id => {
+            const b = m[id];
+            if (b.open) b.stock = Math.max(0, b.stock - b.demand * dt / C.MS_PER_DAY);
+        });
+        updateQuotes(world);
+    }
+
+    // Mapa má jen 8 pozemků, takže víc hráčů těží dohromady jen o málo víc: prahy rostou mírně
+    function eraThreshold(world, era) {
+        const players = world.shared ? world.playerOrder.length : 1;
+        return ERAS[era].delivered * (1 + 0.15 * Math.max(0, players - 1));
+    }
+
+    // Ropa dodaná do města posouvá éru
+    function growTown(world, oil) {
+        const town = world.town;
+        town.delivered += oil;
+        while (town.era < ERAS.length - 1 && town.delivered >= eraThreshold(world, town.era + 1)) {
+            town.era++;
+            const era = ERAS[town.era];
+            updateQuotes(world);
+            // Nový kupec začíná s prázdným skladem: první dodávky se vyplatí
+            BUYER_IDS.forEach(id => {
+                const b = world.market[id];
+                if (b.era === town.era) {
+                    b.stock = 0;
+                    b.history = [b.quote];
+                }
+            });
+            emit(world, { type: 'era', era: town.era, key: era.key, name: era.name, desc: era.desc });
+        }
+    }
+
+    // --- Zakázky ---
+    // Každých pár dní pošle některý kupec telegram: dodej X barelů do N dní za pevnou cenu.
+    // Náhoda je ze seedu a dne (jako zprávy), takže v závodě mají všichni stejné nabídky.
+    function contractRandom(world) {
+        if (world.seed == null) return Math.random;
+        return seededRandom((world.seed ^ Math.imul(world.time.dayIndex + 7, 0x85EBCA77) ^ 0xC0FFEE) >>> 0);
+    }
+
+    function stepContracts(world) {
+        const c = world.contracts;
+        if (!c) return;
+        c.offers.forEach(o => { o.expiresIn--; });
+        c.offers = c.offers.filter(o => o.expiresIn > 0);
+        c.active.forEach(contract => {
+            contract.daysLeft--;
+            if (contract.daysLeft > 0) return;
+            const player = world.players[contract.owner];
+            const missing = contract.amount - contract.delivered;
+            const penalty = Math.round(missing * contract.price * C.CONTRACT_PENALTY);
+            if (player && !player.over) {
+                player.money -= penalty;
+                if (player.money < 0) endPlayer(world, player, 'bankrupt');
+            }
+            emit(world, { type: 'contract_failed', playerId: contract.owner, id: contract.id, buyer: contract.buyer, penalty });
+        });
+        c.active = c.active.filter(contract => contract.daysLeft > 0);
+        c.nextInDays--;
+        if (c.nextInDays > 0 || c.offers.length >= C.MAX_CONTRACT_OFFERS) return;
+        const rand = contractRandom(world);
+        const buyers = openBuyers(world);
+        c.nextInDays = C.CONTRACT_GAP_MIN + Math.floor(rand() * C.CONTRACT_GAP_RANGE);
+        if (!buyers.length) return;
+        const buyer = buyers[Math.floor(rand() * buyers.length)];
+        const days = 6 + Math.floor(rand() * 5);
+        const offer = {
+            id: c.nextId++,
+            buyer: buyer.id,
+            amount: Math.max(100, Math.round(buyer.demand * (2.5 + rand() * 2.5) / 50) * 50),
+            price: Math.round(buyer.base * (1.3 + rand() * 0.25) * 100) / 100,
+            days,
+            expiresIn: C.CONTRACT_OFFER_DAYS
+        };
+        c.offers.push(offer);
+        emit(world, { type: 'contract_offer', ...offer, name: buyer.name });
+    }
+
+    // Část dodávky, která plní zakázku hráče u tohoto kupce: { paid, contract }
+    function applyContract(world, playerId, buyerId, oil) {
+        const contract = world.contracts?.active.find(a => a.owner === playerId && a.buyer === buyerId);
+        if (!contract) return { paid: 0, part: 0 };
+        const part = Math.min(oil, contract.amount - contract.delivered);
+        contract.delivered += part;
+        if (contract.delivered >= contract.amount - 0.01) {
+            world.contracts.active = world.contracts.active.filter(a => a !== contract);
+            emit(world, { type: 'contract_done', playerId, id: contract.id, buyer: buyerId, amount: contract.amount });
+        }
+        return { paid: part * contract.price, part };
     }
 
     // --- Vrtání ---
@@ -1099,22 +1286,25 @@
         return best;
     }
 
-    // Firma pro kamion: nejdřív přidělené sloty vlastníka, zbytek jede k lepší ceně
+    // Kupec pro vůz: nejvyšší očekávaná cena po započtení ropy, kterou k němu už vezou jiné vozy
+    // (plný sklad = nižší cena), mínus kus za vzdálenost. Rozjednaná zakázka vlastníka má přednost.
     function chooseCompanyFor(world, truck) {
-        const player = world.players[truck.owner];
-        const m = world.market;
-        // Zavřený výkupce (stávka, požár): všechno jede k druhému
-        if (m.left.closed !== m.right.closed) return m.left.closed ? 'right' : 'left';
-        const others = world.trucks.filter(t => t !== truck && t.owner === truck.owner && t.state !== 'idle');
-        const activeLeft = others.filter(t => t.targetCompany === 'left').length;
-        const activeRight = others.filter(t => t.targetCompany === 'right').length;
-        if (activeLeft < player.assigned.left) return 'left';
-        if (activeRight < player.assigned.right) return 'right';
-        if (m.left.quote > m.right.quote + 0.05) return 'left';
-        if (m.right.quote > m.left.quote + 0.05) return 'right';
-        if (player.assigned.left > player.assigned.right) return 'left';
-        if (player.assigned.right > player.assigned.left) return 'right';
-        return truck.id % 2 ? 'left' : 'right';
+        const load = truck.oil || C.TRUCK_CAPACITY;
+        let best = null, bestScore = -Infinity;
+        openBuyers(world).forEach(buyer => {
+            const incoming = world.trucks.reduce((sum, t) => sum +
+                (t !== truck && t.state === 'to_company' && t.targetCompany === buyer.id ? t.oil : 0), 0);
+            let price = quoteAtStock(buyer, buyer.stock + incoming + load / 2);
+            const contract = world.contracts?.active.find(a => a.owner === truck.owner && a.buyer === buyer.id);
+            if (contract) price = Math.max(price, contract.price) + 0.4;
+            // Vzdálenost váží málo: vozů bývá dost, rozhoduje cena za barel
+            const score = price - Math.abs(buyer.x - truck.x) * 0.00008;
+            if (score > bestScore) {
+                bestScore = score;
+                best = buyer;
+            }
+        });
+        return best ? best.id : null;
     }
 
     // Vrt, ke kterému má smysl jet: těží, nebo má v zásobníku aspoň na jednu fůru
@@ -1134,12 +1324,12 @@
         const network = findNetworkForTruck(world, truck);
         if (!network) return;
         truck.homeNetworkId = network.id;
-        truck.targetCompany = chooseCompanyFor(world, truck);
+        truck.targetCompany = null;
         truck.state = 'to_rig';
-        // Vjezd z okraje mapy; když tam už jiné auto je, postaví se za něj
-        const edgeDir = truck.targetCompany === 'left' ? -1 : 1;
+        // Vjezd z bližšího okraje mapy; když tam už jiné auto je, postaví se za něj
+        const edgeDir = getNetworkPickupX(world, network) < C.WORLD_W / 2 ? -1 : 1;
         const minGap = C.TRUCK_LENGTH + C.TRUCK_GAP_PAD;
-        let spawnX = truck.targetCompany === 'left' ? -50 : C.WORLD_W + 50;
+        let spawnX = edgeDir < 0 ? -50 : C.WORLD_W + 50;
         for (let guard = 0; guard < 20 &&
             world.trucks.some(o => o !== truck && o.state !== 'idle' && Math.abs(o.x - spawnX) < minGap); guard++) {
             spawnX += edgeDir * minGap;
@@ -1183,24 +1373,30 @@
 
     function sellLoad(world, truck, targetX) {
         const buyer = world.market[truck.targetCompany];
-        const sale = truck.oil * buyer.quote;
         const player = world.players[truck.owner];
+        const contract = applyContract(world, truck.owner, buyer.id, truck.oil);
+        const sale = contract.paid + (truck.oil - contract.part) * buyer.quote;
         if (player) {
             player.money += sale;
             player.revenue += sale;
             player.sold += truck.oil;
         }
-        emit(world, { type: 'sale', playerId: truck.owner, amount: Math.round(sale), x: targetX, company: truck.targetCompany });
-        // Sdílená mapa: každá dodávka sráží cenu, výkupci jsou zahlcení
-        if (world.shared) {
-            buyer.price = Math.max(0.25, buyer.price - C.SHARED_SALE_PRICE_DROP * truck.oil / C.TRUCK_CAPACITY);
-            updateQuotes(world);
-        }
+        emit(world, { type: 'sale', playerId: truck.owner, amount: Math.round(sale), x: targetX, company: buyer.id });
+        // Sklad kupce roste, cena klesá (na sdílené mapě si tak hráči konkurují)
+        buyer.stock += truck.oil;
+        growTown(world, truck.oil);
+        updateQuotes(world);
         truck.oil = 0;
     }
 
+    // Do éry železnice jezdí koňské povozy, pak kamiony
+    function truckSpeed(world) {
+        const wagons = (world.town?.era || 0) < 2;
+        return C.TRUCK_SPEED * (wagons ? C.WAGON_SPEED_MULT : 1) * newsEffect(world, 'truckSpeed');
+    }
+
     function stepTrucks(world, dt) {
-        const speed = C.TRUCK_SPEED * newsEffect(world, 'truckSpeed') * (dt / 1000);
+        const speed = truckSpeed(world) * (dt / 1000);
         world.trucks.filter(t => t.state === 'idle').forEach(truck => dispatchIdleTruck(world, truck));
 
         world.trucks.forEach(truck => {
@@ -1245,13 +1441,12 @@
                     break;
                 }
                 case 'to_company': {
-                    // Výkupce zavřel cestou: otočit k druhému, jsou-li zavření oba, počkat
-                    if (world.market[truck.targetCompany].closed) {
-                        const other = truck.targetCompany === 'left' ? 'right' : 'left';
-                        if (world.market[other].closed) break;
-                        truck.targetCompany = other;
+                    // Kupec zavřel cestou (nebo ještě nebyl vybrán): vybrat jiného, když nikdo nebere, počkat
+                    if (!truck.targetCompany || world.market[truck.targetCompany].closed) {
+                        truck.targetCompany = chooseCompanyFor(world, truck);
+                        if (!truck.targetCompany) break;
                     }
-                    const targetX = truck.targetCompany === 'left' ? 50 : C.WORLD_W - 50;
+                    const targetX = world.market[truck.targetCompany].x;
                     if (moveTruckToward(truck, targetX, trafficLimitedStep(world, truck, targetX, speed))) {
                         sellLoad(world, truck, targetX);
                         // Další jízda: vrt se vybírá znovu (nový nebo plnější vrt)
@@ -1307,10 +1502,10 @@
     }
 
     return {
-        C, RULES, PLAYER_COLORS, NEWS, ROCKS,
+        C, RULES, PLAYER_COLORS, NEWS, ROCKS, ERAS, BUYERS, BUYER_IDS,
         seededRandom, createWorld, act, step, serialize,
         getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
         isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll,
-        strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
+        eraThreshold, truckSpeed, quoteAtStock, strataBoundaryY, rockAt, pocketDrive, waterCutOf, wellRate, pathLength, pointAlong, drillHead
     };
 });

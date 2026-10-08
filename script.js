@@ -28,7 +28,6 @@ const RACE_RULES = OilSim.RULES.race;
 const ECHO_FADE_MS = 1500;
 const DRONE_Y_OFFSET = 205;   // výška letu dronu nad přední hranou desky (jen kresba)
 
-let buyerNews = { left: { mult: 1, closed: false }, right: { mult: 1, closed: false } };
 let world = null;        // aktuální svět; na sdílené mapě kopie ze serveru, mezi zprávami se dopočítává
 let myId = 'player';     // za kterého hráče se hraje (sólo 'player', v síti id hráče)
 let sharedMode = false;  // sdílená mapa: akce jdou na server (net.js), svět chodí ze serveru
@@ -79,36 +78,21 @@ let currentBuildMode = null; // 'vrt', 'silo', 'seismic', 'radar'
 let selectedDerrickPlotId = null; // Pro pokládání potrubí
 let plotWidth;
 
-// Ceny a kamiony
-let leftIncPrice = 1.00;
-let rightIncPrice = 1.00;
-let leftPriceTrend = 0;
-let rightPriceTrend = 0;
+// Vozy a město (kupci se čtou přímo z world.market)
 let trucksOwned = 0;
 let plotBlinkTimers = {};
-let trucksAssignedLeft = 0;
-let trucksAssignedRight = 0;
+let townEra = 0;          // zrcadlo world.town.era
 
 // HUD: deník událostí a zisk za poslední den (jen pro zobrazení)
 const EVENT_LOG_LEN = 4;
 let eventLog = [];
 let lastDayIncome = 0;
 
-// Historie cen pro graf na budovách firem
-let leftPriceHistory = [1.00];
-let rightPriceHistory = [1.00];
-
 // Částice (kouř z aut, "+$" při prodeji) a zvuk
 const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
 let soundMuted = false;
 let audioCtx = null;
-
-// Hitboxy pro ovládací prvky na plátně
-let companyControls = {
-    leftUp: {}, leftDown: {},
-    rightUp: {}, rightDown: {}
-};
 
 // Herní čas
 let day = 1;
@@ -218,21 +202,10 @@ function syncFromWorld() {
     totalRevenue = me.revenue;
     totalOilSold = me.sold;
     trucksOwned = me.trucksOwned;
-    trucksAssignedLeft = me.assigned.left;
-    trucksAssignedRight = me.assigned.right;
     lastDayIncome = me.lastDayIncome;
     isGameOver = me.over;
     gameOverReason = me.reason || '';
-    const m = world.market;
-    // Výkupní cena po vlivu mimořádných zpráv; zavřený výkupce nevykupuje
-    leftIncPrice = m.left.quote ?? m.left.price;
-    rightIncPrice = m.right.quote ?? m.right.price;
-    buyerNews.left = { mult: m.left.mult ?? 1, closed: !!m.left.closed };
-    buyerNews.right = { mult: m.right.mult ?? 1, closed: !!m.right.closed };
-    leftPriceTrend = m.left.trend;
-    rightPriceTrend = m.right.trend;
-    leftPriceHistory = m.left.history;
-    rightPriceHistory = m.right.history;
+    townEra = world.town ? world.town.era : 0;
     day = world.time.day;
     month = world.time.month;
     isGameStarted = world.time.started;
@@ -340,7 +313,7 @@ function handleWorldEvents(events) {
                 cancelBuildMode();
                 break;
             case 'truck_bought':
-                if (mine) logEvent(`Koupen kamion (${e.count}/${MAX_TRUCKS}).`);
+                if (mine) logEvent(`Koupen ${townEra < 2 ? 'povoz' : 'kamion'} (${e.count}/${MAX_TRUCKS}).`);
                 break;
             case 'strike': {
                 // Oslava: z věže vystřelí ohňostroj (vidí ho všichni)
@@ -451,6 +424,28 @@ function handleWorldEvents(events) {
                 break;
             case 'news':
                 showBreakingNews(e);
+                break;
+            case 'era':
+                showEraNews(e);
+                shakeCamera(4);
+                break;
+            case 'contract_offer':
+                playSound('build');
+                notify('Nabídka zakázky', `${e.name}: ${e.amount} bbl za $${e.price.toFixed(2)} do ${daysUntilText(e.days)}`, 'cool', 'wire');
+                break;
+            case 'contract_taken':
+                if (mine) logEvent(`Zakázka přijata: ${buyerName(e.buyer)}, ${e.amount} bbl.`);
+                else notify('Zakázku vzal soupeř', `${world.players[e.playerId]?.name || 'Hráč'}: ${buyerName(e.buyer)}, ${e.amount} bbl`, '', 'wire');
+                break;
+            case 'contract_done':
+                if (!mine) break;
+                playSound('strike');
+                notify('Zakázka splněna', `${buyerName(e.buyer)}: ${e.amount} bbl dodáno`, 'good', 'barrel');
+                break;
+            case 'contract_failed':
+                if (!mine) break;
+                playSound('warn');
+                notify('Zakázka propadla', `${buyerName(e.buyer)}: penále $${e.penalty}`, 'bad', 'warning');
                 break;
             case 'news_end':
                 logEvent(`Konec: ${e.title}.`);
@@ -588,9 +583,10 @@ function drawSkyLife(groundLevel) {
         ctx.stroke();
     }
 
-    // Vzducholoď s reklamou a světlometem na město
+    // Reklamní vzducholoď s vlečným transparentem a světlometem na město
     const blimp = flightProgress(90, 70, 20);
-    if (blimp !== null) drawBlimp(-160 + blimp * (canvas.width + 320), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+    blimpHitRect = null;
+    if (blimp !== null) drawBlimp(-160 + blimp * (canvas.width + 460), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
 
     // Netopýři
     const bats = flightProgress(34, 16, 5);
@@ -640,6 +636,8 @@ function drawBlimp(x, y, groundLevel) {
     ctx.fill();
     ctx.restore();
 
+    drawBlimpBanner(x - 80, y + 2, t);
+    blimpHitRect = { x: x - 80 - BLIMP_AD_W - 30, y: y - 26, width: BLIMP_AD_W + 30 + 80 + 76, height: 56 };
     const body = ctx.createLinearGradient(0, y - 22, 0, y + 22);
     body.addColorStop(0, '#5c5e78');
     body.addColorStop(0.5, '#3a3b52');
@@ -679,6 +677,109 @@ function drawBlimp(x, y, groundLevel) {
     const blink = Math.sin(t * 4) > 0.6;
     if (blink) drawGlow(x + 72, y, 10, '255, 60, 50', 0.9);
     if (!blink) drawGlow(x - 70, y - 14, 8, '255, 255, 255', 0.6);
+}
+
+// Plátěný transparent na lanech za ocasem, vlní se ve větru a nasvěcují ho lampy na spodní hraně
+const AD_URL = 'https://priceguessr.eu';
+const BLIMP_AD = ['HÁDEJ CENY · ', 'priceguessr.eu'];
+const BLIMP_AD_W = 236;
+function openAdLink() {
+    if (typeof Net !== 'undefined' && Net.openLink) Net.openLink(AD_URL);
+    else window.open(AD_URL, '_blank', 'noopener');
+}
+function drawBlimpBanner(ax, ay, t) {
+    const w = BLIMP_AD_W, h = 26, segs = 28;
+    const x0 = ax - 24; // přední (pravý) okraj plátna
+    const wave = u => Math.sin(t * 3.2 - u * 7) * 4 * (0.2 + u);
+    ctx.strokeStyle = 'rgba(16, 14, 22, 0.9)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay - 2);
+    ctx.lineTo(x0, ay - h / 2 + wave(0));
+    ctx.moveTo(ax, ay - 2);
+    ctx.lineTo(x0, ay + h / 2 + wave(0));
+    ctx.stroke();
+
+    const at = i => {
+        const u = i / segs;
+        return { x: x0 - u * w, dy: wave(u) };
+    };
+    const clothPath = () => {
+        ctx.beginPath();
+        for (let i = 0; i <= segs; i++) {
+            const p = at(i);
+            if (i) ctx.lineTo(p.x, ay - h / 2 + p.dy); else ctx.moveTo(p.x, ay - h / 2 + p.dy);
+        }
+        for (let i = segs; i >= 0; i--) {
+            const p = at(i);
+            ctx.lineTo(p.x, ay + h / 2 + p.dy);
+        }
+        ctx.closePath();
+    };
+    clothPath();
+    const cloth = ctx.createLinearGradient(0, ay - h / 2, 0, ay + h / 2);
+    cloth.addColorStop(0, PAPER_TOP);
+    cloth.addColorStop(1, PAPER_BOTTOM);
+    ctx.fillStyle = cloth;
+    ctx.fill();
+    // Záhyby: svah vlny ve stínu, protisvah chytá měsíc
+    for (let i = 0; i < segs; i++) {
+        const a = at(i), b = at(i + 1);
+        const slope = b.dy - a.dy;
+        ctx.fillStyle = slope > 0
+            ? `rgba(20, 12, 6, ${Math.min(0.35, slope * 0.16)})`
+            : `rgba(200, 215, 255, ${Math.min(0.2, -slope * 0.08)})`;
+        ctx.beginPath();
+        ctx.moveTo(a.x, ay - h / 2 + a.dy);
+        ctx.lineTo(b.x, ay - h / 2 + b.dy);
+        ctx.lineTo(b.x, ay + h / 2 + b.dy);
+        ctx.lineTo(a.x, ay + h / 2 + a.dy);
+        ctx.closePath();
+        ctx.fill();
+    }
+    // Lampy na spodní liště svítí na plátno zespodu (světlo oříznuté plátnem)
+    const lamps = [0.15, 0.5, 0.85].map(u => ({ x: x0 - u * w, y: ay + h / 2 + wave(u) }));
+    ctx.save();
+    clothPath();
+    ctx.clip();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const l of lamps) {
+        const g = ctx.createRadialGradient(l.x, l.y + 2, 0, l.x, l.y + 2, 52);
+        g.addColorStop(0, 'rgba(255, 205, 130, 0.5)');
+        g.addColorStop(0.5, 'rgba(255, 190, 110, 0.18)');
+        g.addColorStop(1, 'rgba(255, 180, 100, 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(l.x - 52, l.y - 60, 104, 64);
+    }
+    ctx.restore();
+    clothPath();
+    ctx.strokeStyle = 'rgba(40, 28, 16, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // Písmena po jednom, aby sledovala vlnu
+    ctx.font = '700 16px "Barlow Condensed", system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const text = BLIMP_AD.join('');
+    let cx = x0 - w / 2 - ctx.measureText(text).width / 2;
+    for (let i = 0; i < text.length; i++) {
+        const cw = ctx.measureText(text[i]).width;
+        ctx.fillStyle = i < BLIMP_AD[0].length ? INK : INK_RED;
+        ctx.fillText(text[i], cx, ay + 1 + wave((x0 - cx - cw / 2) / w));
+        cx += cw;
+    }
+    // Lišta s lampami pod plátnem
+    ctx.strokeStyle = '#15151f';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x0 + 2, ay + h / 2 + 3 + wave(0));
+    ctx.lineTo(x0 - w - 2, ay + h / 2 + 3 + wave(1));
+    ctx.stroke();
+    for (const l of lamps) {
+        ctx.fillStyle = '#ffe2a8';
+        ctx.fillRect(l.x - 1.5, l.y + 2, 3, 3);
+        drawGlow(l.x, l.y + 3, 9, '255, 190, 110', 0.7);
+    }
 }
 
 function drawBiplane(x, y, dir) {
@@ -747,6 +848,15 @@ function drawWalker(x, y, s, phase, dir, opts = {}) {
 }
 
 // Auto ve městě (staré "plechovka" s reflektory)
+// Malý povoz na ulici města (zmenšený cisternový povoz bez nákladu)
+function drawTownCart(x, y, s, dir, phase) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s * 0.42, s * 0.42);
+    drawOilWagon(0, 0, dir, '#4a3a2a', 0, phase);
+    ctx.restore();
+}
+
 function drawTownCar(x, y, s, dir, color) {
     ctx.save();
     ctx.translate(x, y);
@@ -808,14 +918,19 @@ function drawTownLife(groundLevel) {
     const s = L.streetScale;
     const span = canvas.width + 60;
 
+    // Provoz podle éry: v táboře jeden povoz, pak víc povozů, v automobilové éře auta
+    const vehicles = [1, 2, 2, 3][townEra];
     [{ y: L.streetY - 3 * s, dir: -1, speed: 46 }, { y: L.streetY + 4 * s, dir: 1, speed: 38 }].forEach((lane, li) => {
-        for (let i = 0; i < 3; i++) {
-            const x = wrapX(i * span / 3 + li * 170 + lane.dir * t * lane.speed * s, span);
-            drawTownCar(x, lane.y, s, lane.dir, TOWN_CAR_COLORS[(i * 2 + li) % TOWN_CAR_COLORS.length]);
+        for (let i = 0; i < vehicles; i++) {
+            const speed = townEra >= 3 ? lane.speed : lane.speed * 0.45;
+            const x = wrapX(i * span / vehicles + li * 170 + lane.dir * t * speed * s, span);
+            if (townEra >= 3) drawTownCar(x, lane.y, s, lane.dir, TOWN_CAR_COLORS[(i * 2 + li) % TOWN_CAR_COLORS.length]);
+            else drawTownCart(x, lane.y, s, lane.dir, t * speed * 4 + i);
         }
     });
 
-    [{ y: L.sidewalkNorth, dir: -1, count: 9 }, { y: L.sidewalkSouth, dir: 1, count: 9 }].forEach((walk, wi) => {
+    const walkers = [4, 6, 9, 11][townEra];
+    [{ y: L.sidewalkNorth, dir: -1, count: walkers }, { y: L.sidewalkSouth, dir: 1, count: walkers }].forEach((walk, wi) => {
         for (let i = 0; i < walk.count; i++) {
             const period = 10 + (i % 3) * 2;
             const { walked, moving } = stopAndGo(t + i * 3.1, period, period - 3);
@@ -1091,6 +1206,7 @@ function updateUI() {
     renderGoals();
     renderActiveNews();
     renderRigPanel();
+    renderContracts();
 
     // Tlačítka
     const buttons = [
@@ -1119,6 +1235,8 @@ function updateUI() {
         if (item.isTruck) {
             const priceEl = item.el.querySelector('.price');
             if (priceEl) priceEl.textContent = `$${item.cost} (${trucksOwned})`;
+            const labelEl = item.el.querySelector('.label');
+            if (labelEl) labelEl.textContent = townEra < 2 ? 'Povoz' : 'Kamion';
         }
 
         if (item.mode) {
@@ -1142,8 +1260,14 @@ function updateUI() {
 // Cíle roku jsou zatím jen ukazatel postupu, hra je nevyhodnocuje
 function getYearGoals() {
     const pumping = pipeNetworks.filter(n => isMine(n) && n.isPumping).length;
+    const town = world?.town || { era: 0, delivered: 0 };
+    const next = OilSim.ERAS[town.era + 1];
+    const townGoal = next
+        ? { name: `Město → ${next.name}`, value: town.delivered, target: OilSim.eraThreshold(world, town.era + 1), unit: ' bbl' }
+        : { name: `Město: ${OilSim.ERAS[town.era].name}`, value: 1, target: 1 };
     return {
         main: [
+            townGoal,
             { name: 'Vydělej $20 000', value: totalRevenue, target: 20000, money: true },
             { name: 'Měj 3 čerpající vrty', value: pumping, target: 3 }
         ],
@@ -1295,6 +1419,74 @@ function handleRigPanelClick(event) {
     doAction({ type: button.dataset.act, plotId: selectedDerrickPlotId });
 }
 
+// --- Zakázky ---
+// Stejný princip jako vrtný protokol: kostra se staví jen při změně seznamu, čísla se přepisují.
+let contractsLayoutKey = '';
+
+function buyerName(id) {
+    return world?.market?.[id]?.name || id;
+}
+
+function renderContracts() {
+    const box = document.getElementById('hud-contracts');
+    if (!box || !world?.contracts) return;
+    const c = world.contracts;
+    const mine = c.active.filter(a => a.owner === myId);
+    const canTake = mine.length < OilSim.C.MAX_ACTIVE_CONTRACTS && !isGameOver;
+    if (!c.offers.length && !mine.length) {
+        if (contractsLayoutKey) {
+            box.classList.add('hidden');
+            contractsLayoutKey = '';
+        }
+        return;
+    }
+    const key = [c.offers.map(o => o.id).join(), mine.map(a => a.id).join(), canTake].join('|');
+    if (key !== contractsLayoutKey) {
+        contractsLayoutKey = key;
+        box.classList.remove('hidden');
+        box.innerHTML = '<div class="ct-title">Zakázky</div>' +
+            mine.map(a => `<div class="ct-item mine" data-active="${a.id}">` +
+                `<div class="ct-wire">${buyerName(a.buyer)}: ${a.amount} bbl za $${a.price.toFixed(2)}</div>` +
+                '<div class="ct-bar"><i></i></div><div class="ct-meta"><span data-v="done"></span><span data-v="left"></span></div></div>').join('') +
+            c.offers.map(o => `<div class="ct-item" data-offer="${o.id}">` +
+                `<div class="ct-wire">${buyerName(o.buyer)} žádá ${o.amount} bbl za $${o.price.toFixed(2)} do ${daysUntilText(o.days)} stop</div>` +
+                `<div class="ct-meta"><span data-v="exp"></span><button class="ct-accept" data-accept="${o.id}"${canTake ? '' : ' disabled'}>Přijmout</button></div></div>`).join('');
+    }
+    mine.forEach(a => {
+        const row = box.querySelector(`[data-active="${a.id}"]`);
+        if (!row) return;
+        const ratio = Math.min(1, a.delivered / a.amount);
+        row.classList.toggle('urgent', a.daysLeft <= 2);
+        row.querySelector('.ct-bar > i').style.width = `${(ratio * 100).toFixed(1)}%`;
+        const done = `${Math.floor(a.delivered)} / ${a.amount} bbl`;
+        const left = `zbývá ${daysText(a.daysLeft)}`;
+        const doneEl = row.querySelector('[data-v="done"]'), leftEl = row.querySelector('[data-v="left"]');
+        if (doneEl.textContent !== done) doneEl.textContent = done;
+        if (leftEl.textContent !== left) leftEl.textContent = left;
+    });
+    c.offers.forEach(o => {
+        const el = box.querySelector(`[data-offer="${o.id}"] [data-v="exp"]`);
+        const text = `nabídka platí ${daysText(o.expiresIn)}`;
+        if (el && el.textContent !== text) el.textContent = text;
+    });
+}
+
+function handleContractsClick(event) {
+    const button = event.target.closest('[data-accept]');
+    if (!button || button.disabled) return;
+    doAction({ type: 'acceptContract', id: Number(button.dataset.accept) });
+}
+
+// Nová éra města: zvláštní vydání novin
+function showEraNews(e) {
+    const opened = OilSim.BUYERS.filter(b => b.era === e.era).map(b => b.name);
+    showBreakingNews({
+        title: `Město roste: ${e.name}`,
+        desc: e.desc,
+        market: opened.length ? `nově kupuje ${opened.join(', ')}` : 'kupci berou víc ropy'
+    });
+}
+
 // --- Mimořádné zprávy ---
 const NEWS_FLASH_MS = 8000;
 let newsFlashTimer = null;
@@ -1304,14 +1496,20 @@ let lastNewsHtml = '';
 function describeNewsEffects(effects) {
     const parts = [];
     const pct = mult => `${mult >= 1 ? '+' : '−'}${Math.round(Math.abs(mult - 1) * 100)} %`;
-    if (effects.leftClosed) parts.push('Rafinerie zavřená');
-    else if (effects.left && effects.left !== 1) parts.push(`Rafinerie ${pct(effects.left)}`);
-    if (effects.rightClosed) parts.push('Nádraží zavřené');
-    else if (effects.right && effects.right !== 1) parts.push(`Nádraží ${pct(effects.right)}`);
+    if (effects.all && effects.all !== 1) parts.push(`všichni kupci ${pct(effects.all)}`);
+    OilSim.BUYERS.forEach(b => {
+        if (effects[b.id + 'Closed']) parts.push(`${b.name} zavřená`);
+        else if (effects[b.id] && effects[b.id] !== 1) parts.push(`${b.name} ${pct(effects[b.id])}`);
+    });
     if (effects.taxMult !== undefined) parts.push(effects.taxMult === 0 ? 'daň z pozemků 0' : `daň ×${effects.taxMult}`);
     if (effects.fineMult) parts.push(`pokuty za erupce ×${effects.fineMult}`);
-    if (effects.truckSpeed) parts.push(`kamiony ${pct(effects.truckSpeed)}`);
+    if (effects.truckSpeed) parts.push(`vozy ${pct(effects.truckSpeed)}`);
     return parts;
+}
+
+// "do 1 dne", "do 4 dnů"
+function daysUntilText(n) {
+    return n === 1 ? '1 dne' : `${n} dnů`;
 }
 
 function daysText(n) {
@@ -1329,7 +1527,7 @@ function showBreakingNews(e) {
     box.querySelector('.np-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
     box.querySelector('.np-headline').textContent = e.title;
     box.querySelector('.np-lead').textContent = e.desc;
-    box.querySelector('.np-market span').textContent = `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
+    box.querySelector('.np-market span').textContent = e.market || `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
     box.classList.remove('hidden', 'leaving');
     void box.offsetWidth; // restart animace, když přijde další zpráva hned po předchozí
     box.classList.add('show');
@@ -1502,14 +1700,19 @@ function paintLayer(layer, painter) {
     return layer;
 }
 
+let sceneCacheEra = -1;
+
 function getSceneCache() {
+    // Město se s érou přestavuje: nová éra = nové pozadí (jednou, pak zase z cache)
+    if (sceneCache && sceneCacheEra !== townEra) sceneCache = null;
     if (!sceneCache) {
+        sceneCacheEra = townEra;
         const groundLevel = getGroundLevel();
         sceneChimneys = [];
         sceneCache = paintLayer(createLayer(), () => {
             const rand = seededRandom(1859); // rok prvního ropného vrtu
             drawSlab(groundLevel, rand);
-            drawTown(groundLevel, rand);
+            drawTown(groundLevel, rand, townEra);
             drawRoad(groundLevel);
             drawUnderground(groundLevel, rand);
             drawCliff(groundLevel, rand);
@@ -1889,60 +2092,106 @@ function getTownLayout(groundLevel) {
     };
 }
 
-function drawTown(groundLevel, rand) {
+// Ulice podle éry: prašná cesta, s promenádou, dlažba, asfalt se středovou čárou
+function drawTownStreet(L, groundLevel, era) {
+    const surface = ['rgba(92, 72, 58, 0.55)', 'rgba(88, 70, 60, 0.65)', 'rgba(72, 66, 72, 0.75)', 'rgba(50, 50, 60, 0.85)'][era];
+    ctx.fillStyle = surface;
+    ctx.fillRect(0, L.streetY - L.streetHalf, canvas.width, L.streetHalf * 2);
+    if (era === 0) { // vyjeté koleje v prachu
+        ctx.fillStyle = 'rgba(30, 22, 18, 0.35)';
+        ctx.fillRect(0, L.streetY - 4 * L.streetScale, canvas.width, 1.5);
+        ctx.fillRect(0, L.streetY + 4 * L.streetScale, canvas.width, 1.5);
+    }
+    if (era >= 2) { // obrubníky
+        ctx.fillStyle = 'rgba(150, 140, 160, 0.22)';
+        ctx.fillRect(0, L.streetY - L.streetHalf - 1.5, canvas.width, 1.5);
+        ctx.fillRect(0, L.streetY + L.streetHalf, canvas.width, 1.5);
+    }
+    if (era === 2) { // dlažební kostky
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+        for (let x = 0; x < canvas.width; x += 6) ctx.fillRect(x, L.streetY - L.streetHalf, 1, L.streetHalf * 2);
+    }
+    if (era === 3) {
+        ctx.fillStyle = 'rgba(255, 240, 200, 0.22)'; // středová čára
+        for (let x = 0; x < canvas.width; x += 26) ctx.fillRect(x, L.streetY - 0.5, 12, 1);
+    }
+    if (era >= 1) { // promenáda: prkenný chodník před městem
+        const ps = slabScaleAt(L.promenadeY, groundLevel);
+        ctx.fillStyle = era >= 3 ? 'rgba(90, 88, 96, 0.6)' : 'rgba(95, 70, 55, 0.6)';
+        ctx.fillRect(0, L.promenadeY - 4 * ps, canvas.width, 8 * ps);
+        ctx.fillStyle = 'rgba(20, 12, 10, 0.35)';
+        for (let x = 0; x < canvas.width; x += era >= 3 ? 24 : 9) ctx.fillRect(x, L.promenadeY - 4 * ps, 1, 8 * ps);
+    }
+}
+
+// Typ stavby na místě slotu: čím déle místo stojí (éra − narození) a čím je "lepší", tím
+// modernější dům. Tábor má jen stany a boudy, automobilová éra cihlové bloky s neony.
+const TOWN_LEVEL_TYPES = ['tent', 'shack', 'house', 'brick', 'block'];
+const TOWN_MAX_LEVEL = [1, 2, 3, 4];
+
+function townSlotType(slot, era) {
+    if (slot.industry) return era >= 1 ? slot.industry : 'tent';
+    const level = Math.min(TOWN_MAX_LEVEL[era], Math.floor((era - slot.born) * 1.1 + slot.q * 1.7));
+    return TOWN_LEVEL_TYPES[Math.max(0, level)];
+}
+
+function drawTown(groundLevel, rand, era = 0) {
     const L = getTownLayout(groundLevel);
     const backY = L.backY;
 
-    // Cesty z města k polím (pod domy)
+    // Cesty z města k polím (pod domy); s érou jich přibývá
     ctx.strokeStyle = 'rgba(90, 75, 70, 0.4)';
     ctx.lineWidth = 5;
     for (let i = 0; i < 6; i++) {
         const x = 120 + i * 270 + rand() * 60;
+        const bend = (rand() - 0.5) * 80;
+        if (Math.abs(x - canvas.width / 2) > 260 + era * 180) continue;
         ctx.beginPath();
         ctx.moveTo(x, L.streetY);
-        ctx.quadraticCurveTo(x + (rand() - 0.5) * 80, L.streetY + 40, slabXAt(x, L.promenadeY, groundLevel), L.promenadeY);
+        ctx.quadraticCurveTo(x + bend, L.streetY + 40, slabXAt(x, L.promenadeY, groundLevel), L.promenadeY);
         ctx.stroke();
     }
+    drawTownStreet(L, groundLevel, era);
 
-    // Hlavní ulice s obrubníky
-    ctx.fillStyle = 'rgba(70, 60, 62, 0.75)';
-    ctx.fillRect(0, L.streetY - L.streetHalf, canvas.width, L.streetHalf * 2);
-    ctx.fillStyle = 'rgba(150, 140, 160, 0.18)';
-    ctx.fillRect(0, L.streetY - L.streetHalf - 1.5, canvas.width, 1.5);
-    ctx.fillRect(0, L.streetY + L.streetHalf, canvas.width, 1.5);
-    ctx.fillStyle = 'rgba(255, 220, 150, 0.08)'; // středová čára
-    for (let x = 0; x < canvas.width; x += 26) ctx.fillRect(x, L.streetY - 0.5, 12, 1);
-
-    // Promenáda: prkenný chodník před městem
-    const ps = slabScaleAt(L.promenadeY, groundLevel);
-    ctx.fillStyle = 'rgba(95, 70, 55, 0.6)';
-    ctx.fillRect(0, L.promenadeY - 4 * ps, canvas.width, 8 * ps);
-    ctx.fillStyle = 'rgba(20, 12, 10, 0.35)';
-    for (let x = 0; x < canvas.width; x += 9) ctx.fillRect(x, L.promenadeY - 4 * ps, 1, 8 * ps);
-
-    // Každá stavba má vlastní seed, aby šla přední řada nakreslit znovu do jiné vrstvy
+    // Sloty staveb jsou pro všechny éry stejné (stejný seed): město roste od středu ven
+    // a stávající domy se přestavují, místo aby se celé město vyměnilo.
     const items = [];
-    for (let i = 0; i < 26; i++) {
+    const lampCount = [8, 16, 24, 32][era];
+    for (let i = 0; i < lampCount; i++) {
         const north = i % 2 === 0;
-        items.push({ type: 'lamp', x: 40 + i * 60 + rand() * 20, y: north ? L.streetY - L.streetHalf - 3 : L.streetY + L.streetHalf + 4, seed: 0 });
+        const x = (i + 0.5) * canvas.width / lampCount;
+        if (Math.abs(x - canvas.width / 2) > 300 + era * 200) continue;
+        items.push({ type: 'lamp', x, y: north ? L.streetY - L.streetHalf - 3 : L.streetY + L.streetHalf + 4, seed: 0, era });
     }
-    for (let i = 0; i < 120; i++) {
-        const r = rand();
-        const type = r < 0.52 ? 'shack' : r < 0.64 ? 'tank' : r < 0.74 ? 'tent' : r < 0.86 ? 'derrick' : r < 0.9 ? 'water' : 'house';
+    const buyerXs = OilSim.BUYERS.filter(b => b.x > 200 && b.x < canvas.width - 200).map(b => b.x);
+    for (let i = 0; i < 240; i++) {
+        const q = rand();
         const y = backY + 8 + Math.pow(rand(), 0.85) * (L.townEndY - backY - 8);
         const x = rand() * canvas.width;
         const seed = Math.floor(rand() * 1e9);
+        const jitter = rand();
+        const kind = rand();
+        const spread = Math.abs(x - canvas.width / 2) / (canvas.width / 2);
+        const born = Math.max(0, Math.min(3, Math.floor(Math.max(0, spread - 0.12) * 4.2 + (jitter - 0.5))));
+        if (born > era) continue;
         if (Math.abs(y - L.streetY) < L.clearance) continue; // ulice a chodníky zůstávají volné
-        const item = fitTownItemInFront({ type, x, y, seed }, L, groundLevel);
+        // Místo před kupci ve městě patří jejich budovám
+        if (y > L.streetY && buyerXs.some(bx => Math.abs(x - bx) < 60)) continue;
+        const industry = kind < 0.1 ? 'derrick' : kind < 0.18 ? 'tank' : kind < 0.22 ? 'water' : null;
+        const type = townSlotType({ q, born, industry }, era);
+        const item = fitTownItemInFront({ type, x, y, seed, era }, L, groundLevel);
         if (item) items.push(item);
     }
+    // Budovy kupců ve městě (petrolejka od začátku, benzinka s automobilovou érou)
+    items.push({ type: 'store', x: 800, y: L.townEndY, seed: 11, era });
+    if (era >= 3) items.push({ type: 'garage', x: 972, y: L.townEndY, seed: 12, era });
     items.sort((a, b) => a.y - b.y);
     townFrontItems = items.filter(item => item.y > L.streetY);
     items.filter(item => item.y <= L.streetY).forEach(item => drawTownItem(item, groundLevel));
 }
 
 // Nejvyšší možná výška stavby daného typu (bez měřítka), viz kreslicí funkce níž
-const TOWN_ITEM_MAX_HEIGHT = { house: 74, derrick: 61, water: 53, shack: 54, tank: 26, tent: 15 }; // vč. komína
+const TOWN_ITEM_MAX_HEIGHT = { house: 74, derrick: 61, water: 53, shack: 54, tank: 26, tent: 15, brick: 66, block: 92, store: 56, garage: 50 }; // vč. komína
 
 // Stavba před ulicí nesmí střechou zasáhnout do chodníku, jinak chodci za ní vypadají,
 // jako by stáli na střeše. Když se nevejde, zkusí se nižší typ (bouda, nádrž, stan).
@@ -1950,7 +2199,8 @@ function fitTownItemInFront(item, L, groundLevel) {
     if (item.y <= L.streetY) return item;
     const room = item.y - L.sidewalkSouth - 3;
     const s = slabScaleAt(item.y, groundLevel);
-    const candidates = [item.type, 'shack', 'tank', 'tent'];
+    if (item.type === 'store' || item.type === 'garage') return item; // budovy kupců mají místo vyhrazené
+    const candidates = [item.type, item.type === 'block' ? 'brick' : 'shack', 'shack', 'tank', 'tent'];
     const type = candidates.find(t => TOWN_ITEM_MAX_HEIGHT[t] * s <= room);
     return type ? { ...item, type } : null;
 }
@@ -1965,7 +2215,11 @@ function drawTownItem(item, groundLevel) {
         case 'tent': drawTownTent(item.x, item.y, s, rand); break;
         case 'derrick': drawTownDerrick(item.x, item.y, s); break;
         case 'water': drawTownWaterTower(item.x, item.y, s); break;
-        case 'lamp': drawTownLamp(item.x, item.y, s); break;
+        case 'lamp': drawTownLamp(item.x, item.y, s, item.era >= 3); break;
+        case 'brick': drawTownBrick(item.x, item.y, s, rand, false); break;
+        case 'block': drawTownBrick(item.x, item.y, s, rand, true); break;
+        case 'store': drawTownStore(item.x, item.y, s, item.era); break;
+        case 'garage': drawTownGarage(item.x, item.y, s); break;
     }
 }
 
@@ -2151,19 +2405,164 @@ function drawTownWaterTower(x, y, s) {
     ctx.fillRect(x + w / 2 - 3 * s, y - h, 3 * s, h * 0.45);
 }
 
-function drawTownLamp(x, y, s) {
+// Pouliční lampa: petrolejová (teplá), v automobilové éře elektrická (studeně bílá, vyšší)
+function drawTownLamp(x, y, s, electric = false) {
+    const h = (electric ? 22 : 16) * s;
+    const light = electric ? '210, 225, 255' : '255, 170, 80';
     ctx.fillStyle = '#121119';
-    ctx.fillRect(x, y - 16 * s, 1.5, 16 * s);
-    ctx.fillStyle = '#ffd890';
-    ctx.fillRect(x - 1, y - 18 * s, 3.5, 3);
-    drawGlow(x, y - 16 * s, 22 * s, '255, 170, 80', 0.45);
+    ctx.fillRect(x, y - h, 1.5, h);
+    if (electric) ctx.fillRect(x, y - h, 5 * s, 1.2);
+    ctx.fillStyle = electric ? '#eef4ff' : '#ffd890';
+    ctx.fillRect(x - 1 + (electric ? 4 * s : 0), y - h - 2, 3.5, 3);
+    drawGlow(x + (electric ? 5 * s : 0), y - h, (electric ? 30 : 22) * s, light, electric ? 0.55 : 0.45);
     // Kruh světla na zemi
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = 'rgba(255, 150, 70, 0.07)';
+    ctx.fillStyle = `rgba(${electric ? '180, 200, 255' : '255, 150, 70'}, 0.07)`;
     ctx.beginPath();
     ctx.ellipse(x, y, 26 * s, 7 * s, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+}
+
+// Cihlový dům s rovnou střechou a atikou; block = vícepatrový s neonovým nápisem na střeše
+const NEON_SIGNS = ['HOTEL', 'BAR', 'KINO', 'OIL', 'BANK', 'SALOON', 'DINER'];
+
+function drawTownBrick(x, y, s, rand, tall) {
+    const w = (tall ? 44 : 34) * s + rand() * 18 * s;
+    const h = (tall ? 62 : 36) * s + rand() * (tall ? 16 : 14) * s;
+    const depth = 9 * s;
+    drawGroundShadow(x + w / 2, y, w, s);
+    ctx.fillStyle = '#2a1a1c'; // bok
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - h);
+    ctx.lineTo(x - depth, y - h - depth * 0.6);
+    ctx.lineTo(x - depth, y - depth * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    const wall = ctx.createLinearGradient(x, 0, x + w, 0);
+    wall.addColorStop(0, '#47282a');
+    wall.addColorStop(1, '#5c3434');
+    ctx.fillStyle = wall;
+    ctx.fillRect(x, y - h, w, h);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)'; // řádky cihel
+    for (let yy = y - h + 3 * s; yy < y; yy += 3 * s) ctx.fillRect(x, yy, w, 0.6);
+    ctx.fillStyle = '#1e1416'; // atika
+    ctx.fillRect(x - depth - 1, y - h - depth * 0.6 - 3 * s, w + depth + 2, 3 * s);
+    ctx.fillRect(x - 1, y - h - 3 * s, w + 2, 4 * s);
+    ctx.strokeStyle = 'rgba(170, 185, 235, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - 1, y - h - 3 * s);
+    ctx.lineTo(x + w + 1, y - h - 3 * s);
+    ctx.stroke();
+    // Okna v pravidelné mřížce, víc svítí
+    const rows = Math.max(1, Math.floor((h - 8 * s) / (11 * s)));
+    const cols = Math.max(1, Math.floor(w / (9 * s)));
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const wx = x + 3 * s + c * (w - 6 * s) / cols + 1;
+            const wy = y - h + 6 * s + r * 11 * s;
+            const lit = rand() < 0.62;
+            ctx.fillStyle = lit ? '#ffc878' : '#151018';
+            ctx.fillRect(wx, wy, 4 * s, 6 * s);
+            if (lit) drawGlow(wx + 2 * s, wy + 3 * s, 12 * s, '255, 170, 80', 0.2);
+        }
+    }
+    if (tall && rand() < 0.75) { // neon na střeše
+        const label = NEON_SIGNS[Math.floor(rand() * NEON_SIGNS.length)];
+        const color = rand() < 0.5 ? '255, 90, 120' : '120, 220, 255';
+        ctx.save();
+        ctx.font = `700 ${Math.round(9 * s)}px "Barlow Condensed", system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        const ny = y - h - 6 * s;
+        ctx.fillStyle = '#121016';
+        ctx.fillRect(x + w / 2 - 1, ny, 1.5, 4 * s);
+        drawGlow(x + w / 2, ny - 3 * s, 26 * s, color, 0.45);
+        ctx.fillStyle = `rgb(${color})`;
+        ctx.fillText(label, x + w / 2, ny);
+        ctx.restore();
+    } else if (rand() < 0.5) { // komín
+        const cx = x + w * 0.75;
+        ctx.fillStyle = '#121119';
+        ctx.fillRect(cx, y - h - 10 * s, 4 * s, 8 * s);
+        sceneChimneys.push({ x: cx + 2 * s, y: y - h - 10 * s, s, phase: rand() * 10 });
+    }
+}
+
+// Petrolejka: v táboře velký stan s lucernami, pak dřevěný obchod s falešným štítem a cedulí
+function drawTownStore(x, y, s, era) {
+    if (era === 0) {
+        drawTownTent(x - 24 * s, y, s * 2.2, seededRandom(3));
+        drawGlow(x, y - 20 * s, 34 * s, '255, 170, 80', 0.4);
+    } else {
+        const w = 56 * s, h = 30 * s;
+        const left = x - w / 2;
+        drawGroundShadow(x, y, w, s);
+        ctx.fillStyle = era >= 2 ? '#3e3036' : '#3a2e2a';
+        ctx.fillRect(left, y - h, w, h);
+        ctx.fillStyle = '#231b18'; // falešný štít
+        ctx.fillRect(left - 2 * s, y - h - 12 * s, w + 4 * s, 13 * s);
+        ctx.strokeStyle = 'rgba(170, 185, 235, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(left - 2 * s, y - h - 12 * s);
+        ctx.lineTo(left + w + 2 * s, y - h - 12 * s);
+        ctx.stroke();
+        ctx.fillStyle = '#ffbe6a'; // výloha
+        ctx.fillRect(left + 6 * s, y - h + 8 * s, w - 26 * s, 12 * s);
+        drawGlow(x - 6 * s, y - h + 14 * s, 30 * s, '255, 160, 70', 0.4);
+        ctx.fillStyle = '#151018'; // dveře
+        ctx.fillRect(left + w - 15 * s, y - 18 * s, 9 * s, 18 * s);
+        ctx.fillStyle = '#5a3b20'; // stříška
+        ctx.fillRect(left - 3 * s, y - h + 2 * s, w + 6 * s, 3 * s);
+    }
+    // Lucerny na trámu před obchodem
+    [-18, 0, 18].forEach(dx => {
+        ctx.fillStyle = '#ffd890';
+        ctx.fillRect(x + dx * s - 1.5, y - (era === 0 ? 34 : 46) * s, 3, 4);
+        drawGlow(x + dx * s, y - (era === 0 ? 32 : 44) * s, 12 * s, '255, 180, 90', 0.45);
+    });
+    ctx.save();
+    ctx.font = `${Math.round(9 * s)}px "Rye", Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e8c98a';
+    ctx.fillText('PETROLEJ', x, y - (era === 0 ? 40 : 36) * s);
+    ctx.restore();
+}
+
+// Benzinka: nízká cihlová dílna, přístřešek, stojan s koulí a svítící nápis
+function drawTownGarage(x, y, s) {
+    const w = 60 * s, h = 24 * s;
+    const left = x - w / 2;
+    drawGroundShadow(x, y, w, s);
+    ctx.fillStyle = '#3c3a44';
+    ctx.fillRect(left + 20 * s, y - h, w - 20 * s, h);
+    ctx.fillStyle = '#1c1b22';
+    ctx.fillRect(left + 26 * s, y - h + 8 * s, 16 * s, h - 8 * s); // vrata
+    ctx.fillStyle = 'rgba(120, 220, 255, 0.25)';
+    ctx.fillRect(left + 26 * s, y - h + 8 * s, 16 * s, 2 * s);
+    ctx.fillStyle = '#18171e'; // přístřešek na sloupcích
+    ctx.fillRect(left - 2 * s, y - h - 4 * s, 26 * s, 3 * s);
+    ctx.fillRect(left, y - h - 1 * s, 2 * s, h + 1 * s);
+    // Stojan s koulí
+    ctx.fillStyle = '#b8342a';
+    ctx.fillRect(left + 9 * s, y - 16 * s, 5 * s, 16 * s);
+    ctx.fillStyle = '#f2ead8';
+    ctx.beginPath();
+    ctx.arc(left + 11.5 * s, y - 19 * s, 3 * s, 0, Math.PI * 2);
+    ctx.fill();
+    drawGlow(left + 11.5 * s, y - 19 * s, 12 * s, '255, 240, 210', 0.5);
+    ctx.save();
+    ctx.font = `700 ${Math.round(10 * s)}px "Barlow Condensed", system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    drawGlow(left + 40 * s, y - h - 5 * s, 30 * s, '120, 220, 255', 0.45);
+    ctx.fillStyle = 'rgb(150, 230, 255)';
+    ctx.fillText('BENZIN', left + 40 * s, y - h - 2 * s);
     ctx.restore();
 }
 
@@ -2342,6 +2741,7 @@ function drawGlow(x, y, radius, color, alpha) {
 
 // Přidám globální pole pro hitboxy cedulí
 let plotSignHitboxes = [];
+let blimpHitRect = null; // reklamní vzducholoď (klik otevře odkaz), jen když je na obloze
 let plotsHoverPointer = false; // myš je nad cedulí nebo stavitelným pozemkem
 
 const PLOT_SIGN_PAD = 10;
@@ -3279,16 +3679,15 @@ function drawDrillBit(head, network, donePath) {
     }
 }
 
-// --- Výkupci ropy: Rafinerie (vlevo) a Nádraží (vpravo) ---
-// Herně jsou to dál firmy 'left'/'right' (ceny, sloty kamionů), kreslí se ale jako dva různé
-// areály: rafinerie s kolonami a flérou a železniční překladiště s cisternami a lokomotivou.
-// Nad každým je karta s cenou, grafem a přidělením kamionů (−/+ nebo kolečko myši).
+// --- Kupci ve městě ---
+// Herně jsou to world.market[id] (cena podle zásoby, poptávka podle éry). Rafinerie a nádraží mají
+// areály po stranách s ceníkem nahoře, petrolejka a benzinka stojí ve městě a ceník visí nad nimi.
 const BUYER_CARD_TOP = 96;
 const BUYER_CARD_H = 148;
-const BUYERS = {
-    left: { name: 'RAFINERIE', sub: 'Černé zlato', accent: '255, 150, 70' },
-    right: { name: 'NÁDRAŽÍ', sub: 'Západní dráha', accent: '120, 180, 240' }
-};
+const BUYER_ZONE_WIDTH = 100;
+const TOWN_CHIP_W = 132;
+const TOWN_CHIP_H = 66;
+const BUYER_COLORS = { left: '#8a1c14', lamps: '#7a5a12', right: '#1b3a66', garage: '#1f5a2c' };
 
 // Fléra rafinerie: komín s plápolajícím plamenem spalovaného plynu
 function drawFlare(x, baseY, height) {
@@ -3509,61 +3908,110 @@ function drawRailDepot(x0, baseY) {
     }
 }
 
-// Karta výkupce: název, cena s trendem, graf, přidělené kamiony (−/+) a kolik jich jede
-function drawBuyerCard(side, x, y, w, h, hovered) {
-    const buyer = BUYERS[side];
-    const price = side === 'left' ? leftIncPrice : rightIncPrice;
-    const trend = side === 'left' ? leftPriceTrend : rightPriceTrend;
-    const history = side === 'left' ? leftPriceHistory : rightPriceHistory;
-    const assigned = side === 'left' ? trucksAssignedLeft : trucksAssignedRight;
-    const driving = trucks.filter(t => t.state !== 'idle' && t.targetCompany === side).length;
+// Razítko vlivu zpráv (ZAVŘENO / ZPRÁVY ±x %) nebo popisek ZA BAREL; vrací, jestli je kupec zavřený
+// stampOnly: bez zpráv se nic nekreslí (cedule ve městě má místo popisku ZA BAREL roli kupce)
+function drawBuyerNewsStamp(buyer, x, y, stampOnly = false) {
+    const closedByNews = buyer.open && buyer.closed;
+    const mult = buyer.mult ?? 1;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    if (closedByNews || Math.abs(mult - 1) > 0.001) {
+        const label = closedByNews ? 'ZAVŘENO' : `ZPRÁVY ${mult > 1 ? '+' : '−'}${Math.round(Math.abs(mult - 1) * 100)} %`;
+        const good = !closedByNews && mult > 1;
+        ctx.font = '800 7.5px "Barlow Condensed", system-ui, sans-serif';
+        const lw = ctx.measureText(label).width + 8;
+        ctx.strokeStyle = good ? INK_GREEN : INK_RED;
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(x, y - 8.5, lw, 11);
+        ctx.fillStyle = good ? INK_GREEN : INK_RED;
+        ctx.fillText(label, x + 4, y);
+    } else if (!stampOnly) {
+        ctx.fillStyle = INK_SOFT;
+        ctx.font = '700 7.5px "Barlow Condensed", system-ui, sans-serif';
+        ctx.fillText('ZA BAREL', x + 2, y - 1);
+    }
+    return closedByNews;
+}
 
-    // Ceník výkupce: papírový list s hlavičkou firmy, cenou a přidělením kamionů
+// Sklad kupce: dílky po půl dni zásoby, plný sklad = nižší cena
+function drawStockGauge(buyer, x, y, w) {
+    const days = buyer.demand > 0 ? buyer.stock / buyer.demand : 0;
+    const ratio = Math.min(1, days / (OilSim.C.STOCK_DAYS * 1.5));
+    ctx.fillStyle = 'rgba(40, 28, 16, 0.12)';
+    ctx.fillRect(x, y, w, 5);
+    ctx.fillStyle = ratio > 0.66 ? INK_RED : INK;
+    ctx.fillRect(x, y, w * ratio, 5);
+    ctx.strokeStyle = 'rgba(40, 28, 16, 0.55)';
+    ctx.lineWidth = 0.8;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, 4);
+    for (let k = 1; k < 6; k++) {
+        ctx.beginPath();
+        ctx.moveTo(x + w * k / 6, y);
+        ctx.lineTo(x + w * k / 6, y + 5);
+        ctx.stroke();
+    }
+    ctx.fillStyle = INK_SOFT;
+    ctx.font = '700 7.5px "Barlow Condensed", system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`SKLAD ${days.toFixed(1).replace('.', ',')} DNE`, x, y + 14);
+    if (w < 100) { // úzký ceník po straně: poptávka na dalším řádku
+        ctx.fillText(`POPTÁVKA ${Math.round(buyer.demand)}/DEN`, x, y + 23);
+    } else {
+        ctx.textAlign = 'right';
+        ctx.fillText(`${Math.round(buyer.demand)}/DEN`, x + w, y + 14);
+    }
+}
+
+function getMyContract(buyerId) {
+    return world?.contracts?.active.find(c => c.owner === myId && c.buyer === buyerId) || null;
+}
+
+// Ceník kupce po straně: název, cena s trendem, graf, sklad, kolik vozů k němu jede / zakázka
+function drawBuyerCard(buyer, x, y, w, h) {
+    const color = BUYER_COLORS[buyer.id] || INK;
     fillPaper(x, y, w, h, 2);
     ctx.save();
-    if (hovered) { // rámeček razítkem v barvě výkupce
-        ctx.strokeStyle = side === 'left' ? INK_RED : '#1b3a66';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
-    }
-    ctx.fillStyle = side === 'left' ? INK_RED : '#1b3a66'; // barevný proužek výkupce
+    ctx.fillStyle = color;
     ctx.fillRect(x + 1, y + 8, 2.5, 22);
-
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = INK;
     ctx.font = '13px "Rye", Georgia, serif';
-    ctx.fillText(buyer.name === 'RAFINERIE' ? 'Rafinerie' : 'Nádraží', x + 9, y + 18);
+    ctx.fillText(buyer.name, x + 9, y + 18);
     ctx.fillStyle = INK_SOFT;
     ctx.font = 'italic 9px "Courier Prime", monospace';
     ctx.fillText(buyer.sub, x + 9, y + 29);
 
+    if (!buyer.open) { // kupec ještě není: trať se staví
+        const era = OilSim.ERAS[buyer.era];
+        ctx.fillStyle = INK_SOFT;
+        ctx.font = '700 12px "Barlow Condensed", system-ui, sans-serif';
+        ctx.fillText('VE STAVBĚ', x + 9, y + 56);
+        ctx.font = 'italic 9px "Courier Prime", monospace';
+        ctx.fillText(`od éry`, x + 9, y + 74);
+        ctx.font = '12px "Rye", Georgia, serif';
+        ctx.fillStyle = INK;
+        ctx.fillText(era.name, x + 9, y + 89);
+        const need = Math.max(0, OilSim.eraThreshold(world, buyer.era) - world.town.delivered);
+        ctx.fillStyle = INK_SOFT;
+        ctx.font = 'italic 8.5px "Courier Prime", monospace';
+        ctx.fillText(`chybí ${Math.ceil(need).toLocaleString('cs-CZ')} bbl`, x + 9, y + 104);
+        ctx.fillText('do města', x + 9, y + 115);
+        ctx.restore();
+        return;
+    }
+
     ctx.fillStyle = INK;
     ctx.font = '800 21px "Barlow Condensed", system-ui, sans-serif';
-    const priceText = `$${price.toFixed(2)}`;
+    const priceText = `$${buyer.quote.toFixed(2)}`;
     ctx.fillText(priceText, x + 8, y + 55);
     const priceWidth = ctx.measureText(priceText).width;
-    ctx.fillStyle = trend >= 0 ? INK_GREEN : INK_RED;
+    const history = buyer.history || [];
+    const rising = history.length < 2 || history[history.length - 1] >= history[history.length - 2];
+    ctx.fillStyle = rising ? INK_GREEN : INK_RED;
     ctx.font = '10px sans-serif';
-    ctx.fillText(trend >= 0 ? '▲' : '▼', x + 12 + priceWidth, y + 54);
-    // Vliv mimořádných zpráv: ZAVŘENO, nebo o kolik zprávy cenu mění
-    const effect = buyerNews[side];
-    if (effect.closed || Math.abs(effect.mult - 1) > 0.001) {
-        const label = effect.closed ? 'ZAVŘENO' : `ZPRÁVY ${effect.mult > 1 ? '+' : '−'}${Math.round(Math.abs(effect.mult - 1) * 100)} %`;
-        const good = !effect.closed && effect.mult > 1;
-        ctx.font = '800 7.5px "Barlow Condensed", system-ui, sans-serif';
-        const lw = ctx.measureText(label).width + 8;
-        ctx.strokeStyle = good ? INK_GREEN : INK_RED; // razítko
-        ctx.lineWidth = 1.2;
-        ctx.strokeRect(x + 7, y + 57, lw, 11);
-        ctx.fillStyle = good ? INK_GREEN : INK_RED;
-        ctx.fillText(label, x + 11, y + 65.5);
-    } else {
-        ctx.fillStyle = INK_SOFT;
-        ctx.font = '700 7.5px "Barlow Condensed", system-ui, sans-serif';
-        ctx.fillText('ZA BAREL', x + 9, y + 64);
-    }
-    if (effect.closed) { // přeškrtnutá cena
+    ctx.fillText(rising ? '▲' : '▼', x + 12 + priceWidth, y + 54);
+    if (drawBuyerNewsStamp(buyer, x + 7, y + 66)) { // přeškrtnutá cena
         ctx.strokeStyle = INK_RED;
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -3571,62 +4019,144 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
         ctx.lineTo(x + 12 + priceWidth, y + 49);
         ctx.stroke();
     }
-
-    drawPriceChart(history, x + 8, y + 70, w - 16, 16);
-
-    ctx.fillStyle = 'rgba(40, 28, 16, 0.35)';
-    ctx.fillRect(x + 8, y + 92, w - 16, 1);
-
-    const rowY = y + 99;
-    const minus = { x: x + 7, y: rowY, width: 22, height: 22 };
-    const plus = { x: x + w - 29, y: rowY, width: 22, height: 22 };
-    drawCardButton(minus, '−', buyer.accent);
-    drawCardButton(plus, '+', buyer.accent);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = INK;
-    ctx.font = '700 18px "Courier Prime", monospace';
-    ctx.fillText(String(assigned), x + w / 2, rowY + 17);
-    ctx.fillStyle = INK_SOFT;
-    ctx.font = '700 7.5px "Barlow Condensed", system-ui, sans-serif';
-    ctx.fillText('PŘIDĚLENO', x + w / 2, rowY + 31);
-    ctx.fillStyle = hovered ? INK_RED : INK_SOFT;
-    ctx.font = 'italic 8.5px "Courier Prime", monospace';
-    ctx.fillText(hovered ? 'kolečko myši ±' : `${driving} ${driving === 1 ? 'kamion jede' : 'kamionů jede'}`, x + w / 2, y + h - 8);
+    drawPriceChart(history, x + 8, y + 72, w - 16, 16);
+    drawStockGauge(buyer, x + 8, y + 96, w - 16);
+    drawBuyerFooter(buyer, x + w / 2, y + h - 10);
     ctx.restore();
-    return { minus, plus };
 }
 
-function drawCardButton(rect, label, accent) {
-    const hovered = isPointNearRect(mousePos, rect, 2);
+// Spodní řádek ceníku: rozjednaná zakázka, jinak kolik mých vozů k kupci jede
+function drawBuyerFooter(buyer, cx, y) {
+    const contract = getMyContract(buyer.id);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    if (contract) {
+        ctx.fillStyle = INK_RED;
+        ctx.font = '700 9px "Barlow Condensed", system-ui, sans-serif';
+        ctx.fillText(`ZAKÁZKA ${Math.floor(contract.delivered)}/${contract.amount}`, cx, y);
+        return;
+    }
+    const driving = trucks.filter(t => t.state === 'to_company' && t.targetCompany === buyer.id && isMine(t)).length;
+    ctx.fillStyle = INK_SOFT;
+    ctx.font = 'italic 8.5px "Courier Prime", monospace';
+    ctx.fillText(driving ? `${driving} ${driving === 1 ? 'vůz veze' : 'vozy vezou'}` : 'nikdo neveze', cx, y);
+}
+
+// Ceník kupce ve městě: menší cedule zavěšená nad budovou
+function drawTownBuyerChip(buyer, groundLevel) {
+    if (!buyer.open) return;
+    const L = getTownLayout(groundLevel);
+    const w = TOWN_CHIP_W, h = TOWN_CHIP_H;
+    const x = buyer.x - w / 2, y = BUYER_CARD_TOP + 4;
     ctx.save();
-    // Tlačítko jako razítkové políčko vytištěné na ceníku
-    ctx.fillStyle = hovered ? 'rgba(138, 28, 20, 0.15)' : 'rgba(255, 245, 220, 0.18)';
-    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-    ctx.strokeStyle = hovered ? INK_RED : INK;
-    ctx.lineWidth = hovered ? 2 : 1.2;
-    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
-    ctx.fillStyle = hovered ? INK_RED : INK;
-    ctx.font = '700 15px "Barlow Condensed", system-ui, sans-serif';
+    ctx.strokeStyle = 'rgba(20, 14, 10, 0.7)'; // provázky k budově
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + 14, y + h);
+    ctx.lineTo(buyer.x - 10, L.townEndY - 30);
+    ctx.moveTo(x + w - 14, y + h);
+    ctx.lineTo(buyer.x + 10, L.townEndY - 30);
+    ctx.stroke();
+    ctx.restore();
+    fillPaper(x, y, w, h, 2, buyer.id === 'lamps' ? -0.015 : 0.015);
+    ctx.save();
+    const color = BUYER_COLORS[buyer.id] || INK;
+    ctx.fillStyle = color;
+    ctx.fillRect(x + 1, y + 6, 2.5, 18);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = INK;
+    ctx.font = '12px "Rye", Georgia, serif';
+    ctx.fillText(buyer.name, x + 8, y + 16);
+    ctx.font = '800 17px "Barlow Condensed", system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`$${buyer.quote.toFixed(2)}`, x + w - 7, y + 18);
+    ctx.textAlign = 'left';
+    // Pod názvem role kupce, při zprávách místo ní razítko
+    const hasNews = (buyer.open && buyer.closed) || Math.abs((buyer.mult ?? 1) - 1) > 0.001;
+    if (!hasNews) {
+        ctx.fillStyle = INK_SOFT;
+        ctx.font = 'italic 8.5px "Courier Prime", monospace';
+        ctx.fillText(buyer.sub, x + 8, y + 27);
+    }
+    drawBuyerNewsStamp(buyer, x + 7, y + 31, true);
+    drawStockGauge(buyer, x + 8, y + 37, w - 16);
+    drawBuyerFooter(buyer, x + w / 2, y + h - 5);
+    ctx.restore();
+}
+
+// Vykládka kupce ve městě u silnice: sloupek s lucernou a cedulkou, kde vozy zastavují
+function drawUnloadingStand(buyer, groundLevel) {
+    if (!buyer.open) return;
+    const x = buyer.x;
+    const base = groundLevel - STRUCTURE_BASE_OFFSET + 6;
+    ctx.save();
+    ctx.fillStyle = '#17120e';
+    ctx.fillRect(x - 1.5, base - 34, 3, 34);
+    ctx.fillRect(x - 8, base - 34, 16, 2);
+    ctx.fillStyle = townEra >= 3 ? '#e8f0ff' : '#ffd890';
+    ctx.fillRect(x + 5, base - 32, 3, 4);
+    drawGlow(x + 6.5, base - 30, 16, townEra >= 3 ? '200, 220, 255' : '255, 180, 90', 0.5);
+    ctx.restore();
+    const label = buyer.name.toUpperCase();
+    ctx.save();
+    ctx.font = '700 9px "Barlow Condensed", system-ui, sans-serif';
+    const lw = ctx.measureText(label).width + 10;
+    fillPaper(x - lw / 2, base - 26, lw, 13, 1.5, -0.03);
+    ctx.fillStyle = BUYER_COLORS[buyer.id] || INK;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
+    ctx.fillText(label, x, base - 19);
+    ctx.restore();
+}
+
+// Trať ve stavbě místo nádraží (než přijde éra železnice): pražce, kolejnice do ztracena, stany dělníků
+function drawRailConstruction(x0, baseY) {
+    const t = ambientClock;
+    const railY = baseY - 2;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(x0 + 56, baseY + 1, 56, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a1820';
+    for (let x = x0 + 40; x < x0 + 104; x += 7) ctx.fillRect(x, railY - 1, 4, 3);
+    ctx.fillStyle = '#6a6f88';
+    ctx.fillRect(x0 + 62, railY - 2, 42, 1); // kolejnice končí uprostřed
+    ctx.fillStyle = '#2a2420'; // hromada pražců
+    for (let k = 0; k < 4; k++) ctx.fillRect(x0 + 10 + k * 2, railY - 4 - k * 3, 24 - k * 4, 3);
+    drawTownTent(x0 + 30, baseY - 6, 1.3, seededRandom(4));
+    // Ruční drezína s lucernou
+    ctx.fillStyle = '#15141d';
+    ctx.fillRect(x0 + 74, railY - 9, 18, 5);
+    ctx.fillRect(x0 + 82, railY - 18, 2, 9);
+    ctx.fillRect(x0 + 76 + Math.sin(t * 2) * 3, railY - 19, 12, 1.5);
+    drawGlow(x0 + 90, railY - 12, 14, '255, 180, 90', 0.4);
+    // Cedule
+    ctx.fillStyle = '#15141d';
+    ctx.fillRect(x0 + 52, baseY - 46, 2, 42);
+    fillPaper(x0 + 34, baseY - 58, 40, 16, 1.5, 0.04);
+    ctx.save();
+    ctx.fillStyle = INK;
+    ctx.font = '700 7px "Barlow Condensed", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('STAVBA TRATI', x0 + 54, baseY - 50);
     ctx.restore();
 }
 
 function drawCompanyBuildings(groundLevel) {
     const baseY = groundLevel - BUILDING_BASE_OFFSET;
-    const rightX = canvas.width - COMPANY_ZONE_WIDTH;
+    const rightX = canvas.width - BUYER_ZONE_WIDTH;
+    const m = world.market;
     drawRefinery(0, baseY);
-    drawRailDepot(rightX, baseY);
-
-    const hovered = getCompanyZoneAt(mousePos);
-    const left = drawBuyerCard('left', 4, BUYER_CARD_TOP, COMPANY_ZONE_WIDTH - 8, BUYER_CARD_H, hovered === 'left');
-    const right = drawBuyerCard('right', rightX + 4, BUYER_CARD_TOP, COMPANY_ZONE_WIDTH - 8, BUYER_CARD_H, hovered === 'right');
-    // Hitboxy pro handleCanvasClick: "nahoru" = přidat kamion, "dolů" = ubrat
-    companyControls.leftUp = left.plus;
-    companyControls.leftDown = left.minus;
-    companyControls.rightUp = right.plus;
-    companyControls.rightDown = right.minus;
+    if (m.right.open) drawRailDepot(rightX, baseY);
+    else drawRailConstruction(rightX, baseY);
+    drawBuyerCard(m.left, 4, BUYER_CARD_TOP, BUYER_ZONE_WIDTH - 8, BUYER_CARD_H);
+    drawBuyerCard(m.right, rightX + 4, BUYER_CARD_TOP, BUYER_ZONE_WIDTH - 8, BUYER_CARD_H);
+    ['lamps', 'garage'].forEach(id => {
+        drawUnloadingStand(m[id], groundLevel);
+        drawTownBuyerChip(m[id], groundLevel);
+    });
 }
 
 // Malý čárový graf cen. Osa Y se přizpůsobí, minimální rozsah 0,30 $, ať drobné změny nevypadají dramaticky.
@@ -3665,7 +4195,7 @@ function drawPriceChart(history, x, y, w, h) {
 }
 
 // --- Silnice a auta ---
-const TRUCK_COLORS = { left: '#C77D2E', right: '#4F86B5' }; // laděné k barvám výkupců (rafinerie, nádraží)
+const TRUCK_COLORS = { left: '#C77D2E', right: '#4F86B5', lamps: '#B59A3E', garage: '#5E9A62' }; // laděné ke kupcům
 
 function pathRoundRect(x, y, w, h, r) {
     ctx.beginPath();
@@ -3674,6 +4204,99 @@ function pathRoundRect(x, y, w, h, r) {
 }
 
 // Cisterna, kabina vpravo. facing = -1 ji zrcadlí (jede doleva). loadRatio 0–1 = hladina v okénku.
+// Koňský povoz s cisternovým sudem; phase (ujetá vzdálenost) hýbe nohama koně a koly
+function drawOilWagon(x, baseY, facing, color, loadRatio, phase) {
+    const step = phase * 0.12;
+    ctx.save();
+    ctx.translate(x, baseY);
+    ctx.scale(facing, 1);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+    ctx.beginPath();
+    ctx.ellipse(0, 1, 40, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Kůň: trup, krk s hlavou, čtyři nohy v kroku, ocas
+    ctx.strokeStyle = '#120d0a';
+    ctx.fillStyle = '#2a1d16';
+    ctx.lineWidth = 2;
+    for (let k = 0; k < 4; k++) {
+        const hx = 18 + (k % 2) * 3 + (k < 2 ? 0 : 13);
+        const swing = Math.sin(step + k * Math.PI / 2) * 3;
+        ctx.beginPath();
+        ctx.moveTo(hx, -15);
+        ctx.lineTo(hx + swing, -1);
+        ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.ellipse(26, -18, 11, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(33, -20);
+    ctx.lineTo(39, -30);
+    ctx.lineTo(43, -27);
+    ctx.lineTo(37, -17);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(15, -19);
+    ctx.quadraticCurveTo(10, -16 + Math.sin(step) * 1.5, 11, -10);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(170, 190, 255, 0.35)'; // měsíc na hřbetě
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(26, -18, 11, 5, 0, Math.PI * 1.1, Math.PI * 1.9);
+    ctx.stroke();
+
+    // Oj a vůz
+    ctx.strokeStyle = '#3a2a1c';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(8, -12);
+    ctx.lineTo(20, -16);
+    ctx.stroke();
+    ctx.fillStyle = '#4a3322';
+    ctx.fillRect(-38, -14, 48, 4);
+    // Sud: dřevěné dužiny s obručemi, barva kupce v pruhu
+    pathRoundRect(-36, -32, 42, 18, 8);
+    ctx.fillStyle = '#5a3d26';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.fillRect(-30, -27, 30, 4);
+    ctx.fillStyle = '#1a1410';
+    [-28, -15, -2].forEach(bx => ctx.fillRect(bx, -32, 2, 18));
+    ctx.fillStyle = 'rgba(255, 230, 190, 0.18)';
+    ctx.fillRect(-32, -30, 34, 2);
+    // Hladina: tmavý pruh na čele sudu
+    if (loadRatio > 0) {
+        ctx.fillStyle = 'rgba(10, 8, 6, 0.85)';
+        ctx.fillRect(-35, -21, 3, 6 * Math.min(1, loadRatio));
+    }
+    // Kola s loukotěmi
+    [-28, 0].forEach(wx => {
+        ctx.strokeStyle = '#1a120c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(wx, -7, 7, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        for (let k = 0; k < 3; k++) {
+            const a = -step * 0.6 + k * Math.PI / 3;
+            ctx.beginPath();
+            ctx.moveTo(wx + Math.cos(a) * 7, -7 + Math.sin(a) * 7);
+            ctx.lineTo(wx - Math.cos(a) * 7, -7 - Math.sin(a) * 7);
+            ctx.stroke();
+        }
+    });
+    // Lucerna na voze
+    ctx.fillStyle = '#ffd890';
+    ctx.fillRect(6, -26, 3, 4);
+    ctx.restore();
+    drawGlow(x + facing * 7.5, baseY - 24, 14, '255, 180, 90', 0.45);
+}
+
 function drawTankerTruck(x, baseY, facing, color, loadRatio) {
     ctx.save();
     ctx.translate(x, baseY);
@@ -3791,15 +4414,20 @@ function drawTrucks(groundLevel) {
 
     items.sort((a, b) => a.lane - b.lane); // vzdálenější pruh se kreslí první
     items.forEach(({ truck, facing, renderX }) => {
-        // Na sdílené mapě má každý hráč kamiony ve své barvě, jinak podle výkupce
+        // Na sdílené mapě má každý hráč vozy ve své barvě, jinak podle kupce
         const color = sharedMode ? playerColor(truck.owner) : (TRUCK_COLORS[truck.targetCompany] || '#777777');
         const baseY = getTruckBaseY(truck, groundLevel);
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // stín na desce
         ctx.beginPath();
         ctx.ellipse(renderX - 4, baseY + 1, 44, 4, 0, 0, Math.PI * 2);
         ctx.fill();
-        drawTankerTruck(renderX, baseY, facing, color, truck.oil / TRUCK_CAPACITY);
-        if (truck.state !== 'waiting_at_rig') drawTruckLights(renderX, baseY, facing);
+        const moving = truck.state !== 'waiting_at_rig';
+        if (townEra < 2) { // do éry železnice koňský povoz s sudem
+            drawOilWagon(renderX, baseY, facing, color, truck.oil / TRUCK_CAPACITY, moving ? truck.x : 0);
+        } else {
+            drawTankerTruck(renderX, baseY, facing, color, truck.oil / TRUCK_CAPACITY);
+            if (moving) drawTruckLights(renderX, baseY, facing);
+        }
     });
 }
 
@@ -4108,7 +4736,8 @@ function drawDrillPreview(from, to) {
 }
 
 function drawEffectsAndPreviews(groundLevel) {
-    let newCursor = plotsHoverPointer ? 'pointer' : (getCompanyZoneAt(mousePos) ? 'ns-resize' : (camera.tzoom > 1.01 ? 'grab' : 'default'));
+    const overBlimp = !currentBuildMode && blimpHitRect && isPointInRect(mousePos, blimpHitRect);
+    let newCursor = plotsHoverPointer || overBlimp ? 'pointer' : (camera.tzoom > 1.01 ? 'grab' : 'default');
 
     // Náhled stavby
     if (currentBuildMode === 'vrt') {
@@ -4247,11 +4876,6 @@ function getNetworkPickupX(network) {
     return OilSim.getNetworkPickupX(world, network);
 }
 
-// Přidělení kamionů výkupci (−/+ na kartě, kolečko myši)
-function assignTruck(company, change) {
-    doAction({ type: 'assignTruck', company, delta: change });
-}
-
 function cancelBuildMode(clearDerrick = true) {
     currentBuildMode = null;
     if (clearDerrick) selectedDerrickPlotId = null;
@@ -4261,6 +4885,7 @@ function cancelBuildMode(clearDerrick = true) {
 // --- Posluchače událostí ---
 function addEventListeners() {
     document.getElementById('hud-rig')?.addEventListener('click', handleRigPanelClick);
+    document.getElementById('hud-contracts')?.addEventListener('click', handleContractsClick);
     // Pohyb myši
     canvas.addEventListener('pointermove', (event) => {
         const pos = getCanvasPosition(event);
@@ -4373,62 +4998,16 @@ function addEventListeners() {
     document.getElementById('zoom-reset').addEventListener('click', () => resetCamera());
 
     // Kolečko myši nad firmou přidává (nahoru) a ubírá (dolů) přidělená auta
-    canvas.addEventListener('wheel', handleCompanyWheel, { passive: false });
+    canvas.addEventListener('wheel', handleCanvasWheel, { passive: false });
 }
 
-const WHEEL_THRESHOLD = 90;    // jedno cvaknutí kolečka (~100) = jedno auto; trackpad se sčítá
-const WHEEL_COOLDOWN_MS = 110; // setrvačnost trackpadu nesmí přidělit půlku flotily naráz
-let wheelAccumulator = 0;
-let lastWheelStep = 0;
-
-function handleCompanyWheel(event) {
+// Kolečko myši přibližuje kolem kurzoru
+function handleCanvasWheel(event) {
     const pos = getCanvasPosition(event);
-    const company = pos.inBounds ? getCompanyZoneAt(pos) : null;
-    if (!company) {
-        // Mimo výkupce kolečko přibližuje kolem kurzoru
-        wheelAccumulator = 0;
-        if (!pos.inBounds) return;
-        event.preventDefault();
-        const unit = event.deltaMode === 1 ? 33 : (event.deltaMode === 2 ? 100 : 1);
-        zoomCameraAt(pos.px, pos.py, Math.exp(-event.deltaY * unit * 0.0015));
-        return;
-    }
+    if (!pos.inBounds) return;
     event.preventDefault(); // stránka se nesmí hýbat
-    if (isGameOver) return;
-
-    const unit = event.deltaMode === 1 ? 33 : (event.deltaMode === 2 ? 100 : 1); // řádky/stránky na pixely
-    const delta = event.deltaY * unit;
-    if (delta === 0) return;
-
-    // Cvaknutí kolečka myši (velká delta) = vždy jedno auto, i při rychlém protočení.
-    // Drobné delty trackpadu se sčítají a mají cooldown, ať setrvačnost nepřidělí půlku flotily.
-    if (Math.abs(delta) >= WHEEL_THRESHOLD) {
-        wheelAccumulator = 0;
-        // Jedna událost může nést víc cvaknutí (zrychlené kolečko): ~100 na cvaknutí
-        const notches = Math.max(1, Math.round(Math.abs(delta) / 100));
-        for (let i = 0; i < notches; i++) assignTruck(company, delta < 0 ? 1 : -1); // nahoru = přidat auto
-        return;
-    }
-
-    wheelAccumulator = Math.max(-WHEEL_THRESHOLD * 2, Math.min(WHEEL_THRESHOLD * 2, wheelAccumulator + delta));
-    const now = performance.now();
-    if (Math.abs(wheelAccumulator) >= WHEEL_THRESHOLD && now - lastWheelStep >= WHEEL_COOLDOWN_MS) {
-        assignTruck(company, wheelAccumulator < 0 ? 1 : -1);
-        wheelAccumulator = 0;
-        lastWheelStep = now;
-    }
-}
-
-// Zóna firmy pro kolečko: budova a sloupec se šipkami nad ní (od horní lišty po zem)
-const COMPANY_ZONE_WIDTH = 100;
-const COMPANY_ZONE_TOP = 30;
-
-function getCompanyZoneAt(point) {
-    const groundLevel = getGroundLevel();
-    if (point.y < COMPANY_ZONE_TOP || point.y > groundLevel) return null;
-    if (point.x <= COMPANY_ZONE_WIDTH) return 'left';
-    if (point.x >= canvas.width - COMPANY_ZONE_WIDTH) return 'right';
-    return null;
+    const unit = event.deltaMode === 1 ? 33 : (event.deltaMode === 2 ? 100 : 1);
+    zoomCameraAt(pos.px, pos.py, Math.exp(-event.deltaY * unit * 0.0015));
 }
 
 function getRestartButtonRect() {
@@ -4465,10 +5044,11 @@ function handleCanvasClick(event) {
 
     updatePlotSignHitboxes(groundLevel);
 
-    if (isPointNearRect(clickPos, companyControls.leftUp)) { assignTruck('left', 1); return; }
-    if (isPointNearRect(clickPos, companyControls.leftDown)) { assignTruck('left', -1); return; }
-    if (isPointNearRect(clickPos, companyControls.rightUp)) { assignTruck('right', 1); return; }
-    if (isPointNearRect(clickPos, companyControls.rightDown)) { assignTruck('right', -1); return; }
+    // Reklamní vzducholoď: klik otevře inzerovaný web
+    if (!currentBuildMode && blimpHitRect && isPointInRect(clickPos, blimpHitRect)) {
+        openAdLink();
+        return;
+    }
 
     // Nákup pozemku — cedule i celý sloupec nad zemí (mimo aktivní režim krtka)
     if (currentBuildMode !== 'seismic' && currentBuildMode !== 'radar') {
