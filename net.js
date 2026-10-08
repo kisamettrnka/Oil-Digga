@@ -498,7 +498,10 @@ const Net = (() => {
                     : r.p.status === 'finished' ? 'v cíli'
                         : `${r.day}. ${monthNames[r.month]}`;
             const winner = room.phase === 'finished' && r.p.id === room.winnerId;
-            return `<div class="race-row${r.p.id === youId ? ' you' : ''}${bankrupt ? ' out' : ''}">
+            // Sdílená mapa: barva hráče (stejná jako jeho kamiony a praporky) u jména a avataru
+            const color = playerColorFor(r.p.id);
+            const colorAttr = color ? ` style="--player-color:${color}"` : '';
+            return `<div class="race-row${r.p.id === youId ? ' you' : ''}${bankrupt ? ' out' : ''}${color ? ' colored' : ''}"${colorAttr}>
                 <span class="rank">${winner ? '🏆' : `${i + 1}.`}</span>${avatarHtml(r.p)}
                 <span class="race-name">${escapeHtml(r.p.name)}</span>
                 <span class="race-money">${formatMoney(r.money)}</span>
@@ -507,6 +510,12 @@ const Net = (() => {
             </div>`;
         }).join('');
         bindAvatarFallbacks(el);
+    }
+
+    function playerColorFor(id) {
+        if (!raceMode?.shared || typeof world === 'undefined' || !world) return null;
+        const color = world.players[id]?.color;
+        return /^#[0-9a-f]{6}$/i.test(color || '') ? color : null;
     }
 
     // Vlastní řádek žebříčku se obnovuje i mezi zprávami serveru

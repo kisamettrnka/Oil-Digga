@@ -855,3 +855,16 @@ button:disabled {
     height: 100%;
     background: linear-gradient(90deg, #ff8a3a, var(--hud-gold));
 }
+
+/* Sdílená mapa: barva hráče v žebříčku a výsledcích */
+.race-row.colored {
+    box-shadow: inset 3px 0 0 var(--player-color);
+}
+.race-row.colored .race-name {
+    color: var(--player-color);
+    font-weight: 700;
+}
+.race-row.colored .avatar {
+    border-color: var(--player-color);
+    box-shadow: 0 0 0 1.5px var(--player-color);
+}
