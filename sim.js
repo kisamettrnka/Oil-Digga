@@ -75,6 +75,29 @@
 
     const PLAYER_COLORS = ['#ffb45a', '#6ec6ff', '#7ee08a', '#ff7aa8'];
 
+    // --- Mimořádné zprávy ---
+    // Události ze světa na pár dní mění trh (násobí výkupní cenu, zavírají výkupce) nebo pravidla.
+    // left = Rafinerie, right = Nádraží. Spouští se při přechodu dne; náhoda je odvozená ze seedu
+    // a pořadí dne, takže v závodě mají všichni stejné zprávy ve stejný den.
+    const NEWS = [
+        { key: 'tariffs', title: 'Trump uvalil cla na dovoz ropy', desc: 'Domácí ropa je žádanější: rafinerie přidává, export vázne.', days: 6, effects: { left: 1.35, right: 0.9 } },
+        { key: 'hormuz', title: 'Írán uzavřel Hormuzský průliv', desc: 'Svět se bojí nedostatku ropy, ceny letí vzhůru.', days: 5, effects: { left: 1.6, right: 1.6 } },
+        { key: 'opec_cut', title: 'OPEC+ škrtá těžbu', desc: 'Méně ropy na trhu, oba výkupci přidávají.', days: 8, effects: { left: 1.25, right: 1.25 } },
+        { key: 'opec_flood', title: 'OPEC zaplavil trh levnou ropou', desc: 'Cenová válka: výkupci srážejí ceny.', days: 7, effects: { left: 0.7, right: 0.7 } },
+        { key: 'rail_strike', title: 'Stávka železničářů', desc: 'Nádraží nevykupuje, kamiony jezdí do rafinerie.', days: 3, effects: { rightClosed: true } },
+        { key: 'refinery_fire', title: 'Požár v rafinerii Černé zlato', desc: 'Rafinerie stojí, výkup jen na nádraží.', days: 3, effects: { leftClosed: true, right: 1.15 } },
+        { key: 'sanctions', title: 'Sankce na ruskou ropu', desc: 'Evropa shání ropu jinde: export přes nádraží vynáší.', days: 6, effects: { right: 1.4 } },
+        { key: 'recession', title: 'Recese: lidé méně jezdí autem', desc: 'Poptávka padá u obou výkupců.', days: 10, effects: { left: 0.8, right: 0.8 } },
+        { key: 'hurricane', title: 'Hurikán zavřel plošiny v Mexickém zálivu', desc: 'Konkurence stojí, ropa z pouště je zlatá.', days: 4, effects: { left: 1.3, right: 1.3 } },
+        { key: 'eco_law', title: 'Nový ekologický zákon', desc: 'Pokuty za erupce se zdvojnásobují.', days: 10, effects: { fineMult: 2 } },
+        { key: 'tax_break', title: 'Daňové prázdniny pro těžaře', desc: 'Stát odpustil daň z pozemků.', days: 5, effects: { taxMult: 0 } },
+        { key: 'driver_shortage', title: 'Řidiči odešli na zlatou horečku', desc: 'Chybí šoféři, kamiony jezdí pomaleji.', days: 5, effects: { truckSpeed: 0.7 } }
+    ];
+    const NEWS_FIRST_DAY = 5;            // první zpráva kolem pátého dne
+    const NEWS_GAP_MIN = 6;              // pak každých 6–11 dní
+    const NEWS_GAP_RANGE = 6;
+    const MAX_ACTIVE_NEWS = 2;
+
     function seededRandom(seed) {
         let s = seed >>> 0;
         return () => {
@@ -101,11 +124,13 @@
             players: {},
             playerOrder: [],
             market: {
-                left: { price: 1, trend: 0, history: [1] },
-                right: { price: 1, trend: 0, history: [1] },
+                // price = základní cena (náhodná procházka), quote = cena po vlivu zpráv, closed = nevykupuje
+                left: { price: 1, quote: 1, mult: 1, closed: false, trend: 0, history: [1] },
+                right: { price: 1, quote: 1, mult: 1, closed: false, trend: 0, history: [1] },
                 timer: 0
             },
-            time: { day: 1, month: 1, dayTimer: 0, started: false },
+            time: { day: 1, month: 1, dayTimer: 0, started: false, dayIndex: 0 },
+            news: { active: [], nextInDays: NEWS_FIRST_DAY },
             tools: { clock: 0, waves: [], pulses: [], drones: [] },
             nextNetworkId: 0,
             nextTruckId: 0,
@@ -184,8 +209,56 @@
 
     function getLandTax(world) {
         const base = getRules(world).landTax;
-        return world.race && world.race.mode === 'survival'
+        const tax = world.race && world.race.mode === 'survival'
             ? base + C.SURVIVAL_TAX_STEP * (world.time.month - 1) : base;
+        return Math.round(tax * newsEffect(world, 'taxMult'));
+    }
+
+    // Součin násobitelů daného efektu ze všech běžících zpráv (1 = beze změny)
+    function newsEffect(world, name) {
+        return (world.news?.active || []).reduce((mult, n) => mult * (n.effects[name] ?? 1), 1);
+    }
+
+    function newsFlag(world, name) {
+        return (world.news?.active || []).some(n => n.effects[name]);
+    }
+
+    // Přepočte výkupní ceny po vlivu zpráv (price -> quote) a zavřené výkupce
+    function updateQuotes(world) {
+        const m = world.market;
+        ['left', 'right'].forEach(side => {
+            m[side].mult = newsEffect(world, side);
+            m[side].closed = newsFlag(world, side + 'Closed');
+            m[side].quote = Math.max(0.1, Math.min(5, m[side].price * m[side].mult));
+        });
+    }
+
+    function getBlowoutFine(world) {
+        return Math.round(getRules(world).blowoutFine * newsEffect(world, 'fineMult'));
+    }
+
+    // Náhoda pro zprávy podle seedu a pořadí dne (nezávisí na délce snímků klienta)
+    function dayRandom(world) {
+        if (world.seed == null) return Math.random;
+        return seededRandom((world.seed ^ Math.imul(world.time.dayIndex + 1, 0x9E3779B1)) >>> 0);
+    }
+
+    function stepNews(world) {
+        const news = world.news;
+        news.active.forEach(n => { n.daysLeft--; });
+        news.active.filter(n => n.daysLeft <= 0).forEach(n => emit(world, { type: 'news_end', key: n.key, title: n.title }));
+        news.active = news.active.filter(n => n.daysLeft > 0);
+        news.nextInDays--;
+        if (news.nextInDays <= 0 && news.active.length < MAX_ACTIVE_NEWS) {
+            const rand = dayRandom(world);
+            const pool = NEWS.filter(n => !news.active.some(a => a.key === n.key) && n.key !== news.lastKey);
+            const pick = pool[Math.floor(rand() * pool.length)];
+            news.active.push({ key: pick.key, title: pick.title, desc: pick.desc, days: pick.days, daysLeft: pick.days, effects: pick.effects });
+            news.lastKey = pick.key;
+            news.nextInDays = NEWS_GAP_MIN + Math.floor(rand() * NEWS_GAP_RANGE);
+            emit(world, { type: 'news', key: pick.key, title: pick.title, desc: pick.desc, days: pick.days, effects: pick.effects });
+        }
+        updateQuotes(world);
     }
 
     function getPlot(world, id) {
@@ -470,6 +543,8 @@
         if (time.dayTimer < C.MS_PER_DAY) return;
         time.dayTimer -= C.MS_PER_DAY;
         time.day++;
+        time.dayIndex++;
+        stepNews(world);
         const landTax = getLandTax(world);
         world.playerOrder.forEach(id => {
             const player = world.players[id];
@@ -531,8 +606,9 @@
         m.right.price = Math.max(0.25, Math.min(2.80, m.right.price + rightDelta));
         m.left.trend = Math.max(-1, Math.min(1, m.left.trend + (rnd() - 0.5) * 0.4));
         m.right.trend = Math.max(-1, Math.min(1, m.right.trend + (rnd() - 0.5) * 0.4));
+        updateQuotes(world);
         ['left', 'right'].forEach(side => {
-            m[side].history.push(m[side].price);
+            m[side].history.push(m[side].quote);
             if (m[side].history.length > C.PRICE_HISTORY_LEN) m[side].history.shift();
         });
     }
@@ -588,8 +664,9 @@
             if (network.pressure >= 1) {
                 network.blowout = C.BLOWOUT_MS;
                 const player = world.players[network.owner];
-                if (player) player.money -= rules.blowoutFine;
-                emit(world, { type: 'blowout', playerId: network.owner, plotId: network.derrickId, fine: rules.blowoutFine });
+                const fine = getBlowoutFine(world);
+                if (player) player.money -= fine;
+                emit(world, { type: 'blowout', playerId: network.owner, plotId: network.derrickId, fine });
             }
         });
         world.plots.forEach(plot => {
@@ -620,14 +697,16 @@
     // Firma pro kamion: nejdřív přidělené sloty vlastníka, zbytek jede k lepší ceně
     function chooseCompanyFor(world, truck) {
         const player = world.players[truck.owner];
+        const m = world.market;
+        // Zavřený výkupce (stávka, požár): všechno jede k druhému
+        if (m.left.closed !== m.right.closed) return m.left.closed ? 'right' : 'left';
         const others = world.trucks.filter(t => t !== truck && t.owner === truck.owner && t.state !== 'idle');
         const activeLeft = others.filter(t => t.targetCompany === 'left').length;
         const activeRight = others.filter(t => t.targetCompany === 'right').length;
         if (activeLeft < player.assigned.left) return 'left';
         if (activeRight < player.assigned.right) return 'right';
-        const m = world.market;
-        if (m.left.price > m.right.price + 0.05) return 'left';
-        if (m.right.price > m.left.price + 0.05) return 'right';
+        if (m.left.quote > m.right.quote + 0.05) return 'left';
+        if (m.right.quote > m.left.quote + 0.05) return 'right';
         if (player.assigned.left > player.assigned.right) return 'left';
         if (player.assigned.right > player.assigned.left) return 'right';
         return truck.id % 2 ? 'left' : 'right';
@@ -693,8 +772,8 @@
     }
 
     function sellLoad(world, truck, targetX) {
-        const quote = world.market[truck.targetCompany];
-        const sale = truck.oil * quote.price;
+        const buyer = world.market[truck.targetCompany];
+        const sale = truck.oil * buyer.quote;
         const player = world.players[truck.owner];
         if (player) {
             player.money += sale;
@@ -703,12 +782,15 @@
         }
         emit(world, { type: 'sale', playerId: truck.owner, amount: Math.round(sale), x: targetX, company: truck.targetCompany });
         // Sdílená mapa: každá dodávka sráží cenu, výkupci jsou zahlcení
-        if (world.shared) quote.price = Math.max(0.25, quote.price - C.SHARED_SALE_PRICE_DROP * truck.oil / C.TRUCK_CAPACITY);
+        if (world.shared) {
+            buyer.price = Math.max(0.25, buyer.price - C.SHARED_SALE_PRICE_DROP * truck.oil / C.TRUCK_CAPACITY);
+            updateQuotes(world);
+        }
         truck.oil = 0;
     }
 
     function stepTrucks(world, dt) {
-        const speed = C.TRUCK_SPEED * (dt / 1000);
+        const speed = C.TRUCK_SPEED * newsEffect(world, 'truckSpeed') * (dt / 1000);
         world.trucks.filter(t => t.state === 'idle').forEach(truck => dispatchIdleTruck(world, truck));
 
         world.trucks.forEach(truck => {
@@ -753,6 +835,12 @@
                     break;
                 }
                 case 'to_company': {
+                    // Výkupce zavřel cestou: otočit k druhému, jsou-li zavření oba, počkat
+                    if (world.market[truck.targetCompany].closed) {
+                        const other = truck.targetCompany === 'left' ? 'right' : 'left';
+                        if (world.market[other].closed) break;
+                        truck.targetCompany = other;
+                    }
                     const targetX = truck.targetCompany === 'left' ? 50 : C.WORLD_W - 50;
                     if (moveTruckToward(truck, targetX, trafficLimitedStep(world, truck, targetX, speed))) {
                         sellLoad(world, truck, targetX);
@@ -809,9 +897,9 @@
     }
 
     return {
-        C, RULES, PLAYER_COLORS,
+        C, RULES, PLAYER_COLORS, NEWS,
         seededRandom, createWorld, act, step, serialize,
-        getRules, getLandTax, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
+        getRules, getLandTax, getBlowoutFine, newsEffect, getPlot, getNetworkForPlot, getNetworkPickupX, canVentRig, getPocketRichness,
         isPointInPolygon, isSegmentIntersectingPolygon, distanceToPocket, endPlayer, endAll
     };
 });

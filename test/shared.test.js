@@ -117,6 +117,26 @@ const last = (w, type) => [...w.inbox].reverse().find(m => m.type === type);
         room.backToLobby();
     });
 
+    await t('shared game: world news reach every player via snapshot events', async () => {
+        const room = new Room('s7');
+        const a = fakeWs('a'), b = fakeWs('b');
+        room.join({ id: 'a', name: 'A' }, a);
+        room.join({ id: 'b', name: 'B' }, b);
+        room.handle('a', { type: 'settings', kind: 'shared' });
+        room.handle('a', { type: 'start' });
+        const w = room.shared.world;
+        w.time.started = true;
+        w.news.nextInDays = 1;
+        w.time.dayTimer = C.MS_PER_DAY - 10;
+        await wait(300);
+        [a, b].forEach(ws => {
+            const news = ws.inbox.filter(m => m.type === 'snapshot').flatMap(m => m.events).filter(e => e.type === 'news');
+            assert.strictEqual(news.length, 1, 'one news event per player');
+        });
+        assert.strictEqual(last(b, 'snapshot').world.news.active.length, 1);
+        room.backToLobby();
+    });
+
     console.log(out.join('\n'));
     process.exit(out.some(l => l.startsWith('FAIL')) ? 1 : 0);
 })();

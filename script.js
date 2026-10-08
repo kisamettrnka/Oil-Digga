@@ -27,6 +27,7 @@ const RACE_RULES = OilSim.RULES.race;
 const ECHO_FADE_MS = 1500;
 const DRONE_Y_OFFSET = 205;   // výška letu dronu nad přední hranou desky (jen kresba)
 
+let buyerNews = { left: { mult: 1, closed: false }, right: { mult: 1, closed: false } };
 let world = null;        // aktuální svět; na sdílené mapě kopie ze serveru, mezi zprávami se dopočítává
 let myId = 'player';     // za kterého hráče se hraje (sólo 'player', v síti id hráče)
 let sharedMode = false;  // sdílená mapa: akce jdou na server (net.js), svět chodí ze serveru
@@ -196,6 +197,7 @@ function resetLocalUi() {
     eventLog = [];
     renderEventLog();
     document.getElementById('hud-toasts').innerHTML = '';
+    document.getElementById('news-flash')?.classList.add('hidden');
 }
 
 // Zrcadlí svět do globálních proměnných, které čte kreslení a HUD
@@ -216,8 +218,11 @@ function syncFromWorld() {
     isGameOver = me.over;
     gameOverReason = me.reason || '';
     const m = world.market;
-    leftIncPrice = m.left.price;
-    rightIncPrice = m.right.price;
+    // Výkupní cena po vlivu mimořádných zpráv; zavřený výkupce nevykupuje
+    leftIncPrice = m.left.quote ?? m.left.price;
+    rightIncPrice = m.right.quote ?? m.right.price;
+    buyerNews.left = { mult: m.left.mult ?? 1, closed: !!m.left.closed };
+    buyerNews.right = { mult: m.right.mult ?? 1, closed: !!m.right.closed };
     leftPriceTrend = m.left.trend;
     rightPriceTrend = m.right.trend;
     leftPriceHistory = m.left.history;
@@ -390,6 +395,12 @@ function handleWorldEvents(events) {
                 break;
             case 'month':
                 logEvent(`Začíná ${MONTH_FULL_NAMES[e.month]}.`);
+                break;
+            case 'news':
+                showBreakingNews(e);
+                break;
+            case 'news_end':
+                logEvent(`Konec: ${e.title}.`);
                 break;
             case 'player_over':
                 if (!mine && e.reason === 'bankrupt') {
@@ -1018,6 +1029,7 @@ function updateUI() {
     document.getElementById('date-dial').style.setProperty('--year', Math.min(1, (daysBefore + day - 1) / totalDays).toFixed(4));
 
     renderGoals();
+    renderActiveNews();
 
     // Tlačítka
     const buttons = [
@@ -1097,6 +1109,58 @@ function renderGoals() {
     if (html !== lastGoalsHtml) {
         document.getElementById('hud-goals').innerHTML = html;
         lastGoalsHtml = html;
+    }
+}
+
+// --- Mimořádné zprávy ---
+const NEWS_FLASH_MS = 8000;
+let newsFlashTimer = null;
+let lastNewsHtml = '';
+
+// Dopad zprávy čitelně: "Rafinerie +35 %, Nádraží zavřené, daň 0"
+function describeNewsEffects(effects) {
+    const parts = [];
+    const pct = mult => `${mult >= 1 ? '+' : '−'}${Math.round(Math.abs(mult - 1) * 100)} %`;
+    if (effects.leftClosed) parts.push('Rafinerie zavřená');
+    else if (effects.left && effects.left !== 1) parts.push(`Rafinerie ${pct(effects.left)}`);
+    if (effects.rightClosed) parts.push('Nádraží zavřené');
+    else if (effects.right && effects.right !== 1) parts.push(`Nádraží ${pct(effects.right)}`);
+    if (effects.taxMult !== undefined) parts.push(effects.taxMult === 0 ? 'daň z pozemků 0' : `daň ×${effects.taxMult}`);
+    if (effects.fineMult) parts.push(`pokuty za erupce ×${effects.fineMult}`);
+    if (effects.truckSpeed) parts.push(`kamiony ${pct(effects.truckSpeed)}`);
+    return parts;
+}
+
+function daysText(n) {
+    return `${n} ${n === 1 ? 'den' : (n < 5 ? 'dny' : 'dní')}`;
+}
+
+// Velký pruh "Mimořádné zprávy" se znělkou, po chvíli zmizí (zpráva zůstane v seznamu běžících)
+function showBreakingNews(e) {
+    const box = document.getElementById('news-flash');
+    if (!box) return;
+    box.innerHTML = '<div class="news-tag">Mimořádné zprávy</div><div class="news-title"></div><div class="news-desc"></div><div class="news-effects"></div>';
+    box.querySelector('.news-title').textContent = e.title;
+    box.querySelector('.news-desc').textContent = e.desc;
+    box.querySelector('.news-effects').textContent = `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
+    box.classList.remove('hidden', 'leaving');
+    void box.offsetWidth; // restart animace, když přijde další zpráva hned po předchozí
+    box.classList.add('show');
+    clearTimeout(newsFlashTimer);
+    newsFlashTimer = setTimeout(() => box.classList.add('leaving'), NEWS_FLASH_MS);
+    playSound('news');
+    logEvent(`📰 ${e.title}`);
+}
+
+// Seznam běžících zpráv pod horní lištou
+function renderActiveNews() {
+    const active = world?.news?.active || [];
+    const esc = text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const html = active.map(n => `<div class="news-chip" title="${esc(n.desc)}">📰 <b>${esc(n.title)}</b>` +
+        `<span>${esc(describeNewsEffects(n.effects).join(' · '))} · ${daysText(n.daysLeft)}</span></div>`).join('');
+    if (html !== lastNewsHtml) {
+        document.getElementById('hud-news').innerHTML = html;
+        lastNewsHtml = html;
     }
 }
 
@@ -2938,9 +3002,31 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
     ctx.fillStyle = trend >= 0 ? '#6ee39a' : '#ff7a6a';
     ctx.font = '10px sans-serif';
     ctx.fillText(trend >= 0 ? '▲' : '▼', x + 12 + priceWidth, y + 54);
-    ctx.fillStyle = 'rgba(220, 220, 235, 0.5)';
-    ctx.font = '600 7.5px system-ui, sans-serif';
-    ctx.fillText('ZA BAREL', x + 9, y + 64);
+    // Vliv mimořádných zpráv: ZAVŘENO, nebo o kolik zprávy cenu mění
+    const effect = buyerNews[side];
+    if (effect.closed || Math.abs(effect.mult - 1) > 0.001) {
+        const label = effect.closed ? 'ZAVŘENO' : `ZPRÁVY ${effect.mult > 1 ? '+' : '−'}${Math.round(Math.abs(effect.mult - 1) * 100)} %`;
+        const good = !effect.closed && effect.mult > 1;
+        ctx.font = '800 7.5px system-ui, sans-serif';
+        const lw = ctx.measureText(label).width + 8;
+        pathRoundRect(x + 7, y + 57, lw, 11, 5);
+        ctx.fillStyle = good ? 'rgba(110, 227, 154, 0.22)' : 'rgba(255, 110, 90, 0.25)';
+        ctx.fill();
+        ctx.fillStyle = good ? '#6ee39a' : '#ff8a70';
+        ctx.fillText(label, x + 11, y + 65.5);
+    } else {
+        ctx.fillStyle = 'rgba(220, 220, 235, 0.5)';
+        ctx.font = '600 7.5px system-ui, sans-serif';
+        ctx.fillText('ZA BAREL', x + 9, y + 64);
+    }
+    if (effect.closed) { // přeškrtnutá cena
+        ctx.strokeStyle = 'rgba(255, 110, 90, 0.85)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x + 6, y + 49);
+        ctx.lineTo(x + 12 + priceWidth, y + 49);
+        ctx.stroke();
+    }
 
     drawPriceChart(history, x + 8, y + 70, w - 16, 16);
 
@@ -3364,6 +3450,11 @@ const SOUNDS = {
         playThump(ac, out, at, 240, 110, 0.09, 0.3);
         playNoise(ac, out, at, { duration: 0.05, volume: 0.18, type: 'lowpass', freq: 1400 });
         playThump(ac, out, at + 0.1, 200, 95, 0.08, 0.22);
+    },
+    news(ac, out, at) { // znělka zpráv: tři stoupající tóny a úder
+        playThump(ac, out, at, 140, 70, 0.25, 0.3);
+        [784, 1047, 1319].forEach((f, i) => playBell(ac, out, at + 0.05 + i * 0.11, f, 0.09, 0.5));
+        playBell(ac, out, at + 0.45, 1568, 0.07, 0.9);
     },
     warn(ac, out, at) { // dvoutónová houkačka
         [[740, 0], [554, 0.16], [740, 0.32], [554, 0.48]].forEach(([f, d]) => {

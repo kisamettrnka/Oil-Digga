@@ -156,5 +156,55 @@ t('serialize drops functions and events, roundtrips', () => {
     for (let i = 0; i < 100; i++) Sim.step(copy, 16); // klient počítá i bez náhody trhu
 });
 
+t('news: same seed -> same headlines on the same days', () => {
+    const a = Sim.createWorld({ seed: 77, race: { months: 3, mode: 'richest' } });
+    const b = Sim.createWorld({ seed: 77, race: { months: 3, mode: 'richest' } });
+    // jiná délka snímků nesmí změnit, kdy a jaká zpráva přijde
+    a.time.started = b.time.started = true;
+    const newsA = [], newsB = [];
+    for (let i = 0; i < 40 * C.MS_PER_DAY / 16; i++) { Sim.step(a, 16); newsA.push(...a.events.splice(0).filter(e => e.type === 'news').map(e => `${a.time.dayIndex}:${e.key}`)); }
+    for (let i = 0; i < 40 * C.MS_PER_DAY / 50; i++) { Sim.step(b, 50); newsB.push(...b.events.splice(0).filter(e => e.type === 'news').map(e => `${b.time.dayIndex}:${e.key}`)); }
+    assert.ok(newsA.length >= 3, 'some news in 40 days: ' + newsA.length);
+    assert.deepStrictEqual(newsA, newsB);
+});
+
+t('news: price multiplier, closed buyer and tax break apply', () => {
+    const w = Sim.createWorld({ seed: 3 });
+    const add = key => {
+        const n = Sim.NEWS.find(x => x.key === key);
+        w.news.active.push({ ...n, daysLeft: n.days });
+    };
+    add('hormuz');
+    w.time.started = true;
+    w.time.dayTimer = C.MS_PER_DAY - 1;
+    Sim.step(w, 2); // přechod dne přepočítá ceny
+    assert.ok(Math.abs(w.market.left.quote - w.market.left.price * 1.6) < 0.01, 'hormuz +60 %');
+    w.news.active = [];
+    add('rail_strike');
+    add('tax_break');
+    w.time.dayTimer = C.MS_PER_DAY - 1;
+    Sim.step(w, 2);
+    assert.strictEqual(w.market.right.closed, true);
+    assert.strictEqual(Sim.getLandTax(w), 0);
+});
+
+t('news: trucks avoid a closed buyer and turn around', () => {
+    const w = Sim.createWorld({ seed: 7 });
+    w.players.player.money = 100000;
+    Sim.act(w, 'player', { type: 'buyPlot', plotId: 3 });
+    Sim.act(w, 'player', { type: 'buildDerrick', plotId: 3 });
+    tapNearest(w, 'player', 3);
+    Sim.act(w, 'player', { type: 'buyTruck' });
+    Sim.act(w, 'player', { type: 'assignTruck', company: 'right', delta: 1 });
+    const strike = Sim.NEWS.find(x => x.key === 'rail_strike');
+    w.news.active.push({ ...strike, daysLeft: 99 });
+    w.news.nextInDays = 999;
+    w.time.started = true;
+    for (let i = 0; i < 3000; i++) Sim.step(w, 16);
+    const sales = w.events.filter(e => e.type === 'sale');
+    assert.ok(sales.length > 0, 'sold something');
+    assert.ok(sales.every(e => e.company === 'left'), 'only the open refinery buys');
+});
+
 console.log(out.join('\n'));
 process.exit(out.some(l => l.startsWith('FAIL')) ? 1 : 0);
