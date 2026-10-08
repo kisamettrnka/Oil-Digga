@@ -779,6 +779,7 @@ button:disabled {
     margin-bottom: 0.4em;
 }
 #lobby-length,
+#lobby-kind,
 #lobby-mode,
 #lobby-target {
     display: flex;

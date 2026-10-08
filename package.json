@@ -6,7 +6,8 @@
     "build": "esbuild client/discord-sdk.js --bundle --format=iife --global-name=OilDiscordSDK --minify --target=es2020 --outfile=dist/discord-sdk.js",
     "start": "npm run build && node --env-file-if-exists=.env server/index.js",
     "dev": "npm run build && node --env-file-if-exists=.env --watch server/index.js",
-    "static": "http-server -p 3000 -c-1 -o"
+    "static": "http-server -p 3000 -c-1 -o",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [],
   "author": "",

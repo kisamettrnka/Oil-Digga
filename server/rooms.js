@@ -3,6 +3,9 @@
 // sbírá průběžné výsledky a rozesílá žebříček.
 const ROOM_IDLE_MS = 60_000;          // prázdná místnost se po minutě zahodí
 const STATE_THROTTLE_MS = 500;        // průběžné výsledky se rozesílají nejvýš 2× za sekundu
+const { SharedGame } = require('./shared');
+const { C: SIM } = require('../sim');
+
 const RACE_COUNTDOWN_MS = 4000;
 const MAX_PLAYERS = 12;
 const RACE_DAY_MS = 10000;            // = MS_PER_DAY ve script.js (závod běží na 1×)
@@ -12,7 +15,9 @@ const RACE_MONTH_OPTIONS = [1, 3, 6, 12];
 const RACE_MODES = ['richest', 'target', 'survival'];
 const TARGET_OPTIONS = [10000, 20000, 50000];
 const RACE_END_WAIT_MS = 10_000;      // po race_end čeká server na finish klientů, pak uzavře sám
-const DEFAULT_SETTINGS = { months: 3, mode: 'richest', target: 20000 };
+// Druh hry: race = každý svou kopii mapy (počítá klient), shared = jedna mapa pro všechny (počítá server)
+const GAME_KINDS = ['race', 'shared'];
+const DEFAULT_SETTINGS = { kind: 'race', months: 3, mode: 'richest', target: 20000 };
 const DAYS_IN_MONTH = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 function clampNumber(value, min, max, fallback = 0) {
@@ -51,6 +56,7 @@ class Room {
         this.settings = { ...DEFAULT_SETTINGS };
         this.winnerId = null;
         this.ending = false;
+        this.shared = null;           // SharedGame během sdílené hry
         this.emptySince = null;
         this.stateTimer = null;
     }
@@ -76,6 +82,7 @@ class Room {
         this.emptySince = null;
         if (!this.hostId || !this.players.get(this.hostId)?.connected) this.hostId = user.id;
         this.broadcastState();
+        if (this.shared) this.shared.resume(player);
         return player;
     }
 
@@ -114,7 +121,11 @@ class Room {
                 if (RACE_MONTH_OPTIONS.includes(msg.months)) this.settings.months = msg.months;
                 if (RACE_MODES.includes(msg.mode)) this.settings.mode = msg.mode;
                 if (TARGET_OPTIONS.includes(msg.target)) this.settings.target = msg.target;
+                if (GAME_KINDS.includes(msg.kind)) this.settings.kind = msg.kind;
                 break;
+            case 'action':
+                if (this.shared && player.status === 'racing' && msg.raceId === this.raceId) this.shared.act(playerId, msg.action);
+                return;
             case 'start':
                 if (isHost && this.phase === 'lobby') this.startRace();
                 return;
@@ -146,8 +157,11 @@ class Room {
     }
 
     startRace() {
-        const racers = this.connectedPlayers().filter(p => p.status === 'lobby');
+        let racers = this.connectedPlayers().filter(p => p.status === 'lobby');
         if (!racers.length) return;
+        const shared = this.settings.kind === 'shared';
+        // Sdílená mapa má 8 pozemků: hraje nejvýš MAX_SHARED_PLAYERS, ostatní počkají na další kolo
+        if (shared) racers = racers.slice(0, SIM.MAX_SHARED_PLAYERS);
         this.phase = 'playing';
         this.raceId++;
         this.seed = Math.floor(Math.random() * 2 ** 31);
@@ -161,8 +175,9 @@ class Room {
             p.status = 'racing';
             p.ready = false;
             p.progress = null;
-            send(p.ws, { type: 'race_start', raceId: this.raceId, seed: this.seed, months, mode, target, startIn: RACE_COUNTDOWN_MS });
+            if (!shared) send(p.ws, { type: 'race_start', raceId: this.raceId, seed: this.seed, months, mode, target, startIn: RACE_COUNTDOWN_MS });
         });
+        if (shared) this.shared = new SharedGame(this, racers, RACE_COUNTDOWN_MS);
         // Pojistka: po uplynutí herní délky závodu ho server ukončí, i když se klient zasekne
         const raceDays = DAYS_IN_MONTH.slice(1, months + 1).reduce((a, b) => a + b, 0);
         const raceId = this.raceId;
@@ -179,7 +194,7 @@ class Room {
     // Závod končí, když už nikdo připojený nejede (odpojení hráči závod neblokují).
     // Ve hře o víc hráčích vyhrává poslední přeživší: zbyde-li jediný, dostane race_end.
     checkRaceEnd() {
-        if (this.phase !== 'playing') return;
+        if (this.phase !== 'playing' || this.shared) return; // sdílenou hru hlídá SharedGame
         const active = this.racing();
         if (!active.length) {
             this.finishRace();
@@ -211,6 +226,10 @@ class Room {
 
     forceEnd(raceId) {
         if (this.phase !== 'playing' || this.raceId !== raceId) return;
+        if (this.shared) {
+            this.shared.endNow();
+            return;
+        }
         for (const p of this.players.values()) {
             if (p.status !== 'racing') continue;
             send(p.ws, { type: 'race_end', raceId, reason: 'timeout' });
@@ -221,6 +240,14 @@ class Room {
     }
 
     // Vítěz, pokud ho neurčil cíl nebo přežití: nejvíc peněz z těch, kdo nezkrachovali
+    // Sdílený svět skončil (všichni mimo hru): stavy hráčů už srovnal SharedGame
+    onSharedOver() {
+        if (this.phase !== 'playing') return;
+        for (const p of this.players.values()) if (p.status === 'racing') p.status = 'finished';
+        this.finishRace();
+        this.broadcastState();
+    }
+
     finishRace() {
         this.phase = 'finished';
         clearTimeout(this.raceTimer);
@@ -233,6 +260,10 @@ class Room {
     }
 
     backToLobby() {
+        if (this.shared) {
+            this.shared.stop();
+            this.shared = null;
+        }
         clearTimeout(this.raceTimer);
         this.raceTimer = null;
         this.phase = 'lobby';
@@ -305,9 +336,13 @@ class RoomRegistry {
     sweep() {
         const now = Date.now();
         for (const [id, room] of this.rooms) {
-            if (room.emptySince && now - room.emptySince > ROOM_IDLE_MS) this.rooms.delete(id);
+            if (room.emptySince && now - room.emptySince > ROOM_IDLE_MS) {
+                if (room.shared) room.shared.stop();
+                clearTimeout(room.raceTimer);
+                this.rooms.delete(id);
+            }
         }
     }
 }
 
-module.exports = { RoomRegistry, Room, sanitizeProgress, send, RACE_COUNTDOWN_MS, RACE_MONTH_OPTIONS, RACE_MODES, TARGET_OPTIONS };
+module.exports = { RoomRegistry, Room, sanitizeProgress, send, RACE_COUNTDOWN_MS, RACE_MONTH_OPTIONS, RACE_MODES, TARGET_OPTIONS, GAME_KINDS };

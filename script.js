@@ -12,8 +12,24 @@ function assetUrl(path) {
 // Závod: net.js nastaví { raceId } a restartGame(seed); rychlost je pak zamčená na 1× a pauza vypnutá,
 // aby všichni hráli stejnou mapu se stejným vývojem cen ve stejném čase
 let raceMode = null;
-let worldSeed = null;          // null = náhodný svět (sólo)
-let marketRandom = Math.random; // náhoda pro ceny výkupců; v závodě seedovaná, stejná pro všechny
+
+// Herní logika je v sim.js (OilSim): svět, akce hráčů a krok času. Tady je kreslení, ovládání a zvuk.
+// Globální proměnné níž (money, plots, trucks...) jsou jen zrcadlo světa pro kreslení a HUD,
+// plní je syncFromWorld(). Měnit stav jde jen přes doAction().
+const {
+    PLOT_COUNT, VRT_COST, SILO_COST, TRUCK_COST, PIPE_COST_PER_PIXEL, TRUCK_CAPACITY, OIL_PER_SECOND,
+    MAX_SILOS_PER_PLOT, MAX_TRUCKS, MS_PER_DAY, SURVIVAL_TAX_STEP, TRUCK_LENGTH, TRUCK_GAP_PAD,
+    VENT_MIN, PRESSURE_WARN, SEISMIC_COST, DRONE_COST, RADAR_COST, SEISMIC_RADIUS, SEISMIC_WAVE_MS,
+    RADAR_RADIUS, RADAR_PULSE_MS, DRONE_BEAM_HALF, ECHO_MS
+} = OilSim.C;
+const SOLO_RULES = OilSim.RULES.solo;
+const RACE_RULES = OilSim.RULES.race;
+const ECHO_FADE_MS = 1500;
+const DRONE_Y_OFFSET = 205;   // výška letu dronu nad přední hranou desky (jen kresba)
+
+let world = null;        // aktuální svět; na sdílené mapě kopie ze serveru, mezi zprávami se dopočítává
+let myId = 'player';     // za kterého hráče se hraje (sólo 'player', v síti id hráče)
+let sharedMode = false;  // sdílená mapa: akce jdou na server (net.js), svět chodí ze serveru
 const GROUND_RATIO = 0.44;        // povrch (přední hrana desky) ve 44 % výšky plátna
 const POCKET_BOTTOM_MARGIN = 125; // spodní pás plátna zakrývá panel nástrojů
 
@@ -24,19 +40,13 @@ function getGroundLevel() {
 let canvas = null;
 let ctx = null;
 let lastTime = 0;
-// Pravidla: v závodě (raceMode) jsou tvrdší, sólo zůstává přívětivé
-const SOLO_RULES = { startMoney: 3000, landTax: 15, pressureBuildMs: 20000, blowoutFine: 250 };
-const RACE_RULES = { startMoney: 2000, landTax: 25, pressureBuildMs: 12000, blowoutFine: 400 };
-
-const SURVIVAL_TAX_STEP = 15; // režim přežití: daň za pozemek roste každý měsíc o tolik
-
+// Pravidla (sólo / závod) a daň bere sim.js podle světa
 function getRules() {
-    return raceMode ? RACE_RULES : SOLO_RULES;
+    return world ? OilSim.getRules(world) : SOLO_RULES;
 }
 
 function getLandTax() {
-    const base = getRules().landTax;
-    return raceMode && raceMode.mode === 'survival' ? base + SURVIVAL_TAX_STEP * (month - 1) : base;
+    return world ? OilSim.getLandTax(world) : SOLO_RULES.landTax;
 }
 
 let money = SOLO_RULES.startMoney;
@@ -56,20 +66,6 @@ let lastBoughtHighlightTimer = 0;
 let lastBoughtPlotId = null;
 
 // Konstanty hry
-const PLOT_COUNT = 8;
-const VRT_COST = 350;
-const SILO_COST = 250;
-const TRUCK_COST = 150;
-const PIPE_COST_PER_PIXEL = 2;
-const TRUCK_SPEED = 150;
-const TRUCK_CAPACITY = 100;
-const PRICE_UPDATE_INTERVAL = 5000;
-const SILO_CAPACITY_BONUS = 500;
-const DERRICK_BASE_CAPACITY = 50;
-const OIL_PER_SECOND = 8;
-const MAX_SILOS_PER_PLOT = 4;
-const MIN_LOAD_AMOUNT = 25;
-const MAX_TRUCKS = 8;
 const MAX_FRAME_MS = 100; // Strop reálného času jednoho snímku (po návratu na kartu apod.)
 const CONTROL_HIT_PAD = 8; // Zvětšení klikací plochy šipek na plátně
 const DEV = false;
@@ -89,17 +85,13 @@ let trucksOwned = 0;
 let plotBlinkTimers = {};
 let trucksAssignedLeft = 0;
 let trucksAssignedRight = 0;
-let priceUpdateTimer = 0;
-let nextNetworkId = 0;
 
 // HUD: deník událostí a zisk za poslední den (jen pro zobrazení)
 const EVENT_LOG_LEN = 4;
 let eventLog = [];
-let revenueAtDayStart = 0;
 let lastDayIncome = 0;
 
 // Historie cen pro graf na budovách firem
-const PRICE_HISTORY_LEN = 24;
 let leftPriceHistory = [1.00];
 let rightPriceHistory = [1.00];
 
@@ -121,8 +113,6 @@ let month = 1;
 const daysInMonth = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const monthNames = ["", "LED", "ÚNO", "BŘE", "DUB", "KVĚ", "ČER", "ČVC", "SRP", "ZÁŘ", "ŘÍJ", "LIS", "PRO"];
 const MONTH_FULL_NAMES = ["", "leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
-const MS_PER_DAY = 10000; // Kolik reálných ms trvá jeden herní den
-let dayTimer = 0;
 
 // Hra nemá obrázky na plátně (vše je vektorové), ikony v HUD se načítají přes index.html
 function loadImages() {
@@ -157,8 +147,10 @@ function initializeGame() {
     // Plátno font Rye samo nenačte (není v DOM), proto ho vyžádáme
     if (document.fonts) document.fonts.load('18px "Rye"').catch(() => { });
 
-    // Nastavení rozměrů a generování herních prvků
-    generatePlotsAndPockets();
+    // Svět (sólo, náhodný); závod a sdílená mapa ho nahradí přes restartGame / net.js
+    plotWidth = OilSim.C.PLOT_WIDTH;
+    world = OilSim.createWorld({ players: [{ id: myId, name: 'Ty' }] });
+    syncFromWorld();
 
     // Připojení posluchačů událostí
     addEventListeners();
@@ -169,124 +161,260 @@ function initializeGame() {
     console.log("Hra čeká na koupi pozemku.");
 }
 
+// Herní čas začne běžet (sólo po koupi prvního pozemku, závod po odpočtu)
 function startGameLoop() {
-    if (!isGameStarted) {
-        isGameStarted = true;
-        lastTime = performance.now();
+    if (world && !world.time.started) {
+        world.time.started = true;
+        syncFromWorld();
         updateUI(); // Aktualizace kalendáře a UI hned po startu hry
     }
 }
 
-// Vrátí všechen herní stav do výchozího a vygeneruje nový svět
+// Vrátí všechen herní stav do výchozího a vygeneruje nový svět.
+// seed = závod (stejná mapa i ceny pro všechny); raceMode nastavuje net.js předem.
 function restartGame(seed = null) {
     if (!canvas) return;
-    worldSeed = seed;
-    money = getRules().startMoney; // net.js nastaví raceMode před restartGame(seed)
-    isGameOver = false;
-    gameOverReason = '';
-    isPaused = false;
-    gameSpeed = 1;
-    totalRevenue = 0;
-    totalOilSold = 0;
-
-    pipeNetworks = [];
-    trucks = [];
-    lastBoughtHighlightTimer = 0;
-    lastBoughtPlotId = null;
-
-    currentBuildMode = null;
-    selectedDerrickPlotId = null;
-
-    leftIncPrice = 1.00;
-    rightIncPrice = 1.00;
-    leftPriceTrend = 0;
-    rightPriceTrend = 0;
-    trucksOwned = 0;
-    plotBlinkTimers = {};
-    trucksAssignedLeft = 0;
-    trucksAssignedRight = 0;
-    priceUpdateTimer = 0;
-    nextNetworkId = 0;
-    leftPriceHistory = [1.00];
-    rightPriceHistory = [1.00];
-    particles = [];
-
-    day = 1;
-    month = 1;
-    dayTimer = 0;
-
-    eventLog = [];
-    revenueAtDayStart = 0;
-    lastDayIncome = 0;
-    renderEventLog();
-    document.getElementById('hud-toasts').innerHTML = '';
-
-    seismicWaves = [];
-    radarPulses = [];
-    drone = null;
-
-    isGameStarted = false;
-    generatePlotsAndPockets();
-    lastTime = performance.now();
+    sharedMode = false;
+    const race = raceMode ? { months: raceMode.months, mode: raceMode.mode, target: raceMode.target } : null;
+    world = OilSim.createWorld({ seed, race, players: [{ id: myId, name: 'Ty' }] });
+    resetLocalUi();
+    syncFromWorld();
     updateUI();
 }
 
-function generatePlotsAndPockets() {
-    // Se seedem (závod) vyjde všem hráčům stejná mapa i stejný vývoj cen
-    const rand = worldSeed == null ? Math.random : seededRandom(worldSeed);
-    marketRandom = worldSeed == null ? Math.random : seededRandom((worldSeed ^ 0x9E3779B9) >>> 0);
-    const buildingWidth = 100; // Šířka budovy společnosti
-    const gap = 10;
-    const sideMargin = buildingWidth + gap;
-    plotWidth = (canvas.width - 2 * sideMargin) / PLOT_COUNT;
-
-    plots = [];
-    for (let i = 0; i < PLOT_COUNT; i++) {
-        plots.push({
-            id: i,
-            x: sideMargin + i * plotWidth,
-            y: getGroundLevel(),
-            owner: null,
-            hasVrt: false,
-            siloCount: 0,
-            price: 50 + Math.floor(rand() * 451) // 50 až 500
-        });
-    }
-
-    // Generování ložisek ropy
-    oilPockets = [];
-    const groundLevel = getGroundLevel();
-    const numberOfPockets = 5 + Math.floor(rand() * 5);
-    for (let i = 0; i < numberOfPockets; i++) {
-        const pocketWidth = 80 + rand() * 170;
-        const x = rand() * (canvas.width - pocketWidth);
-        const height = 40 + rand() * 80;
-        // Celé ložisko musí být nad spodním panelem HUD, jinak by na něj nešlo kliknout
-        const minY = groundLevel + 80;
-        const maxY = canvas.height - POCKET_BOTTOM_MARGIN - height;
-        const y = minY + rand() * Math.max(0, maxY - minY);
-        const richness = 5000 + rand() * 10000;
-        let vertices = [];
-        // between 3 and 6 vertices
-        const numberOfVertices = 3 + Math.floor(rand() * 4);
-
-        for (let j = 0; j < numberOfVertices; j++) {
-            const angle = (j / numberOfVertices) * Math.PI * 2;
-            const offsetX = Math.cos(angle) * (pocketWidth / 2);
-            const offsetY = Math.sin(angle) * (height / 2);
-            vertices.push({ x: x + pocketWidth / 2 + offsetX, y: y + height / 2 + offsetY });
-        }
-        oilPockets.push({
-            x, y, width: pocketWidth, height,
-            oil: richness,
-            maxOil: richness,
-            tapped: false,   // napojeno vrtem (jedno ložisko = jeden vrt)
-            revealed: false, // odhaleno krtkem, stále vrtatelné
-            vertices: vertices
-        });
-    }
+// Stav, který patří jen tomuto klientovi (výběry, časovače, částice, deník)
+function resetLocalUi() {
+    isPaused = false;
+    gameSpeed = 1;
+    lastBoughtHighlightTimer = 0;
+    lastBoughtPlotId = null;
+    currentBuildMode = null;
+    selectedDerrickPlotId = null;
+    plotBlinkTimers = {};
+    particles = [];
+    pocketShapes.clear();
+    eventLog = [];
+    renderEventLog();
+    document.getElementById('hud-toasts').innerHTML = '';
 }
 
+// Zrcadlí svět do globálních proměnných, které čte kreslení a HUD
+function syncFromWorld() {
+    if (!world) return;
+    const me = world.players[myId] || world.players[world.playerOrder[0]];
+    plots = world.plots;
+    oilPockets = world.oilPockets;
+    pipeNetworks = world.pipeNetworks;
+    trucks = world.trucks;
+    money = me.money;
+    totalRevenue = me.revenue;
+    totalOilSold = me.sold;
+    trucksOwned = me.trucksOwned;
+    trucksAssignedLeft = me.assigned.left;
+    trucksAssignedRight = me.assigned.right;
+    lastDayIncome = me.lastDayIncome;
+    isGameOver = me.over;
+    gameOverReason = me.reason || '';
+    const m = world.market;
+    leftIncPrice = m.left.price;
+    rightIncPrice = m.right.price;
+    leftPriceTrend = m.left.trend;
+    rightPriceTrend = m.right.trend;
+    leftPriceHistory = m.left.history;
+    rightPriceHistory = m.right.history;
+    day = world.time.day;
+    month = world.time.month;
+    isGameStarted = world.time.started;
+    toolClock = world.tools.clock;
+    seismicWaves = world.tools.waves;
+    radarPulses = world.tools.pulses;
+    drones = world.tools.drones;
+    // Pohled tohoto hráče: odhalení georadarem a ozvěny jsou soukromé
+    oilPockets.forEach(pocket => {
+        pocket.tapped = pocket.tappedBy.length > 0;
+        pocket.revealed = pocket.revealedBy.includes(myId);
+        pocket.echoUntil = pocket.echo[myId] || 0;
+    });
+    pipeNetworks.forEach(network => {
+        network.connectedPocket = oilPockets[network.pocket] || null;
+    });
+}
+
+function isMine(thing) {
+    return !!thing && thing.owner === myId;
+}
+
+function playerColor(id) {
+    return world?.players[id]?.color || '#ffb45a';
+}
+
+// Jediná cesta ke změně stavu: lokálně hned přes sim.js, na sdílené mapě po síti na server
+function doAction(action) {
+    if (!world) return { ok: false };
+    if (sharedMode) {
+        if (typeof Net !== 'undefined') Net.sendAction(action);
+        return { ok: true, pending: true };
+    }
+    const result = OilSim.act(world, myId, action);
+    // Sólo: herní čas se rozběhne první koupí pozemku
+    if (result.ok && action.type === 'buyPlot' && !raceMode) startGameLoop();
+    handleWorldEvents(world.events.splice(0));
+    syncFromWorld();
+    updateUI();
+    return result;
+}
+
+// Sdílená mapa: svět přišel ze serveru (začátek hry nebo návrat po výpadku spojení)
+function startSharedWorld(snapshot, playerId) {
+    if (!canvas) return;
+    myId = playerId;
+    sharedMode = true;
+    world = snapshot;
+    world.events = [];
+    resetLocalUi();
+    syncFromWorld();
+    updateUI();
+}
+
+// Další stav ze serveru nahradí dopočítaný svět; události ze serveru = zvuky a oznámení
+function applySharedSnapshot(snapshot, events) {
+    if (!sharedMode) return;
+    world = snapshot;
+    world.events = [];
+    handleWorldEvents(events || []);
+    syncFromWorld();
+}
+
+// Konec sdílené hry / závodu: zpátky na vlastního lokálního hráče
+function leaveSharedWorld() {
+    sharedMode = false;
+    myId = 'player';
+}
+
+// Ukončí hru tomuto hráči (net.js: konec závodu od serveru)
+function endLocalGame(reason) {
+    if (!world || sharedMode) return;
+    OilSim.endPlayer(world, world.players[myId], reason);
+    world.events.splice(0);
+    syncFromWorld();
+}
+
+// Události ze světa: zvuky, oznámení, částice. Na sdílené mapě chodí od serveru.
+function handleWorldEvents(events) {
+    const groundLevel = getGroundLevel();
+    events.forEach(e => {
+        const mine = !e.playerId || e.playerId === myId;
+        switch (e.type) {
+            case 'plot_bought':
+                if (!mine) break;
+                playSound('build');
+                lastBoughtPlotId = e.plotId;
+                lastBoughtHighlightTimer = 30;
+                notify('Pozemek koupen', `Pozemek ${e.plotId + 1} za $${e.price}`, 'cool', '🚩');
+                break;
+            case 'derrick_built':
+                if (!mine) break;
+                playSound('build');
+                notify('Vrt postaven', 'Klikni do podzemí a veď potrubí k ložisku', 'cool', '🏗️');
+                selectedDerrickPlotId = e.plotId;
+                cancelBuildMode(false);
+                break;
+            case 'silo_built':
+                if (!mine) break;
+                playSound('build');
+                logEvent(`Silo postaveno na pozemku ${e.plotId + 1}.`);
+                cancelBuildMode();
+                break;
+            case 'truck_bought':
+                if (mine) logEvent(`Koupen kamion (${e.count}/${MAX_TRUCKS}).`);
+                break;
+            case 'strike': {
+                // Oslava: z věže vystřelí ohňostroj (vidí ho všichni)
+                const rigTop = groundLevel - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT;
+                for (let i = 0; i < 3; i++) launchFirework(e.x + (i - 1) * 14, rigTop, FIREWORK_COLORS[i]);
+                if (!mine) break;
+                playSound('strike');
+                notify('Ropa navrtána!', `Ložisko s ${e.oil.toLocaleString('cs-CZ')} barely`, 'good', '🔥');
+                if (selectedDerrickPlotId === e.plotId) selectedDerrickPlotId = null;
+                break;
+            }
+            case 'vent':
+                if (!mine) break;
+                playSound('vent');
+                logEvent(`Ventil odpuštěn na pozemku ${e.plotId + 1}.`);
+                break;
+            case 'warn':
+                if (!mine) break;
+                playSound('warn');
+                notify('Přetlak na vrtu!', `Pozemek ${e.plotId + 1}: odvez ropu, nebo klikni na vrt a odpusť ventil`, 'bad', '⚠️');
+                break;
+            case 'blowout':
+                if (!mine) break;
+                shakeCamera(12);
+                playSound('gush');
+                notify('Erupce ropy!', `Vrt na pozemku ${e.plotId + 1}: únik a pokuta $${e.fine}`, 'bad', '🌋');
+                break;
+            case 'exhausted':
+                if (mine) notify('Ložisko vyčerpáno', `Vrt na pozemku ${e.plotId + 1} přestal čerpat`, 'bad', '🛢️');
+                break;
+            case 'sale':
+                spawnParticle({
+                    type: 'text', text: `+$${e.amount}`, x: e.x, y: groundLevel - 50, vx: 0, vy: -42,
+                    age: 0, life: 1400, color: mine ? null : playerColor(e.playerId)
+                });
+                if (mine) playSound('sale');
+                break;
+            case 'seismic':
+                for (let i = 0; i < 14; i++) {
+                    spawnParticle({
+                        type: 'puff', x: e.x + (Math.random() - 0.5) * 30, y: groundLevel - STRUCTURE_BASE_OFFSET + 10,
+                        vx: (Math.random() - 0.5) * 80, vy: -30 - Math.random() * 60,
+                        age: 0, life: 1400, size: 4 + Math.random() * 4, shade: 110
+                    });
+                }
+                if (!mine) break;
+                shakeCamera(9);
+                playSound('boom');
+                logEvent(`Seismický průzkum na pozemku ${e.plotId + 1}.`);
+                cancelBuildMode();
+                break;
+            case 'drone':
+                if (mine) logEvent('Průzkumný dron vzlétl.');
+                break;
+            case 'radar':
+                if (!mine) break;
+                playSound(e.found ? 'strike' : 'build');
+                if (e.found) notify('Georadar našel ropu', `${e.found}× ložisko odhaleno`, 'cool', '📡');
+                else logEvent('Georadar: v okolí nic.');
+                cancelBuildMode();
+                break;
+            case 'month':
+                logEvent(`Začíná ${MONTH_FULL_NAMES[e.month]}.`);
+                break;
+            case 'player_over':
+                if (!mine && e.reason === 'bankrupt') {
+                    notify('Soupeř zkrachoval', `${world.players[e.playerId]?.name || 'Hráč'} je mimo hru`, 'cool', '💀');
+                }
+                break;
+        }
+    });
+}
+
+// Vizuální efekty ze stavu světa (kouř, pára, gejzír); nemění hru
+function emitClientEffects(dt) {
+    trucks.forEach(truck => {
+        if (truck.state === 'to_rig' || truck.state === 'to_company') emitTruckSmoke(truck, dt);
+    });
+    emitDerrickSmoke(dt);
+    pipeNetworks.forEach(network => {
+        const x = getNetworkPickupX(network);
+        if (network.blowout > 0) emitGusher(network, x, dt);
+        else {
+            if (network.vent > 0) emitSteam(x, dt, 1);
+            if (network.pressure > 0.45) emitSteam(x, dt, (network.pressure - 0.45) * 0.4); // syčící ventily
+        }
+    });
+}
 
 // --- Život ve scéně: lidé, auta, letadla, ohňostroje ---
 // Kulisy, které nehrají: poloha je většinou funkcí času ambientClock (s), stav mají jen
@@ -758,113 +886,28 @@ function gameLoop(timestamp) {
     const frameMs = Math.min(timestamp - (lastFrameTime || timestamp), MAX_FRAME_MS);
     lastFrameTime = timestamp;
     updateCamera(frameMs);
-    if (!isPaused && !isGameOver) {
-        updateToolEffects(frameMs * gameSpeed);
-        updateAmbient(frameMs);
+    if (!isPaused) {
+        if (!isGameOver) updateAmbient(frameMs);
+        // Strop snímku (MAX_FRAME_MS): po návratu na kartu nebo při lagu nesmí přijít obří dt
+        if (frameMs > 0) update(frameMs * (sharedMode ? 1 : gameSpeed));
     }
 
-    if (isGameOver) {
-        drawGameOver();
-        requestAnimationFrame(gameLoop);
-        return;
-    }
-
-    if (isGameStarted && !isPaused) {
-        // Strop snímku: po návratu na kartu nebo při lagu nesmí přijít obří dt
-        const dt = Math.min(timestamp - lastTime, MAX_FRAME_MS) * gameSpeed;
-        lastTime = timestamp;
-        if (dt > 0) update(dt);
-    } else {
-        lastTime = timestamp;
-    }
-
-    draw();
+    if (isGameOver) drawGameOver();
+    else draw();
     requestAnimationFrame(gameLoop);
 }
 
+// Krok světa o dt ms (z konzole: isPaused = true; update(16) krokuje ručně).
+// Na sdílené mapě se svět mezi zprávami serveru dopočítává jen pro plynulost, události
+// a peníze z toho kroku nic neznamenají (server je pošle sám).
 function update(dt) {
-    if (!isGameStarted || dt <= 0) return;
-
-    // Herní čas
-    dayTimer += dt;
-    if (dayTimer >= MS_PER_DAY) {
-        dayTimer -= MS_PER_DAY;
-        day++;
-        const ownedPlots = plots.filter(p => p.owner === 'player').length;
-        const landTax = getLandTax();
-        lastDayIncome = totalRevenue - revenueAtDayStart - ownedPlots * landTax;
-        revenueAtDayStart = totalRevenue;
-        if (ownedPlots > 0) {
-            money -= ownedPlots * landTax;
-            if (money < 0) {
-                isGameOver = true;
-                gameOverReason = 'bankrupt';
-            }
-        }
-        if (day > daysInMonth[month]) {
-            if (raceMode && month >= raceMode.months) {
-                // Konec závodu: poslední den zvolené délky (hostitel ji vybírá v lobby)
-                day = daysInMonth[month];
-                if (!isGameOver) {
-                    isGameOver = true;
-                    gameOverReason = 'race_end';
-                }
-            } else if (month === 12) {
-                // Konec roku: kalendář zůstane na posledním dni, nikdy nejde na měsíc 13
-                day = daysInMonth[month];
-                if (!isGameOver) {
-                    isGameOver = true;
-                    gameOverReason = 'year_end';
-                }
-            } else {
-                day = 1;
-                month++;
-                logEvent(`Začíná ${MONTH_FULL_NAMES[month]}.`);
-            }
-        }
-    }
-
-    // Aktualizace cen s trendem
-    priceUpdateTimer += dt;
-    if (priceUpdateTimer > PRICE_UPDATE_INTERVAL) {
-        priceUpdateTimer = 0;
-        const leftDelta = (marketRandom() - 0.45 + leftPriceTrend * 0.15) * 0.12;
-        const rightDelta = (marketRandom() - 0.45 + rightPriceTrend * 0.15) * 0.12;
-        leftIncPrice = Math.max(0.25, Math.min(2.80, leftIncPrice + leftDelta));
-        rightIncPrice = Math.max(0.25, Math.min(2.80, rightIncPrice + rightDelta));
-        leftPriceTrend = Math.max(-1, Math.min(1, leftPriceTrend + (marketRandom() - 0.5) * 0.4));
-        rightPriceTrend = Math.max(-1, Math.min(1, rightPriceTrend + (marketRandom() - 0.5) * 0.4));
-
-        leftPriceHistory.push(leftIncPrice);
-        rightPriceHistory.push(rightIncPrice);
-        if (leftPriceHistory.length > PRICE_HISTORY_LEN) leftPriceHistory.shift();
-        if (rightPriceHistory.length > PRICE_HISTORY_LEN) rightPriceHistory.shift();
-    }
-
-    // Těžba ropy — čerpá ze zapojeného ložiska
-    pipeNetworks.forEach(network => {
-        if (!network.isPumping || network.oilStored >= network.oilCapacity) return;
-        const pocket = network.connectedPocket;
-        if (!pocket || pocket.oil <= 0) {
-            network.isPumping = false;
-            return;
-        }
-        const room = network.oilCapacity - network.oilStored;
-        const extracted = Math.min(OIL_PER_SECOND * (dt / 1000), pocket.oil, room);
-        network.oilStored += extracted;
-        pocket.oil -= extracted;
-        if (pocket.oil <= 0) {
-            pocket.oil = 0;
-            network.isPumping = false;
-            notify('Ložisko vyčerpáno', `Vrt na pozemku ${network.derrickId + 1} přestal čerpat`, 'bad', '🛢️');
-        }
-    });
-
-    emitDerrickSmoke(dt);
-    updateRigPressure(dt);
-    updateTrucks(dt);
+    if (!world || dt <= 0) return;
+    OilSim.step(world, dt);
+    const events = world.events.splice(0);
+    if (!sharedMode) handleWorldEvents(events);
+    syncFromWorld();
+    emitClientEffects(dt);
     updateParticles(dt);
-
 }
 
 function draw() {
@@ -912,12 +955,12 @@ function draw() {
     drawTrucks(groundLevel);
     drawParticles();
     drawAmbientDust();
-    drawDrone(groundLevel);
+    drawDrones(groundLevel);
 
     // Štítky zásobníků a manometry až nad kapkami a kouřem, ať jsou vždy čitelné
     plots.forEach(plot => {
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
-        if (plot.hasVrt && network) drawStorageChip(plot.x + plotWidth / 2, structureY - DERRICK_HEIGHT - 26, network);
+        if (plot.hasVrt && network && isMine(plot)) drawStorageChip(plot.x + plotWidth / 2, structureY - DERRICK_HEIGHT - 26, network);
     });
 
     // Kreslení dočasných efektů a náhledů
@@ -956,10 +999,10 @@ function formatRate(value, prefix = '') {
 function updateUI() {
     // Peníze a zdroje
     setText('money-value', Math.floor(money).toLocaleString('cs-CZ'));
-    const pumpingRigs = pipeNetworks.filter(n => n.derrickId >= 0 && n.isPumping);
-    setText('stat-rigs', `${pumpingRigs.length}/${plots.filter(p => p.hasVrt).length}`);
+    const pumpingRigs = pipeNetworks.filter(n => isMine(n) && n.isPumping);
+    setText('stat-rigs', `${pumpingRigs.length}/${plots.filter(p => p.hasVrt && isMine(p)).length}`);
     setText('stat-trucks', `${trucksOwned}/${MAX_TRUCKS}`);
-    const storedOil = pipeNetworks.reduce((sum, n) => sum + (n.derrickId >= 0 ? n.oilStored : 0), 0);
+    const storedOil = pipeNetworks.reduce((sum, n) => sum + (isMine(n) ? n.oilStored : 0), 0);
     setText('stat-oil', Math.floor(storedOil).toLocaleString('cs-CZ'));
     setText('stat-oil-rate', formatRate(pumpingRigs.length * OIL_PER_SECOND * MS_PER_DAY / 1000));
     setText('stat-sold', Math.floor(totalOilSold).toLocaleString('cs-CZ'));
@@ -992,11 +1035,12 @@ function updateUI() {
         let isDisabled = money < item.cost;
         if (item.isTruck) isDisabled = isDisabled || trucksOwned >= MAX_TRUCKS;
         if (item.mode === 'silo') {
-            const canBuildSilo = plots.some(p => p.owner === 'player' && p.hasVrt && p.siloCount < MAX_SILOS_PER_PLOT);
+            const canBuildSilo = plots.some(p => p.owner === myId && p.hasVrt && p.siloCount < MAX_SILOS_PER_PLOT);
             isDisabled = isDisabled || !canBuildSilo;
         }
-        if (item.isDrone) isDisabled = isDisabled || drone !== null;
-        if (item.needsOwnedPlot) isDisabled = isDisabled || !plots.some(p => p.owner === 'player');
+        const myDrone = drones.some(d => d.owner === myId);
+        if (item.isDrone) isDisabled = isDisabled || myDrone;
+        if (item.needsOwnedPlot) isDisabled = isDisabled || !plots.some(p => p.owner === myId);
         item.el.disabled = isDisabled;
 
         if (item.isTruck) {
@@ -1007,7 +1051,7 @@ function updateUI() {
         if (item.mode) {
             item.el.classList.toggle('active-build-mode', currentBuildMode === item.mode);
         }
-        if (item.isDrone) item.el.classList.toggle('active-build-mode', drone !== null);
+        if (item.isDrone) item.el.classList.toggle('active-build-mode', myDrone);
     });
 
     // Rychlost hry (v závodě zamčená)
@@ -1024,7 +1068,7 @@ function updateUI() {
 
 // Cíle roku jsou zatím jen ukazatel postupu, hra je nevyhodnocuje
 function getYearGoals() {
-    const pumping = pipeNetworks.filter(n => n.derrickId >= 0 && n.isPumping).length;
+    const pumping = pipeNetworks.filter(n => isMine(n) && n.isPumping).length;
     return {
         main: [
             { name: 'Vydělej $20 000', value: totalRevenue, target: 20000, money: true },
@@ -1968,25 +2012,6 @@ function getPlotAtPosition(x, y, groundLevel) {
     return getPlotAtX(x);
 }
 
-function getOwnedPlotForTool(x) {
-    const atCursor = getPlotAtX(x);
-    if (atCursor && atCursor.owner === 'player') return atCursor;
-    return plots.find(p => p.owner === 'player') || null;
-}
-
-function createPipeNetwork(derrickId, startPlot) {
-    const groundLevel = getGroundLevel();
-    return {
-        id: nextNetworkId++,
-        derrickId,
-        path: [{ x: startPlot.x + plotWidth / 2, y: groundLevel }],
-        isPumping: false,
-        oilStored: 0,
-        oilCapacity: DERRICK_BASE_CAPACITY + startPlot.siloCount * SILO_CAPACITY_BONUS,
-        connectedPocket: null
-    };
-}
-
 function getPurchasablePlotAt(clickPos, groundLevel) {
     if (clickPos.y > groundLevel) return null;
     return plots.find(p => p.owner === null &&
@@ -1995,20 +2020,11 @@ function getPurchasablePlotAt(clickPos, groundLevel) {
 
 function tryPurchasePlot(plot, groundLevel) {
     if (!plot || plot.owner) return 'none';
-
     if (money >= plot.price) {
-        money -= plot.price;
-        plot.owner = 'player';
-        playSound('build');
-        startGameLoop();
-        notify('Pozemek koupen', `Pozemek ${plot.id + 1} za $${plot.price}`, 'cool', '🚩');
-        lastBoughtPlotId = plot.id;
-        lastBoughtHighlightTimer = 30;
+        doAction({ type: 'buyPlot', plotId: plot.id });
         updatePlotSignHitboxes(groundLevel);
-        updateUI();
         return 'bought';
     }
-
     plotBlinkTimers[plot.id] = 20;
     return 'too_expensive';
 }
@@ -2034,29 +2050,45 @@ function drawPlots(groundLevel) {
     }
     ctx.setLineDash([]);
 
-    // Vlastní pozemky: zoraná tmavší půda, praporek a rozsvícená přední hrana
+    // Koupené pozemky: zoraná tmavší půda, praporek a rozsvícená přední hrana v barvě vlastníka.
+    // Na sdílené mapě nese praporek soupeře i jeho jméno.
     plots.forEach(plot => {
-        if (plot.owner !== 'player') return;
+        if (!plot.owner) return;
+        const mine = plot.owner === myId;
+        const color = sharedMode ? playerColor(plot.owner) : '#ffb347';
         ctx.save();
         traceSlabQuad(plot.x + 3, plot.x + plotWidth - 3, groundLevel, groundLevel - ROAD_DEPTH, fieldBackY);
-        ctx.fillStyle = 'rgba(30, 14, 8, 0.32)';
+        ctx.fillStyle = mine ? 'rgba(30, 14, 8, 0.32)' : 'rgba(10, 10, 25, 0.28)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 180, 80, 0.18)';
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.fillStyle = 'rgba(255, 180, 80, 0.55)';
+        ctx.globalAlpha = 0.65;
+        ctx.fillStyle = color;
         ctx.fillRect(plot.x + 4, groundLevel, plotWidth - 8, 2);
+        ctx.globalAlpha = 1;
         const fy = fieldBackY + 34;
         const fx = slabXAt(plot.x + 10, fy, groundLevel) + 4;
         ctx.fillStyle = '#2a1a12';
         ctx.fillRect(fx, fy - 26, 2, 26);
-        ctx.fillStyle = '#ffb347';
+        ctx.fillStyle = color;
         ctx.beginPath();
         ctx.moveTo(fx + 2, fy - 26);
         ctx.lineTo(fx + 16, fy - 21);
         ctx.lineTo(fx + 2, fy - 16);
         ctx.closePath();
         ctx.fill();
+        if (sharedMode && !mine) {
+            ctx.font = '600 11px system-ui, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(10, 10, 20, 0.8)';
+            const name = world.players[plot.owner]?.name || '';
+            ctx.strokeText(name, fx + 19, fy - 21);
+            ctx.fillText(name, fx + 19, fy - 21);
+        }
         ctx.restore();
     });
 
@@ -2129,7 +2161,7 @@ function drawPlots(groundLevel) {
             ctx.restore();
         }
         // Nově: pokud je aktivní build mód vrtu a myš je nad vlastněným pozemkem bez vrtu
-        if (currentBuildMode === 'vrt' && plot.owner === 'player' && !plot.hasVrt) {
+        if (currentBuildMode === 'vrt' && plot.owner === myId && !plot.hasVrt) {
             const px = plot.x;
             const py = groundLevel;
             if (mousePos.x >= px && mousePos.x <= px + plotWidth && mousePos.y >= 0 && mousePos.y <= py) {
@@ -2144,8 +2176,12 @@ function drawPlots(groundLevel) {
 // Organický obrys ložiska jen pro kresbu: hrany polygonu rozdělené a zvlněné ven.
 // Kolize dál počítá s pocket.vertices; obrys je o pár px vysunutý ven, aby kresba
 // polygon spíš překrývala, než aby trubka trefila ložisko mimo nakreslený tvar.
+const pocketShapes = new Map(); // pocket.id -> obrys; resetLocalUi ho maže při novém světě
+
 function getPocketShape(pocket) {
-    if (pocket.shape) return pocket.shape;
+    const cached = pocketShapes.get(pocket.id);
+    if (cached) return cached;
+    const rand = seededRandom(9137 + pocket.id * 7919);
     const v = pocket.vertices;
     const cx = pocket.x + pocket.width / 2;
     const cy = pocket.y + pocket.height / 2;
@@ -2157,11 +2193,11 @@ function getPocketShape(pocket) {
             const px = a.x + (b.x - a.x) * k / steps;
             const py = a.y + (b.y - a.y) * k / steps;
             const d = Math.hypot(px - cx, py - cy) || 1;
-            const push = 2 + Math.random() * 6;
+            const push = 2 + rand() * 6;
             pts.push({ x: px + (px - cx) / d * push, y: py + (py - cy) / d * push });
         }
     }
-    pocket.shape = pts;
+    pocketShapes.set(pocket.id, pts);
     return pts;
 }
 
@@ -2993,8 +3029,6 @@ function drawPriceChart(history, x, y, w, h) {
 }
 
 // --- Silnice a auta ---
-const TRUCK_LENGTH = 76;
-const TRUCK_GAP_PAD = 6; // minimální mezera mezi auty jedoucími za sebou
 const TRUCK_COLORS = { left: '#C77D2E', right: '#4F86B5' }; // laděné k barvám výkupců (rafinerie, nádraží)
 
 function pathRoundRect(x, y, w, h, r) {
@@ -3121,7 +3155,8 @@ function drawTrucks(groundLevel) {
 
     items.sort((a, b) => a.lane - b.lane); // vzdálenější pruh se kreslí první
     items.forEach(({ truck, facing, renderX }) => {
-        const color = TRUCK_COLORS[truck.targetCompany] || '#777777';
+        // Na sdílené mapě má každý hráč kamiony ve své barvě, jinak podle výkupce
+        const color = sharedMode ? playerColor(truck.owner) : (TRUCK_COLORS[truck.targetCompany] || '#777777');
         const baseY = getTruckBaseY(truck, groundLevel);
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // stín na desce
         ctx.beginPath();
@@ -3150,12 +3185,8 @@ function updateParticles(dt) {
         if (p.gravity) p.vy += p.gravity * dt / 1000;
         p.x += p.vx * dt / 1000;
         p.y += p.vy * dt / 1000;
-        // Kapka ropy dopadla na desku: zmizí a zvětší kaluž na pozemku
-        if (p.type === 'oil' && p.vy > 0 && p.y >= p.groundY) {
-            p.age = p.life;
-            const plot = plots.find(pl => pl.id === p.plotId);
-            if (plot) plot.spill = Math.min(1, (plot.spill || 0) + SPILL_PER_DROP);
-        }
+        // Kapka ropy dopadla na desku a zmizí (kaluž roste v sim.js podle délky erupce)
+        if (p.type === 'oil' && p.vy > 0 && p.y >= p.groundY) p.age = p.life;
     });
     particles = particles.filter(p => p.age < p.life);
 }
@@ -3187,7 +3218,7 @@ function drawParticles() {
             ctx.lineWidth = 4;
             ctx.strokeStyle = 'rgba(30, 16, 8, 0.85)';
             ctx.strokeText(p.text, p.x, p.y);
-            ctx.fillStyle = '#ffd36b';
+            ctx.fillStyle = p.color || '#ffd36b'; // cizí prodej v barvě soupeře
             ctx.fillText(p.text, p.x, p.y);
         }
         ctx.restore();
@@ -3397,7 +3428,7 @@ function drawEffectsAndPreviews(groundLevel) {
     // Náhled stavby
     if (currentBuildMode === 'vrt') {
         const hoveredPlot = getPlotAtX(mousePos.x);
-        if (hoveredPlot && hoveredPlot.owner === 'player' && !hoveredPlot.hasVrt) {
+        if (hoveredPlot && hoveredPlot.owner === myId && !hoveredPlot.hasVrt) {
             ctx.save();
             ctx.globalAlpha = 0.6;
             drawDerrick(hoveredPlot.x + plotWidth / 2, groundLevel - STRUCTURE_BASE_OFFSET, -1, false);
@@ -3408,7 +3439,7 @@ function drawEffectsAndPreviews(groundLevel) {
         }
     } else if (currentBuildMode === 'silo') {
         const hoveredPlot = getPlotAtX(mousePos.x);
-        if (hoveredPlot && hoveredPlot.owner === 'player' && hoveredPlot.hasVrt) {
+        if (hoveredPlot && hoveredPlot.owner === myId && hoveredPlot.hasVrt) {
             ctx.save();
             ctx.globalAlpha = 0.6;
             drawSilo(hoveredPlot.x + plotWidth / 2 + SILO_OFFSET_X + hoveredPlot.siloCount * SILO_STEP,
@@ -3455,7 +3486,7 @@ function drawEffectsAndPreviews(groundLevel) {
     } else if (currentBuildMode === 'seismic') {
         // Náhled dosahu nálože: půlkruh pod kurzorem na vlastním pozemku
         const hoveredPlot = getPlotAtX(mousePos.x);
-        if (hoveredPlot && hoveredPlot.owner === 'player' && mousePos.y <= groundLevel) {
+        if (hoveredPlot && hoveredPlot.owner === myId && mousePos.y <= groundLevel) {
             ctx.save();
             ctx.strokeStyle = 'rgba(160, 220, 255, 0.55)';
             ctx.lineWidth = 2;
@@ -3524,8 +3555,8 @@ function drawGameOver() {
     ctx.fillText(`Celkové tržby: $${Math.floor(totalRevenue)}`, canvas.width / 2, canvas.height / 2 + 10);
     ctx.fillText(`Prodáno ropy: ${Math.floor(totalOilSold)} barelů`, canvas.width / 2, canvas.height / 2 + 55);
 
-    const ownedPlots = plots.filter(p => p.owner === 'player').length;
-    const activeRigs = plots.filter(p => p.hasVrt).length;
+    const ownedPlots = plots.filter(p => p.owner === myId).length;
+    const activeRigs = plots.filter(p => p.hasVrt && isMine(p)).length;
     ctx.font = '24px sans-serif';
     ctx.fillStyle = '#ccc';
     ctx.fillText(`Pozemky: ${ownedPlots}  |  Vrty: ${activeRigs}  |  Kamiony: ${trucksOwned}`, canvas.width / 2, canvas.height / 2 + 110);
@@ -3550,255 +3581,12 @@ function drawGameOver() {
 // --- Herní logika a mechaniky ---
 
 function getNetworkPickupX(network) {
-    if (network.derrickId >= 0) {
-        const plot = plots.find(p => p.id === network.derrickId);
-        if (plot) return plot.x + plotWidth / 2;
-    }
-    if (network.path.length > 0) {
-        const mid = network.path[Math.floor(network.path.length / 2)];
-        return mid.x;
-    }
-    return canvas.width / 2;
+    return OilSim.getNetworkPickupX(world, network);
 }
 
-function pickBestCompany() {
-    if (leftIncPrice > rightIncPrice + 0.05) return 'left';
-    if (rightIncPrice > leftIncPrice + 0.05) return 'right';
-    if (trucksAssignedLeft > trucksAssignedRight) return 'left';
-    if (trucksAssignedRight > trucksAssignedLeft) return 'right';
-    return Math.random() < 0.5 ? 'left' : 'right';
-}
-
-function pickCompanyForTruck(activeLeft, activeRight) {
-    if (activeLeft < trucksAssignedLeft) return 'left';
-    if (activeRight < trucksAssignedRight) return 'right';
-    return pickBestCompany();
-}
-
-// Vybere vrt pro další jízdu kamionu. Preferuje vrt s nejvíc ropou, penalizuje vrty, kam už
-// jiná auta jedou (rozloží se mezi doly) a vzdálenost od kamionu. Volá se před každou jízdou,
-// takže nový vrt začnou obsluhovat i auta, která už jezdí.
-function findNetworkForTruck(truck) {
-    let best = null;
-    let bestScore = -Infinity;
-    pipeNetworks.forEach(network => {
-        if (network.derrickId < 0 || !network.isPumping) return;
-        const claimed = trucks.filter(t => t !== truck && t.homeNetworkId === network.id &&
-            (t.state === 'to_rig' || t.state === 'waiting_at_rig')).length;
-        const distance = Math.abs(getNetworkPickupX(network) - truck.x);
-        const score = network.oilStored - claimed * TRUCK_CAPACITY - distance * 0.01;
-        if (score > bestScore) {
-            bestScore = score;
-            best = network;
-        }
-    });
-    return best;
-}
-
-function tryLoadTruckAtRig(truck, network) {
-    const loadAmount = Math.min(TRUCK_CAPACITY, Math.floor(network.oilStored));
-    if (loadAmount < MIN_LOAD_AMOUNT) return false;
-    network.oilStored -= loadAmount;
-    truck.oil = loadAmount;
-    return true;
-}
-
-function getTruckHomeNetwork(truck) {
-    return pipeNetworks.find(n => n.id === truck.homeNetworkId) || null;
-}
-
-// Firma pro kamion: nejdřív naplní přiřazené sloty (šipky), zbytek jede k lepší ceně.
-// Počítá ostatní kamiony, takže volba je platná i pro kamion, který už nějakou firmu měl.
-function chooseCompanyFor(truck) {
-    const others = trucks.filter(t => t !== truck && t.state !== 'idle');
-    const activeLeft = others.filter(t => t.targetCompany === 'left').length;
-    const activeRight = others.filter(t => t.targetCompany === 'right').length;
-    return pickCompanyForTruck(activeLeft, activeRight);
-}
-
-function dispatchIdleTruck(truck) {
-    const network = findNetworkForTruck(truck);
-    if (!network) return false;
-
-    truck.homeNetworkId = network.id;
-    truck.targetCompany = chooseCompanyFor(truck);
-    truck.state = 'to_rig';
-
-    // Vjezd z okraje mapy; když tam už jiné auto je, postaví se za něj
-    const edgeDir = truck.targetCompany === 'left' ? -1 : 1;
-    const minGap = TRUCK_LENGTH + TRUCK_GAP_PAD;
-    let spawnX = truck.targetCompany === 'left' ? -50 : canvas.width + 50;
-    for (let guard = 0; guard < 20 &&
-        trucks.some(o => o !== truck && o.state !== 'idle' && Math.abs(o.x - spawnX) < minGap); guard++) {
-        spawnX += edgeDir * minGap;
-    }
-    truck.x = spawnX;
-    truck.facing = -edgeDir; // jede dovnitř mapy
-    return true;
-}
-
-// Omezí krok kamionu tak, aby nenajel na auto před sebou. Pruhy se podle směru nepotkávají,
-// auto čekající u vrtu stojí bokem a brzdí jen ta, která jedou ke stejnému vrtu.
-function trafficLimitedStep(truck, targetX, step) {
-    const dir = Math.sign(targetX - truck.x);
-    if (dir === 0) return step;
-    const minGap = TRUCK_LENGTH + TRUCK_GAP_PAD;
-    let allowed = step;
-    trucks.forEach(other => {
-        if (other === truck || other.state === 'idle') return;
-        if (other.state === 'waiting_at_rig') {
-            if (truck.state !== 'to_rig' || truck.homeNetworkId !== other.homeNetworkId) return;
-        } else if ((other.facing || 1) !== dir) {
-            return;
-        }
-        const ahead = (other.x - truck.x) * dir;
-        if (ahead <= 0) return;
-        allowed = Math.min(allowed, Math.max(0, ahead - minGap));
-    });
-    return allowed;
-}
-
-// Posune kamion k cíli o nejvýš `step` pixelů. Vrací true, když dorazil (bez přeskoku cíle).
-function moveTruckToward(truck, targetX, step) {
-    const distance = targetX - truck.x;
-    if (distance !== 0) truck.facing = Math.sign(distance); // kreslení otáčí auto podle směru jízdy
-    if (Math.abs(distance) <= step) {
-        truck.x = targetX;
-        return true;
-    }
-    truck.x += Math.sign(distance) * step;
-    return false;
-}
-
-function updateTrucks(dt) {
-    const speed = TRUCK_SPEED * (dt / 1000);
-
-    trucks.filter(t => t.state === 'idle').forEach(truck => dispatchIdleTruck(truck));
-
-    trucks.forEach(truck => {
-        if (truck.state === 'idle') return;
-
-        const network = getTruckHomeNetwork(truck);
-
-        if (truck.state === 'to_rig' || truck.state === 'to_company') emitTruckSmoke(truck, dt);
-
-        switch (truck.state) {
-            case 'waiting_at_rig': {
-                if (!network || !network.isPumping) {
-                    truck.state = 'idle';
-                    truck.homeNetworkId = null;
-                    break;
-                }
-                truck.x = getNetworkPickupX(network);
-                if (tryLoadTruckAtRig(truck, network)) {
-                    truck.targetCompany = chooseCompanyFor(truck);
-                    truck.state = 'to_company';
-                } else {
-                    // Tento vrt nemá co naložit: přejeď k jinému, který ropu má
-                    const other = findNetworkForTruck(truck);
-                    if (other && other.id !== network.id && other.oilStored >= MIN_LOAD_AMOUNT) {
-                        truck.homeNetworkId = other.id;
-                        truck.state = 'to_rig';
-                    }
-                }
-                break;
-            }
-            case 'to_rig': {
-                if (!network || !network.isPumping) {
-                    truck.state = 'idle';
-                    truck.homeNetworkId = null;
-                    break;
-                }
-                const targetX = getNetworkPickupX(network);
-
-                if (moveTruckToward(truck, targetX, trafficLimitedStep(truck, targetX, speed))) {
-                    if (tryLoadTruckAtRig(truck, network)) {
-                        truck.targetCompany = chooseCompanyFor(truck);
-                        truck.state = 'to_company';
-                    } else {
-                        truck.state = 'waiting_at_rig';
-                    }
-                }
-                break;
-            }
-            case 'to_company': {
-                const targetX = truck.targetCompany === 'left' ? 50 : canvas.width - 50;
-                if (moveTruckToward(truck, targetX, trafficLimitedStep(truck, targetX, speed))) {
-                    const price = truck.targetCompany === 'left' ? leftIncPrice : rightIncPrice;
-                    const sale = truck.oil * price;
-                    money += sale;
-                    totalRevenue += sale;
-                    totalOilSold += truck.oil;
-                    truck.oil = 0;
-                    spawnParticle({
-                        type: 'text',
-                        text: `+$${Math.round(sale)}`,
-                        x: targetX,
-                        y: getGroundLevel() - 50,
-                        vx: 0,
-                        vy: -42,
-                        age: 0,
-                        life: 1400
-                    });
-                    playSound('sale');
-                    // Další jízda: vrt se vybírá znovu (nový nebo plnější vrt)
-                    const nextNetwork = findNetworkForTruck(truck);
-                    if (nextNetwork) {
-                        truck.homeNetworkId = nextNetwork.id;
-                        truck.state = 'to_rig';
-                    } else {
-                        truck.state = 'idle';
-                        truck.homeNetworkId = null;
-                    }
-                }
-                break;
-            }
-        }
-    });
-}
-
-function isPointInPolygon(point, vertices) {
-    let inside = false;
-    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-        const a = vertices[i], b = vertices[j];
-        if ((a.y > point.y) !== (b.y > point.y) &&
-            point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) {
-            inside = !inside;
-        }
-    }
-    return inside;
-}
-
-// Úsečka p1-p2 zasahuje polygon, když některý konec leží uvnitř nebo protíná jeho hranu
-function isSegmentIntersectingPolygon(p1, p2, vertices) {
-    if (isPointInPolygon(p1, vertices) || isPointInPolygon(p2, vertices)) return true;
-    for (let i = 0; i < vertices.length; i++) {
-        if (lineIntersectsLine(p1, p2, vertices[i], vertices[(i + 1) % vertices.length])) return true;
-    }
-    return false;
-}
-
-function lineIntersectsLine(l1p1, l1p2, l2p1, l2p2) {
-    let q = (l1p1.y - l2p1.y) * (l2p2.x - l2p1.x) - (l1p1.x - l2p1.x) * (l2p2.y - l2p1.y);
-    let d = (l1p2.x - l1p1.x) * (l2p2.y - l2p1.y) - (l1p2.y - l1p1.y) * (l2p2.x - l2p1.x);
-    if (d === 0) return false;
-    let r = q / d;
-    q = (l1p1.y - l2p1.y) * (l1p2.x - l1p1.x) - (l1p1.x - l2p1.x) * (l1p2.y - l1p1.y);
-    let s = q / d;
-    // Včetně krajů: trubka procházející přesně vrcholem polygonu (např. kosočtverec) se počítá jako zásah
-    return r >= 0 && r <= 1 && s >= 0 && s <= 1;
-}
-
+// Přidělení kamionů výkupci (−/+ na kartě, kolečko myši)
 function assignTruck(company, change) {
-    if (change > 0) {
-        if (trucksAssignedLeft + trucksAssignedRight < trucksOwned) {
-            if (company === 'left') trucksAssignedLeft++;
-            else trucksAssignedRight++;
-        }
-    } else {
-        if (company === 'left' && trucksAssignedLeft > 0) trucksAssignedLeft--;
-        if (company === 'right' && trucksAssignedRight > 0) trucksAssignedRight--;
-    }
+    doAction({ type: 'assignTruck', company, delta: change });
 }
 
 function cancelBuildMode(clearDerrick = true) {
@@ -3869,24 +3657,20 @@ function addEventListeners() {
     });
 
     document.getElementById('truck-btn').addEventListener('click', () => {
-        if (money >= TRUCK_COST && trucksOwned < MAX_TRUCKS) {
-            money -= TRUCK_COST;
-            trucksOwned++;
-            trucks.push({ x: -50, y: 0, state: 'idle', homeNetworkId: null, targetCompany: null, oil: 0, facing: 1 });
-            logEvent(`Koupen kamion (${trucksOwned}/${MAX_TRUCKS}).`);
-            updateUI();
-        }
+        if (money >= TRUCK_COST && trucksOwned < MAX_TRUCKS) doAction({ type: 'buyTruck' });
     });
 
     document.getElementById('seismic-btn').addEventListener('click', () => {
-        if (money >= SEISMIC_COST && plots.some(p => p.owner === 'player')) {
+        if (money >= SEISMIC_COST && plots.some(p => p.owner === myId)) {
             currentBuildMode = (currentBuildMode === 'seismic') ? null : 'seismic';
             selectedDerrickPlotId = null;
             updateUI();
         }
     });
 
-    document.getElementById('drone-btn').addEventListener('click', launchDrone);
+    document.getElementById('drone-btn').addEventListener('click', () => {
+        if (money >= DRONE_COST && !drones.some(d => d.owner === myId)) doAction({ type: 'drone' });
+    });
 
     document.getElementById('radar-btn').addEventListener('click', () => {
         if (money >= RADAR_COST) {
@@ -4046,81 +3830,34 @@ function handleCanvasClick(event) {
 function handleBuildModeClick(clickPos, plot, groundLevel) {
     switch (currentBuildMode) {
         case 'vrt':
-            if (plot && plot.owner === 'player' && !plot.hasVrt && money >= VRT_COST) {
-                money -= VRT_COST;
-                plot.hasVrt = true;
-                playSound('build');
-                notify('Vrt postaven', 'Klikni do podzemí a veď potrubí k ložisku', 'cool', '🏗️');
-                selectedDerrickPlotId = plot.id;
-                cancelBuildMode(false);
-                draw();
-            }
+            if (isMine(plot) && !plot.hasVrt && money >= VRT_COST) doAction({ type: 'buildDerrick', plotId: plot.id });
             break;
         case 'silo':
-            if (plot && plot.owner === 'player' && plot.hasVrt && plot.siloCount < MAX_SILOS_PER_PLOT && money >= SILO_COST) {
-                money -= SILO_COST;
-                plot.siloCount++;
-                playSound('build');
-                logEvent(`Silo postaveno na pozemku ${plot.id + 1}.`);
-                const network = pipeNetworks.find(n => n.derrickId === plot.id);
-                if (network) {
-                    network.oilCapacity += SILO_CAPACITY_BONUS;
-                }
-                cancelBuildMode();
+            if (isMine(plot) && plot.hasVrt && plot.siloCount < MAX_SILOS_PER_PLOT && money >= SILO_COST) {
+                doAction({ type: 'buildSilo', plotId: plot.id });
             }
             break;
         case 'seismic':
-            if (plot && plot.owner === 'player' && clickPos.y <= groundLevel) {
-                fireSeismicCharge(plot, clickPos.x);
-            }
+            if (isMine(plot) && clickPos.y <= groundLevel) doAction({ type: 'seismic', plotId: plot.id, x: clickPos.x });
             break;
         case 'radar':
-            if (clickPos.y > groundLevel) {
-                fireGeoradar(clickPos.x, clickPos.y);
-            }
+            if (clickPos.y > groundLevel) doAction({ type: 'radar', x: clickPos.x, y: clickPos.y });
             break;
     }
 }
 
 function handlePipePlacementClick(clickPos, groundLevel) {
     if (clickPos.y <= groundLevel) return;
-
-    let network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
+    const network = pipeNetworks.find(n => n.derrickId === selectedDerrickPlotId);
     if (network && network.isPumping) return;
-
-    if (!network) {
-        const startPlot = plots.find(p => p.id === selectedDerrickPlotId);
-        network = createPipeNetwork(selectedDerrickPlotId, startPlot);
-        pipeNetworks.push(network);
-    }
-
-    const lastPoint = network.path[network.path.length - 1];
-    const distance = Math.hypot(clickPos.x - lastPoint.x, clickPos.y - lastPoint.y);
-    const cost = Math.ceil(distance * PIPE_COST_PER_PIXEL);
-
-    if (money < cost) return;
-
-    money -= cost;
-    network.path.push(clickPos);
-    const hitPocket = checkPipeCollision({ start: lastPoint, end: clickPos });
-    if (hitPocket) {
-        hitPocket.tapped = true;
-        playSound('strike');
-        notify('Ropa navrtána!', `Ložisko s ${Math.floor(hitPocket.oil).toLocaleString('cs-CZ')} barely`, 'good', '🔥');
-        // Oslava: z věže vystřelí ohňostroj
-        const rigTop = groundLevel - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT;
-        for (let i = 0; i < 3; i++) launchFirework(network.path[0].x + (i - 1) * 14, rigTop, FIREWORK_COLORS[i]);
-        network.connectedPocket = hitPocket;
-        network.isPumping = true;
-        selectedDerrickPlotId = null;
-    }
+    doAction({ type: 'pipe', plotId: selectedDerrickPlotId, x: clickPos.x, y: clickPos.y });
 }
 
 function handleDefaultClick(plot) {
-    if (plot && plot.owner === 'player' && plot.hasVrt) {
+    if (isMine(plot) && plot.hasVrt) {
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
         if (network && canVentRig(network)) {
-            ventRig(network);
+            doAction({ type: 'vent', plotId: plot.id });
             return;
         }
         if (!network || !network.isPumping) {
@@ -4130,81 +3867,15 @@ function handleDefaultClick(plot) {
     }
 }
 
-// --- Přetlak a erupce vrtu ---
-// Čerpající vrt s plným zásobníkem dál tlačí ropu z ložiska a roste tlak (manometr nad vrtem).
-// Od VENT_MIN jde kliknutím na vrt odpustit ventil (pára, tlak spadne na nulu). Při 100 % vrt
-// vybuchne gejzírem: ropa z ložiska letí do vzduchu, dělá na pozemku kaluž a platí se pokuta.
-const PRESSURE_RELIEF_MS = 5000;      // pokles ze 100 % na 0, jakmile má zásobník místo
-const VENT_MIN = 0.3;                 // od tohoto tlaku jde ventil odpustit
-const PRESSURE_WARN = 0.6;            // siréna a oznámení
-const PRESSURE_AFTER_BLOWOUT = 0.35;
-const VENT_MS = 1600;
-const BLOWOUT_MS = 4500;
-const BLOWOUT_WASTE_PER_SECOND = 40;  // barelů z ložiska do vzduchu
-const SPILL_PER_DROP = 0.0008;     // jedna erupce udělá zhruba dvoutřetinovou kaluž
-const SPILL_FADE_MS = 40000;          // kaluž zmizí asi za 4 herní dny
-
+// --- Přetlak a erupce vrtu (kresba) ---
+// Logika je v sim.js (stepPressure): plný zásobník zvedá network.pressure, od VENT_MIN jde ventil
+// odpustit kliknutím na vrt, při 100 % erupce (network.blowout), kaluž je plot.spill.
 function getRigTopY() {
     return getGroundLevel() - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT - 12;
 }
 
 function canVentRig(network) {
-    return network.isPumping && !network.blowout && (network.pressure || 0) >= VENT_MIN;
-}
-
-function ventRig(network) {
-    network.pressure = 0;
-    network.vent = VENT_MS;
-    network.warned = false;
-    playSound('vent');
-    logEvent(`Ventil odpuštěn na pozemku ${network.derrickId + 1}.`);
-}
-
-function startBlowout(network) {
-    network.blowout = BLOWOUT_MS;
-    const fine = getRules().blowoutFine;
-    money -= fine;
-    shakeCamera(12);
-    playSound('gush');
-    notify('Erupce ropy!', `Vrt na pozemku ${network.derrickId + 1}: únik a pokuta $${fine}`, 'bad', '🌋');
-}
-
-function updateRigPressure(dt) {
-    pipeNetworks.forEach(network => {
-        if (network.derrickId < 0) return;
-        const x = getNetworkPickupX(network);
-        if (network.blowout > 0) {
-            network.blowout -= dt;
-            const pocket = network.connectedPocket;
-            if (pocket) pocket.oil = Math.max(0, pocket.oil - BLOWOUT_WASTE_PER_SECOND * dt / 1000);
-            emitGusher(network, x, dt);
-            if (network.blowout <= 0) {
-                network.blowout = 0;
-                network.pressure = PRESSURE_AFTER_BLOWOUT;
-            }
-            return;
-        }
-        if (network.vent > 0) {
-            network.vent -= dt;
-            emitSteam(x, dt, 1);
-        }
-        const pressure = network.pressure || 0;
-        const full = network.isPumping && network.oilStored >= network.oilCapacity - 0.01;
-        network.pressure = full
-            ? Math.min(1, pressure + dt / getRules().pressureBuildMs)
-            : Math.max(0, pressure - dt / PRESSURE_RELIEF_MS);
-        if (network.pressure >= PRESSURE_WARN && !network.warned) {
-            network.warned = true;
-            playSound('warn');
-            notify('Přetlak na vrtu!', `Pozemek ${network.derrickId + 1}: odvez ropu, nebo klikni na vrt a odpusť ventil`, 'bad', '⚠️');
-        }
-        if (network.pressure < VENT_MIN) network.warned = false;
-        if (network.pressure > 0.45) emitSteam(x, dt, (network.pressure - 0.45) * 0.4); // syčící ventily
-        if (network.pressure >= 1) startBlowout(network);
-    });
-    plots.forEach(plot => {
-        if (plot.spill > 0) plot.spill = Math.max(0, plot.spill - dt / SPILL_FADE_MS);
-    });
+    return OilSim.canVentRig(network);
 }
 
 // Pára z ventilů u paty vrtu; intensity 1 = odpouštění, menší = syčení při přetlaku
@@ -4322,125 +3993,21 @@ function drawPressureGauge(x, y, pressure) {
     if (pressure >= PRESSURE_WARN) drawGlow(x, y, 22, '255, 70, 50', 0.35 + 0.25 * Math.sin(performance.now() / 120));
 }
 
-// --- Průzkumné nástroje: seismika, dron, georadar ---
-// Seismika: nálož na vlastním pozemku, rázová vlna podzemím na chvíli ukáže ložiska v dosahu.
-// Dron: přeletí celou mapu, paprsek pod ním na chvíli ukazuje ložiska.
-// Georadar: klik do podzemí trvale odhalí ložiska v malém kruhu.
-const SEISMIC_COST = 150;
-const DRONE_COST = 450;
-const RADAR_COST = 250;
-const SEISMIC_RADIUS = 340;
-const SEISMIC_WAVE_MS = 1600;
-const RADAR_RADIUS = 120;
-const RADAR_PULSE_MS = 900;
-const DRONE_SPEED = 230;      // px/s
-const DRONE_BEAM_HALF = 55;   // polovina šířky snímacího paprsku
-const DRONE_Y_OFFSET = 205;   // výška letu nad přední hranou desky
-const ECHO_MS = 8000;         // jak dlouho je ozvěna ložiska vidět
-const ECHO_FADE_MS = 1500;
-const RICH_MEDIUM_OIL = 8500; // maxOil je 5000–15000, prahy dělí rozsah zhruba na třetiny
-const RICH_LARGE_OIL = 11500;
-
-let toolClock = 0;       // ms nástrojů: běží herní rychlostí, stojí v pauze
-let seismicWaves = [];   // { x, y, age, hit: Set }
-let radarPulses = [];    // { x, y, age }
-let drone = null;        // { x } během letu
+// --- Průzkumné nástroje (kresba) ---
+// Logika je v sim.js: seismika (vlna z vlastního pozemku, ozvěny), dron (paprsek přes mapu),
+// georadar (trvale odhalí ložiska v kruhu). Ozvěny a odhalení jsou soukromé pro hráče.
+let toolClock = 0;       // zrcadlo world.tools.clock (ms nástrojů, běží herní rychlostí)
+let seismicWaves = [];   // zrcadlo world.tools.waves
+let radarPulses = [];    // zrcadlo world.tools.pulses
+let drones = [];         // zrcadlo world.tools.drones (každý hráč nejvýš jeden)
 
 function getPocketRichness(pocket) {
-    return pocket.maxOil > RICH_LARGE_OIL ? 'velké' : (pocket.maxOil > RICH_MEDIUM_OIL ? 'střední' : 'malé');
-}
-
-// Vzdálenost bodu od ložiska (od jeho obrysu, uvnitř 0)
-function distanceToPocket(x, y, pocket) {
-    if (isPointInPolygon({ x, y }, pocket.vertices)) return 0;
-    let best = Infinity;
-    const v = pocket.vertices;
-    for (let i = 0; i < v.length; i++) {
-        const a = v[i], b = v[(i + 1) % v.length];
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1)));
-        best = Math.min(best, Math.hypot(x - (a.x + dx * t), y - (a.y + dy * t)));
-    }
-    return best;
-}
-
-function echoPocket(pocket) {
-    pocket.echoUntil = toolClock + ECHO_MS;
+    return OilSim.getPocketRichness(pocket);
 }
 
 function getPocketEcho(pocket) {
     if (!pocket.echoUntil) return 0;
     return Math.max(0, Math.min(1, (pocket.echoUntil - toolClock) / ECHO_FADE_MS));
-}
-
-function updateToolEffects(dt) {
-    toolClock += dt;
-
-    seismicWaves.forEach(wave => {
-        wave.age += dt;
-        const radius = SEISMIC_RADIUS * Math.min(1, wave.age / SEISMIC_WAVE_MS);
-        oilPockets.forEach(pocket => {
-            if (wave.hit.has(pocket) || distanceToPocket(wave.x, wave.y, pocket) > radius) return;
-            wave.hit.add(pocket);
-            echoPocket(pocket);
-        });
-    });
-    seismicWaves = seismicWaves.filter(w => w.age < SEISMIC_WAVE_MS + 500);
-
-    radarPulses.forEach(p => { p.age += dt; });
-    radarPulses = radarPulses.filter(p => p.age < RADAR_PULSE_MS);
-
-    if (drone) {
-        drone.x += DRONE_SPEED * dt / 1000;
-        oilPockets.forEach(pocket => {
-            const cx = pocket.x + pocket.width / 2;
-            if (Math.abs(cx - drone.x) < DRONE_BEAM_HALF + pocket.width / 2) echoPocket(pocket);
-        });
-        if (drone.x > canvas.width + 80) drone = null;
-    }
-}
-
-function fireSeismicCharge(plot, x) {
-    if (money < SEISMIC_COST) return;
-    money -= SEISMIC_COST;
-    const groundLevel = getGroundLevel();
-    const charge = { x: Math.max(plot.x + 10, Math.min(plot.x + plotWidth - 10, x)), y: groundLevel };
-    seismicWaves.push({ ...charge, age: 0, hit: new Set() });
-    shakeCamera(9);
-    playSound('boom');
-    for (let i = 0; i < 14; i++) {
-        spawnParticle({
-            type: 'puff', x: charge.x + (Math.random() - 0.5) * 30, y: groundLevel - STRUCTURE_BASE_OFFSET + 10,
-            vx: (Math.random() - 0.5) * 80, vy: -30 - Math.random() * 60,
-            age: 0, life: 1400, size: 4 + Math.random() * 4, shade: 110
-        });
-    }
-    logEvent(`Seismický průzkum na pozemku ${plot.id + 1}.`);
-    cancelBuildMode();
-}
-
-function launchDrone() {
-    if (drone || money < DRONE_COST) return;
-    money -= DRONE_COST;
-    drone = { x: -60 };
-    logEvent('Průzkumný dron vzlétl.');
-    updateUI();
-}
-
-function fireGeoradar(x, y) {
-    if (money < RADAR_COST) return;
-    money -= RADAR_COST;
-    radarPulses.push({ x, y, age: 0 });
-    let found = 0;
-    oilPockets.forEach(pocket => {
-        if (pocket.tapped || distanceToPocket(x, y, pocket) > RADAR_RADIUS) return;
-        if (!pocket.revealed) found++;
-        pocket.revealed = true; // jen odhalí, ložisko zůstává vrtatelné
-    });
-    playSound(found ? 'strike' : 'build');
-    if (found) notify('Georadar našel ropu', `${found}× ložisko odhaleno`, 'cool', '📡');
-    else logEvent('Georadar: v okolí nic.');
-    cancelBuildMode();
 }
 
 // Seismické vlny, pulzy georadaru a ozvěny ložisek (kreslí se v podzemí, před potrubím)
@@ -4494,9 +4061,12 @@ function drawToolEffects(groundLevel) {
     });
 }
 
-// Dron s paprskem, který prosvítí podzemí pod sebou
-function drawDrone(groundLevel) {
-    if (!drone) return;
+// Drony s paprskem, který prosvítí podzemí pod sebou
+function drawDrones(groundLevel) {
+    drones.forEach(d => drawDrone(d, groundLevel));
+}
+
+function drawDrone(drone, groundLevel) {
     const t = toolClock / 1000;
     const x = drone.x;
     const y = groundLevel - DRONE_Y_OFFSET + Math.sin(t * 3) * 4;
@@ -4539,19 +4109,6 @@ function drawDrone(groundLevel) {
     ctx.fillStyle = blink ? '#4aff8a' : '#14401f';
     ctx.fillRect(x + 21, y - 1, 3, 3);
     drawGlow(x, y + 4, 14, '120, 210, 255', 0.6);
-}
-
-function checkPipeCollision(pipeSegment, specificPocket) {
-    const pocketsToCheck = specificPocket ? [specificPocket] : oilPockets;
-    for (const pocket of pocketsToCheck) {
-        if (pocket.tapped && !specificPocket) continue;
-
-        // Kolize proti skutečnému polygonu, ne proti obdélníku kolem něj
-        if (isSegmentIntersectingPolygon(pipeSegment.start, pipeSegment.end, pocket.vertices)) {
-            return pocket;
-        }
-    }
-    return null;
 }
 
 // --- Spuštění při načtení stránky ---

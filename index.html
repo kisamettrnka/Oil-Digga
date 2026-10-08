@@ -133,6 +133,8 @@
                     <div class="lobby-title">OIL DIGGA</div>
                     <div class="lobby-sub">Ropný závod: všichni stejná mapa i ceny, vyhrává nejvíc peněz na konci</div>
                     <div id="lobby-players"></div>
+                    <div class="lobby-label">Hra</div>
+                    <div id="lobby-kind"></div>
                     <div class="lobby-label">Režim</div>
                     <div id="lobby-mode"></div>
                     <div id="lobby-target" class="hidden"></div>
@@ -161,7 +163,7 @@
     </div>
     <script>
         // Skripty se verzují stejně jako CSS; SDK je zabalené esbuildem (npm run build)
-        ['dist/discord-sdk.js', 'net.js', 'script.js'].forEach(function (src) {
+        ['dist/discord-sdk.js', 'sim.js', 'net.js', 'script.js'].forEach(function (src) {
             document.write('<script src="' + src + '?v=' + window.ASSET_VERSION + '"><\/script>');
         });
     </script>

@@ -107,6 +107,8 @@ const Net = (() => {
             if (msg.type === 'state') onState(msg);
             else if (msg.type === 'race_start') onRaceStart(msg);
             else if (msg.type === 'race_end') onRaceEnd(msg);
+            else if (msg.type === 'shared_start') onSharedStart(msg);
+            else if (msg.type === 'snapshot') onSnapshot(msg);
             else if (msg.type === 'error') onError(msg);
         };
         ws.onclose = () => {
@@ -175,8 +177,7 @@ const Net = (() => {
     // Server ukončil závod: zbyl jsi poslední (ostatní zkrachovali/odpadli), nebo vypršel čas
     function onRaceEnd(msg) {
         if (!raceMode || msg.raceId !== raceId || isGameOver) return;
-        isGameOver = true;
-        gameOverReason = 'race_end';
+        endLocalGame('race_end');
         if (typeof notify === 'function') {
             const winner = room?.players.find(p => p.id === msg.winnerId);
             if (msg.reason === 'target') {
@@ -188,6 +189,34 @@ const Net = (() => {
             }
         }
         sendProgress();
+    }
+
+    // Sdílená mapa: svět počítá server, klient posílá akce a kreslí stav ze snapshotů
+    function onSharedStart(msg) {
+        const resumed = raceId === msg.raceId && mode !== 'lobby';
+        raceId = msg.raceId;
+        finishSent = false;
+        raceStartedAt = Date.now() + msg.startIn;
+        raceMode = { raceId: msg.raceId, months: msg.months, mode: msg.mode, target: msg.target, shared: true };
+        if (typeof startSharedWorld === 'function') startSharedWorld(msg.world, youId);
+        if (msg.startIn > 0) {
+            setMode('countdown');
+            runCountdown(msg.startIn);
+        } else {
+            setMode(isGameOver ? 'results' : 'race');
+            if (resumed && typeof notify === 'function') notify('Zpátky ve hře', 'Spojení obnoveno', 'cool', '📡');
+        }
+    }
+
+    function onSnapshot(msg) {
+        if (!raceMode || !raceMode.shared || msg.raceId !== raceId) return;
+        if (typeof applySharedSnapshot === 'function') applySharedSnapshot(msg.world, msg.events);
+        if (isGameOver && mode === 'race') setMode('results');
+    }
+
+    function sendAction(action) {
+        if (!raceMode || !raceMode.shared) return;
+        sendMsg({ type: 'action', raceId, action });
     }
 
     function runCountdown(ms) {
@@ -212,6 +241,7 @@ const Net = (() => {
     }
 
     function leaveRace() {
+        if (raceMode?.shared && typeof leaveSharedWorld === 'function') leaveSharedWorld();
         raceMode = null;
         raceId = null;
         finishSent = false;
@@ -222,6 +252,11 @@ const Net = (() => {
     function sendProgress() {
         if (mode !== 'race' && mode !== 'results') return;
         if (!raceMode || finishSent) return;
+        if (raceMode.shared) {
+            if (isGameOver && mode === 'race') setMode('results');
+            updatePresence();
+            return;
+        }
         const progress = {
             raceId,
             money: Math.floor(money),
@@ -301,9 +336,10 @@ const Net = (() => {
         });
         $('results-reset').addEventListener('click', () => sendMsg({ type: 'reset' }));
         // Volby hostitele: délka, režim, cíl (server přijme jen od hostitele v lobby)
-        ['lobby-length', 'lobby-mode', 'lobby-target'].forEach(id => $(id).addEventListener('click', event => {
+        ['lobby-kind', 'lobby-length', 'lobby-mode', 'lobby-target'].forEach(id => $(id).addEventListener('click', event => {
             const btn = event.target.closest('.length-btn');
             if (!btn || btn.disabled) return;
+            if (btn.dataset.kind) sendMsg({ type: 'settings', kind: btn.dataset.kind });
             if (btn.dataset.months) sendMsg({ type: 'settings', months: Number(btn.dataset.months) });
             if (btn.dataset.mode) sendMsg({ type: 'settings', mode: btn.dataset.mode });
             if (btn.dataset.target) sendMsg({ type: 'settings', target: Number(btn.dataset.target) });
@@ -347,6 +383,10 @@ const Net = (() => {
     }
 
     const RACE_LENGTHS = [1, 3, 6, 12];
+    const GAME_KINDS = {
+        race: { name: 'Každý svou mapu', desc: 'Stejná mapa i ceny, hrajete vedle sebe' },
+        shared: { name: 'Sdílená mapa', desc: `Jedna mapa pro všechny (max ${OilSim.C.MAX_SHARED_PLAYERS}), pozemky a ropa se přetahují` }
+    };
     const RACE_TARGETS = [10000, 20000, 50000];
     const RACE_MODES = {
         richest: { name: 'Nejbohatší', desc: 'Na konci vyhrává nejvíc peněz' },
@@ -401,9 +441,13 @@ const Net = (() => {
         startBtn.classList.toggle('hidden', !isHost);
         startBtn.disabled = room.phase !== 'lobby';
 
-        // Režim, cíl a délka závodu: hostitel volí, ostatní vidí
-        const settings = room.settings || { months: 3, mode: 'richest', target: 20000 };
+        // Druh hry, režim, cíl a délka: hostitel volí, ostatní vidí
+        const settings = room.settings || { kind: 'race', months: 3, mode: 'richest', target: 20000 };
         const canEdit = isHost && room.phase === 'lobby';
+        $('lobby-kind').innerHTML = Object.entries(GAME_KINDS).map(([key, k]) => `
+            <button class="length-btn mode-btn${key === settings.kind ? ' active' : ''}" data-kind="${key}" ${canEdit ? '' : 'disabled'}>
+                ${k.name}<small>${k.desc}</small>
+            </button>`).join('');
         $('lobby-mode').innerHTML = Object.entries(RACE_MODES).map(([key, m]) => `
             <button class="length-btn mode-btn${key === settings.mode ? ' active' : ''}" data-mode="${key}" ${canEdit ? '' : 'disabled'}>
                 ${m.name}<small>${m.desc}</small>
@@ -474,6 +518,7 @@ const Net = (() => {
 
     return {
         isRacing: () => !!raceMode,
-        mode: () => mode
+        mode: () => mode,
+        sendAction
     };
 })();
