@@ -104,7 +104,7 @@ let leftPriceHistory = [1.00];
 let rightPriceHistory = [1.00];
 
 // Částice (kouř z aut, "+$" při prodeji) a zvuk
-const MAX_PARTICLES = 200;
+const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
 let soundMuted = false;
 let audioCtx = null;
@@ -649,13 +649,14 @@ function drawTownFront(groundLevel) {
 }
 
 // Dělníci u vrtu chodí sem a tam, mají přilbu s čelovkou
-function drawRigWorkers(centerX, baseY, plotId) {
+// panic: při přetlaku, erupci nebo kaluži dělníci pobíhají rychleji
+function drawRigWorkers(centerX, baseY, plotId, panic = false) {
     const t = ambientClock;
     for (let k = 0; k < 2; k++) {
-        const phase = t * 0.35 + plotId * 1.7 + k * 2.4;
+        const phase = t * (panic ? 1.6 : 0.35) + plotId * 1.7 + k * 2.4;
         const x = centerX + Math.sin(phase) * 42 + (k ? 20 : -20);
         const dir = Math.cos(phase) >= 0 ? 1 : -1;
-        drawWalker(x, baseY + 3 + k * 2, 1.15, t * 6 + k * 3, dir, { helmet: '#ffc23a', lamp: true });
+        drawWalker(x, baseY + 3 + k * 2, 1.15, t * (panic ? 14 : 6) + k * 3, dir, { helmet: '#ffc23a', lamp: true });
     }
 }
 
@@ -844,6 +845,7 @@ function update(dt) {
     });
 
     emitDerrickSmoke(dt);
+    updateRigPressure(dt);
     updateTrucks(dt);
     updateParticles(dt);
 
@@ -873,9 +875,11 @@ function draw() {
     plots.forEach(plot => {
         const centerX = plot.x + plotWidth / 2;
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
+        drawSpill(plot, groundLevel);
         if (plot.hasVrt) {
             drawDerrick(centerX, structureY, plot.id, network ? network.isPumping : false, network);
-            drawRigWorkers(centerX, structureY, plot.id);
+            const panic = !!network && (network.blowout > 0 || (network.pressure || 0) >= PRESSURE_WARN || plot.spill > 0.05);
+            drawRigWorkers(centerX, structureY, plot.id, panic);
         }
         // Kreslení sil (hladina ukazuje zaplnění zásobníku vrtu)
         const siloFill = network && network.oilCapacity > 0
@@ -883,7 +887,6 @@ function draw() {
         for (let i = 0; i < plot.siloCount; i++) {
             drawSilo(centerX + SILO_OFFSET_X + i * SILO_STEP, structureY + 4 + i * 2, siloFill);
         }
-        if (plot.hasVrt && network) drawStorageChip(centerX, structureY - DERRICK_HEIGHT - 26, network);
     });
 
     // Budovy a UI na plátně
@@ -894,6 +897,12 @@ function draw() {
     drawParticles();
     drawAmbientDust();
     drawDrone(groundLevel);
+
+    // Štítky zásobníků a manometry až nad kapkami a kouřem, ať jsou vždy čitelné
+    plots.forEach(plot => {
+        const network = pipeNetworks.find(n => n.derrickId === plot.id);
+        if (plot.hasVrt && network) drawStorageChip(plot.x + plotWidth / 2, structureY - DERRICK_HEIGHT - 26, network);
+    });
 
     // Kreslení dočasných efektů a náhledů
     drawEffectsAndPreviews(groundLevel);
@@ -1328,7 +1337,7 @@ function drawSlab(groundLevel, rand) {
 // Geometrie města: hlavní ulice s chodníky a promenáda na jeho přední hraně
 function getTownLayout(groundLevel) {
     const backY = getSlabBackY(groundLevel);
-    const streetY = backY + 62;
+    const streetY = backY + 44;
     const s = slabScaleAt(streetY, groundLevel);
     return {
         backY,
@@ -1387,11 +1396,26 @@ function drawTown(groundLevel, rand) {
         const x = rand() * canvas.width;
         const seed = Math.floor(rand() * 1e9);
         if (Math.abs(y - L.streetY) < L.clearance) continue; // ulice a chodníky zůstávají volné
-        items.push({ type, x, y, seed });
+        const item = fitTownItemInFront({ type, x, y, seed }, L, groundLevel);
+        if (item) items.push(item);
     }
     items.sort((a, b) => a.y - b.y);
     townFrontItems = items.filter(item => item.y > L.streetY);
     items.filter(item => item.y <= L.streetY).forEach(item => drawTownItem(item, groundLevel));
+}
+
+// Nejvyšší možná výška stavby daného typu (bez měřítka), viz kreslicí funkce níž
+const TOWN_ITEM_MAX_HEIGHT = { house: 74, derrick: 61, water: 53, shack: 54, tank: 26, tent: 15 }; // vč. komína
+
+// Stavba před ulicí nesmí střechou zasáhnout do chodníku, jinak chodci za ní vypadají,
+// jako by stáli na střeše. Když se nevejde, zkusí se nižší typ (bouda, nádrž, stan).
+function fitTownItemInFront(item, L, groundLevel) {
+    if (item.y <= L.streetY) return item;
+    const room = item.y - L.sidewalkSouth - 3;
+    const s = slabScaleAt(item.y, groundLevel);
+    const candidates = [item.type, 'shack', 'tank', 'tent'];
+    const type = candidates.find(t => TOWN_ITEM_MAX_HEIGHT[t] * s <= room);
+    return type ? { ...item, type } : null;
 }
 
 function drawTownItem(item, groundLevel) {
@@ -2240,8 +2264,11 @@ function drawDerrick(x, y, plotId, isPumping, network) {
     const t = performance.now() / 1000;
     const lit = Math.sign(MOON_X - x) || 1; // strana věže obrácená k měsíci
     const selected = selectedDerrickPlotId === plotId;
+    // Přetlak rozechvěje věž, při erupci se třese nejvíc
+    const pressure = network ? (network.blowout > 0 ? 1.3 : network.pressure || 0) : 0;
+    const shake = pressure > VENT_MIN ? (pressure - VENT_MIN) * 3.5 : 0;
     ctx.save();
-    ctx.translate(x, y);
+    ctx.translate(x + (shake ? (Math.random() - 0.5) * shake : 0), y);
 
     if (network && network.path.length > 0) {
         ctx.strokeStyle = '#1c1714';
@@ -2342,6 +2369,8 @@ function drawDerrick(x, y, plotId, isPumping, network) {
     ctx.fill();
     drawGlow(0, -h - 12, 38, '255, 170, 80', 0.45 * lampOn);
     if (selected) drawGlow(0, -h * 0.5, 90, '255, 200, 90', 0.18);
+    if (network && network.blowout > 0) drawGusherJet(0, -h - 10);
+    else if (pressure >= PRESSURE_WARN) drawGlow(0, -h - 12, 30, '255, 50, 40', 0.4 + 0.3 * Math.sin(t * 10)); // výstražné světlo
 
     // Kývající pumpa vlevo od věže
     const pumpX = -56;
@@ -2405,13 +2434,18 @@ function drawStorageChip(x, y, network) {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, bx + 23, y);
-    if (full) {
+    const pressure = network.pressure || 0;
+    let message = full ? 'PLNO – čeká na auto' : '';
+    if (network.blowout > 0) message = 'ERUPCE!';
+    else if (pressure >= VENT_MIN && network.isPumping) message = 'PŘETLAK – klikni na vrt';
+    if (message) {
         ctx.font = '700 10px system-ui, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillStyle = blink ? '#ff7a6a' : '#ffd0c8';
-        ctx.fillText('PLNO – čeká na auto', x, y - h / 2 - 9);
+        ctx.fillStyle = blink || network.blowout > 0 ? '#ff7a6a' : '#ffd0c8';
+        ctx.fillText(message, x, y - h / 2 - 9);
     }
     ctx.restore();
+    if (pressure > 0.02 || network.blowout > 0) drawPressureGauge(bx - 16, y, network.blowout > 0 ? 1 : pressure);
 }
 
 const SILO_OFFSET_X = 40; // posun prvního sila od středu pozemku
@@ -3092,8 +3126,15 @@ function spawnParticle(particle) {
 function updateParticles(dt) {
     particles.forEach(p => {
         p.age += dt;
+        if (p.gravity) p.vy += p.gravity * dt / 1000;
         p.x += p.vx * dt / 1000;
         p.y += p.vy * dt / 1000;
+        // Kapka ropy dopadla na desku: zmizí a zvětší kaluž na pozemku
+        if (p.type === 'oil' && p.vy > 0 && p.y >= p.groundY) {
+            p.age = p.life;
+            const plot = plots.find(pl => pl.id === p.plotId);
+            if (plot) plot.spill = Math.min(1, (plot.spill || 0) + SPILL_PER_DROP);
+        }
     });
     particles = particles.filter(p => p.age < p.life);
 }
@@ -3106,6 +3147,16 @@ function drawParticles() {
             ctx.fillStyle = `rgba(${p.shade}, ${p.shade}, ${p.shade}, ${0.45 * (1 - t)})`;
             ctx.beginPath();
             ctx.arc(p.x, p.y, p.size * (1 + t * 1.5), 0, Math.PI * 2);
+            ctx.fill();
+        } else if (p.type === 'oil') {
+            // Kapka ropy nasvícená lampou věže zespodu
+            ctx.fillStyle = '#140c08';
+            ctx.beginPath();
+            ctx.ellipse(p.x, p.y, p.size * 0.8, p.size * 1.2, Math.atan2(p.vy, p.vx) + Math.PI / 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 160, 80, 0.55)';
+            ctx.beginPath();
+            ctx.arc(p.x + p.size * 0.3, p.y + p.size * 0.4, p.size * 0.35, 0, Math.PI * 2);
             ctx.fill();
         } else if (p.type === 'text') {
             ctx.globalAlpha = 1 - t * t;
@@ -3261,6 +3312,29 @@ const SOUNDS = {
         playThump(ac, out, at, 240, 110, 0.09, 0.3);
         playNoise(ac, out, at, { duration: 0.05, volume: 0.18, type: 'lowpass', freq: 1400 });
         playThump(ac, out, at + 0.1, 200, 95, 0.08, 0.22);
+    },
+    warn(ac, out, at) { // dvoutónová houkačka
+        [[740, 0], [554, 0.16], [740, 0.32], [554, 0.48]].forEach(([f, d]) => {
+            const osc = ac.createOscillator();
+            const amp = ac.createGain();
+            osc.type = 'triangle';
+            osc.frequency.value = f;
+            amp.gain.setValueAtTime(0.0001, at + d);
+            amp.gain.exponentialRampToValueAtTime(0.12, at + d + 0.02);
+            amp.gain.exponentialRampToValueAtTime(0.0001, at + d + 0.15);
+            osc.connect(amp).connect(out);
+            osc.start(at + d);
+            osc.stop(at + d + 0.17);
+        });
+    },
+    vent(ac, out, at) { // syčení páry, klesá
+        playNoise(ac, out, at, { duration: 1.2, volume: 0.22, type: 'highpass', freq: 5000, sweepTo: 1500, q: 0.7 });
+        playThump(ac, out, at, 300, 180, 0.08, 0.15);
+    },
+    gush(ac, out, at) { // erupce: dunění a dlouhý šum proudu
+        playThump(ac, out, at, 90, 35, 0.9, 0.5);
+        playNoise(ac, out, at, { duration: 2.2, volume: 0.3, type: 'lowpass', freq: 700, sweepTo: 250 });
+        playNoise(ac, out, at + 0.1, { duration: 1.6, volume: 0.12, type: 'bandpass', freq: 1400, q: 0.8 });
     },
     boom(ac, out, at) {
         playThump(ac, out, at, 120, 32, 0.7, 0.5);
@@ -4019,11 +4093,208 @@ function handlePipePlacementClick(clickPos, groundLevel) {
 function handleDefaultClick(plot) {
     if (plot && plot.owner === 'player' && plot.hasVrt) {
         const network = pipeNetworks.find(n => n.derrickId === plot.id);
+        if (network && canVentRig(network)) {
+            ventRig(network);
+            return;
+        }
         if (!network || !network.isPumping) {
             selectedDerrickPlotId = plot.id;
             updateUI();
         }
     }
+}
+
+// --- Přetlak a erupce vrtu ---
+// Čerpající vrt s plným zásobníkem dál tlačí ropu z ložiska a roste tlak (manometr nad vrtem).
+// Od VENT_MIN jde kliknutím na vrt odpustit ventil (pára, tlak spadne na nulu). Při 100 % vrt
+// vybuchne gejzírem: ropa z ložiska letí do vzduchu, dělá na pozemku kaluž a platí se pokuta.
+const PRESSURE_BUILD_MS = 20000;      // od 0 do 100 % při plném zásobníku (herní čas, 2 dny)
+const PRESSURE_RELIEF_MS = 5000;      // pokles ze 100 % na 0, jakmile má zásobník místo
+const VENT_MIN = 0.3;                 // od tohoto tlaku jde ventil odpustit
+const PRESSURE_WARN = 0.6;            // siréna a oznámení
+const PRESSURE_AFTER_BLOWOUT = 0.35;
+const VENT_MS = 1600;
+const BLOWOUT_MS = 4500;
+const BLOWOUT_WASTE_PER_SECOND = 40;  // barelů z ložiska do vzduchu
+const BLOWOUT_FINE = 250;
+const SPILL_PER_DROP = 0.0008;     // jedna erupce udělá zhruba dvoutřetinovou kaluž
+const SPILL_FADE_MS = 40000;          // kaluž zmizí asi za 4 herní dny
+
+function getRigTopY() {
+    return getGroundLevel() - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT - 12;
+}
+
+function canVentRig(network) {
+    return network.isPumping && !network.blowout && (network.pressure || 0) >= VENT_MIN;
+}
+
+function ventRig(network) {
+    network.pressure = 0;
+    network.vent = VENT_MS;
+    network.warned = false;
+    playSound('vent');
+    logEvent(`Ventil odpuštěn na pozemku ${network.derrickId + 1}.`);
+}
+
+function startBlowout(network) {
+    network.blowout = BLOWOUT_MS;
+    money -= BLOWOUT_FINE;
+    shakeCamera(12);
+    playSound('gush');
+    notify('Erupce ropy!', `Vrt na pozemku ${network.derrickId + 1}: únik a pokuta $${BLOWOUT_FINE}`, 'bad', '🌋');
+}
+
+function updateRigPressure(dt) {
+    pipeNetworks.forEach(network => {
+        if (network.derrickId < 0) return;
+        const x = getNetworkPickupX(network);
+        if (network.blowout > 0) {
+            network.blowout -= dt;
+            const pocket = network.connectedPocket;
+            if (pocket) pocket.oil = Math.max(0, pocket.oil - BLOWOUT_WASTE_PER_SECOND * dt / 1000);
+            emitGusher(network, x, dt);
+            if (network.blowout <= 0) {
+                network.blowout = 0;
+                network.pressure = PRESSURE_AFTER_BLOWOUT;
+            }
+            return;
+        }
+        if (network.vent > 0) {
+            network.vent -= dt;
+            emitSteam(x, dt, 1);
+        }
+        const pressure = network.pressure || 0;
+        const full = network.isPumping && network.oilStored >= network.oilCapacity - 0.01;
+        network.pressure = full
+            ? Math.min(1, pressure + dt / PRESSURE_BUILD_MS)
+            : Math.max(0, pressure - dt / PRESSURE_RELIEF_MS);
+        if (network.pressure >= PRESSURE_WARN && !network.warned) {
+            network.warned = true;
+            playSound('warn');
+            notify('Přetlak na vrtu!', `Pozemek ${network.derrickId + 1}: odvez ropu, nebo klikni na vrt a odpusť ventil`, 'bad', '⚠️');
+        }
+        if (network.pressure < VENT_MIN) network.warned = false;
+        if (network.pressure > 0.45) emitSteam(x, dt, (network.pressure - 0.45) * 0.4); // syčící ventily
+        if (network.pressure >= 1) startBlowout(network);
+    });
+    plots.forEach(plot => {
+        if (plot.spill > 0) plot.spill = Math.max(0, plot.spill - dt / SPILL_FADE_MS);
+    });
+}
+
+// Pára z ventilů u paty vrtu; intensity 1 = odpouštění, menší = syčení při přetlaku
+function emitSteam(x, dt, intensity) {
+    const baseY = getGroundLevel() - STRUCTURE_BASE_OFFSET;
+    const count = Math.random() < (dt / 16) * intensity ? 1 + Math.floor(intensity * 2) : 0;
+    for (let i = 0; i < count; i++) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        spawnParticle({
+            type: 'puff', x: x + side * 10, y: baseY - 8 - Math.random() * 6,
+            vx: side * (40 + Math.random() * 60) * intensity, vy: -20 - Math.random() * 50,
+            age: 0, life: 900 + Math.random() * 500, size: 3 + Math.random() * 3, shade: 225
+        });
+    }
+}
+
+// Gejzír z korunky věže: kapky ropy s gravitací dopadají kolem vrtu
+function emitGusher(network, x, dt) {
+    const baseY = getGroundLevel() - STRUCTURE_BASE_OFFSET;
+    const count = Math.max(1, Math.round(dt / 16 * 3));
+    for (let i = 0; i < count; i++) {
+        spawnParticle({
+            type: 'oil', x: x + (Math.random() - 0.5) * 6, y: getRigTopY(),
+            vx: (Math.random() - 0.5) * 180, vy: -230 - Math.random() * 110,
+            gravity: 520, groundY: baseY - 4 + Math.random() * 14, plotId: network.derrickId,
+            age: 0, life: 3000, size: 1.6 + Math.random() * 2.2
+        });
+    }
+}
+
+// Sloup ropy nad korunkou během erupce (kapky dělají částice, tohle je hustý střed proudu)
+function drawGusherJet(x, topY) {
+    const t = performance.now() / 1000;
+    const height = 70 + Math.sin(t * 9) * 8;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x - 4, topY);
+    for (let k = 0; k <= 10; k++) {
+        const yy = topY - height * k / 10;
+        ctx.lineTo(x - 4 - k * 1.2 + Math.sin(t * 14 + k) * 2, yy);
+    }
+    for (let k = 10; k >= 0; k--) {
+        const yy = topY - height * k / 10;
+        ctx.lineTo(x + 4 + k * 1.2 + Math.sin(t * 12 + k * 1.3) * 2, yy);
+    }
+    ctx.closePath();
+    const jet = ctx.createLinearGradient(0, topY, 0, topY - height);
+    jet.addColorStop(0, 'rgba(20, 12, 8, 0.95)');
+    jet.addColorStop(1, 'rgba(20, 12, 8, 0)');
+    ctx.fillStyle = jet;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 160, 80, 0.35)'; // odlesk lampy na proudu
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Kaluž ropy na desce kolem vrtu: lesklá, odráží měsíc a lampu
+function drawSpill(plot, groundLevel) {
+    if (!(plot.spill > 0.01)) return;
+    const cx = plot.x + plotWidth / 2;
+    const cy = groundLevel - STRUCTURE_BASE_OFFSET + 6;
+    const k = plot.spill;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, k * 3);
+    ctx.fillStyle = '#070509';
+    [[-10, 0, 1], [18, 3, 0.7], [-34, 2, 0.55]].forEach(([dx, dy, f]) => {
+        ctx.beginPath();
+        ctx.ellipse(cx + dx * (0.5 + k), cy + dy, (24 + 60 * k) * f, (5 + 8 * k) * f, 0, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.strokeStyle = 'rgba(170, 190, 255, 0.28)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(cx + 6, cy - 1, 14 + 30 * k, 2 + 3 * k, 0, Math.PI * 1.1, Math.PI * 1.7);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 170, 90, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(cx - 4, cy + 2, 4 + 6 * k, 1.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
+
+// Manometr vedle štítku zásobníku: ručička 0–100 %, červené pole od PRESSURE_WARN
+function drawPressureGauge(x, y, pressure) {
+    const r = 11;
+    const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25;
+    ctx.save();
+    ctx.fillStyle = 'rgba(14, 14, 24, 0.9)';
+    ctx.beginPath();
+    ctx.arc(x, y, r + 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.beginPath();
+    ctx.arc(x, y, r - 2, a0, a1);
+    ctx.stroke();
+    ctx.strokeStyle = '#ff5a4a';
+    ctx.beginPath();
+    ctx.arc(x, y, r - 2, a0 + (a1 - a0) * PRESSURE_WARN, a1);
+    ctx.stroke();
+    const shake = pressure > PRESSURE_WARN ? Math.sin(performance.now() / 30) * 0.06 : 0;
+    const a = a0 + (a1 - a0) * Math.min(1, pressure) + shake;
+    ctx.strokeStyle = pressure >= PRESSURE_WARN ? '#ff7a6a' : '#ffd36b';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(a) * (r - 3), y + Math.sin(a) * (r - 3));
+    ctx.stroke();
+    ctx.fillStyle = '#fff2df';
+    ctx.beginPath();
+    ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    if (pressure >= PRESSURE_WARN) drawGlow(x, y, 22, '255, 70, 50', 0.35 + 0.25 * Math.sin(performance.now() / 120));
 }
 
 // --- Průzkumné nástroje: seismika, dron, georadar ---
