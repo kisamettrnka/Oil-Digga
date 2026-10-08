@@ -4,6 +4,9 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Kamera v nouzi
+- Při přetlaku, plynovém kopanci a erupci na vlastním vrtu kamera na vrt najede a po 7 s se vrátí, pokud s ní hráč mezitím nehnul. V Předvolbách jde vypnout (Kamera: Zůstane).
+
 ### Průvodce první hrou
 - Nová sólo hra vede hráče desíti radami na lístku pod lištou zdrojů: claim, vrt, trasa vrtu, preventer a korunka, povoz, kupci a sklady, tlak, zakázky, mapa, éry. Tlačítko, o kterém je řeč, pulzuje. Průvodce jde přeskočit, po dokončení se už neukáže, v Předvolbách jde vypnout.
 

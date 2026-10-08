@@ -93,12 +93,13 @@ const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
 // Předvolby hráče: patří jen tomuto prohlížeči, svět hry nikdy nemění
 const PREFS_KEY = 'oilDiggaPrefs';
-const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true, guide: true };
+const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true, guide: true, focus: true };
 const PREF_FIELDS = [
     { key: 'sound', label: 'Zvuk', options: [[true, 'Zapnutý'], [false, 'Vypnutý', 'klávesa M']] },
     { key: 'volume', label: 'Hlasitost', options: [[0.25, 'Tichá'], [0.5, 'Střední'], [0.85, 'Hlasitá']] },
     { key: 'shake', label: 'Otřesy', options: [[true, 'Ano', 'erupce a výbuchy třesou obrazem'], [false, 'Ne']] },
     { key: 'life', label: 'Život', options: [[true, 'Plný', 'chodci, provoz, letadla, ohňostroje'], [false, 'Úsporný', 'klidné město, méně kouře, šetří výkon']] },
+    { key: 'focus', label: 'Kamera', options: [[true, 'Najede na vrt', 'při přetlaku, kopanci a erupci, po chvíli se vrátí'], [false, 'Zůstane']] },
     { key: 'guide', label: 'Průvodce', options: [[true, 'Ano', 'rady krok za krokem v nové sólo hře'], [false, 'Ne']] },
     { key: 'newsFlash', label: 'Noviny', options: [[true, 'Zvláštní vydání', 'přes obrazovku'], [false, 'Telegramem', 'krátce v rohu']] },
     { key: 'ads', label: 'Reklamy', options: [[true, 'Zobrazovat'], [false, 'Skrýt']], visible: () => adsAvailable() }
@@ -409,6 +410,7 @@ function handleWorldEvents(events) {
             }
             case 'kick':
                 if (!mine) break;
+                focusCameraOnPlot(e.plotId);
                 shakeCamera(7);
                 playSound('warn');
                 notify('Plynový kopanec!', `Pozemek ${e.plotId + 1}: klikni na vrt a zavři preventer, máš ${Math.round(KICK_MS / 1000)} s`, 'bad', 'warning');
@@ -462,11 +464,13 @@ function handleWorldEvents(events) {
                 break;
             case 'warn':
                 if (!mine) break;
+                focusCameraOnPlot(e.plotId);
                 playSound('warn');
                 notify('Přetlak na vrtu!', `Pozemek ${e.plotId + 1}: odvez ropu, nebo klikni na vrt a odpusť ventil`, 'bad', 'warning');
                 break;
             case 'blowout':
                 if (!mine) break;
+                focusCameraOnPlot(e.plotId);
                 shakeCamera(12);
                 playSound('gush');
                 if (e.kick) notify('Plyn vyrazil z vrtu!', `Pozemek ${e.plotId + 1}: pokuta $${e.fine}, korunka zničená`, 'bad', 'blowout');
@@ -1163,6 +1167,7 @@ function clampCamera(alsoCurrent = false) {
 
 // Přiblíží kolem bodu (px, py) v pixelech plátna, bod pod kurzorem zůstane na místě
 function zoomCameraAt(px, py, factor) {
+    cameraTouched();
     const worldX = camera.tx + px / camera.tzoom;
     const worldY = camera.ty + py / camera.tzoom;
     camera.tzoom = Math.max(1, Math.min(CAMERA_MAX_ZOOM, camera.tzoom * factor));
@@ -1172,6 +1177,7 @@ function zoomCameraAt(px, py, factor) {
 }
 
 function resetCamera(instant = false) {
+    cameraFocus = null;
     camera.tx = camera.ty = 0;
     camera.tzoom = 1;
     if (instant) {
@@ -1179,6 +1185,31 @@ function resetCamera(instant = false) {
         camera.zoom = 1;
         camera.shake = 0;
     }
+}
+
+// Nouze na vrtu: kamera na něj najede a po chvíli se vrátí, pokud hráč mezitím kamerou nehnul
+const FOCUS_ZOOM = 1.7;
+const FOCUS_HOLD_MS = 7000;
+let cameraFocus = null; // { until, back: { tx, ty, tzoom } }
+
+function focusCameraOn(x, y) {
+    if (!prefs.focus || mapOpen || dragState) return;
+    if (!cameraFocus) cameraFocus = { back: { tx: camera.tx, ty: camera.ty, tzoom: camera.tzoom } };
+    cameraFocus.until = performance.now() + FOCUS_HOLD_MS;
+    camera.tzoom = Math.max(camera.tzoom, FOCUS_ZOOM);
+    camera.tx = x - canvas.width / (2 * camera.tzoom);
+    camera.ty = y - canvas.height / (2 * camera.tzoom);
+    clampCamera();
+}
+
+function focusCameraOnPlot(plotId) {
+    const plot = plots.find(p => p.id === plotId);
+    if (plot) focusCameraOn(plot.x + plot.width / 2, getGroundLevel() - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT / 2);
+}
+
+// Hráč sáhl na kameru: nouzový nájezd se už nevrací sám
+function cameraTouched() {
+    cameraFocus = null;
 }
 
 function shakeCamera(strength) {
@@ -1192,6 +1223,11 @@ function updateCamera(frameMs) {
     camera.x += (camera.tx - camera.x) * k;
     camera.y += (camera.ty - camera.y) * k;
     if (Math.abs(camera.tzoom - camera.zoom) < 0.001) camera.zoom = camera.tzoom;
+    if (cameraFocus && performance.now() > cameraFocus.until) { // nouze pominula: zpátky, odkud kamera přijela
+        Object.assign(camera, cameraFocus.back);
+        cameraFocus = null;
+        clampCamera();
+    }
     clampCamera(true);
     camera.shake *= Math.exp(-frameMs / 120);
     if (camera.shake < 0.2) camera.shake = 0;
@@ -1216,6 +1252,7 @@ function handleCameraKey(event) {
         case '0': resetCamera(); return;
         default: return;
     }
+    cameraTouched();
     event.preventDefault();
     clampCamera();
 }
@@ -6118,6 +6155,7 @@ function addEventListeners() {
             const dy = pos.py - dragState.py;
             if (!dragState.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD && camera.tzoom > 1.01) dragState.moved = true;
             if (dragState.moved) {
+                cameraTouched();
                 camera.tx = camera.x = dragState.camX - dx / camera.zoom;
                 camera.ty = camera.y = dragState.camY - dy / camera.zoom;
                 clampCamera(true);
