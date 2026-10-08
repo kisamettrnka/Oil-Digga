@@ -24,7 +24,18 @@ function addEventListeners() {
     document.getElementById('perks-btn')?.addEventListener('click', () => togglePerks());
     document.getElementById('perks-close')?.addEventListener('click', () => togglePerks(false));
     document.getElementById('perks-list')?.addEventListener('click', handlePerksClick);
-    document.getElementById('yearend-again')?.addEventListener('click', () => restartGame());
+    document.getElementById('yearend-again')?.addEventListener('click', () => { startMusic(); restartGame(); });
+    document.getElementById('yearend-menu')?.addEventListener('click', () => { hideYearEnd(); openMenu(); });
+    document.getElementById('menu-btn')?.addEventListener('click', () => openMenu());
+    document.getElementById('menu-solo')?.addEventListener('click', menuSolo);
+    document.getElementById('menu-multi')?.addEventListener('click', menuMulti);
+    document.getElementById('menu-prefs')?.addEventListener('click', () => { startMusic(); togglePrefs(true); });
+    document.getElementById('menu-guide')?.addEventListener('click', () => {
+        setPref('guide', true);
+        try { localStorage.removeItem(GUIDE_KEY); } catch (e) { /* bez úložiště */ }
+        menuSolo();
+        resetGuide();
+    });
     document.getElementById('hud-goals')?.addEventListener('click', event => {
         if (event.target.closest('#end-year-btn')) doAction({ type: 'endYear' });
     });
@@ -144,6 +155,7 @@ function addEventListeners() {
         if (event.key === 'o' || event.key === 'O') togglePrefs();
         if (event.key === 'Escape') {
             if (!document.getElementById('prefs')?.classList.contains('hidden')) togglePrefs(false);
+            else if (menuOpen) closeMenu();
             else if (perksOpen) togglePerks(false);
             else if (mapOpen) toggleSurveyMap(false);
             else cancelBuildMode();

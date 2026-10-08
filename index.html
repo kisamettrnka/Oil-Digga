@@ -66,6 +66,7 @@
 
             <!-- Vpravo nahoře: kamera, zvuk a předvolby -->
             <div id="hud-corner">
+                <button id="menu-btn" class="hud-icon-btn" title="Hlavní menu (Esc)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
                 <button id="lobby-btn" class="hud-icon-btn hidden" title="Zpět do lobby"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15.5 14.2c3 .2 5.5 2.5 5.5 5.8"/></svg></button>
                 <button id="players-btn" class="hud-icon-btn hidden" title="Soupeři (P)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="9" r="2.4"/><path d="M2 20c0-3.3 2.7-6 6-6s6 2.7 6 6M14.5 14.2c3 .2 5.5 2.5 5.5 5.8"/><path d="M19 4l2 2-2 2"/></svg></button>
                 <button id="map-btn" class="hud-icon-btn" title="Mapa geologického průzkumu (G)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2V6Z"/><path d="M9 4v14M15 6v14"/><path d="M5 12c2-1.5 3 1 5-.5s3 .5 5-1 3 .5 5-1"/></svg></button>
@@ -207,6 +208,23 @@
                     <div class="board-actions"><button id="prefs-close" class="stamp-btn">Hotovo</button></div>
                 </section>
             </div>
+            <!-- Hlavní menu: plakát přes scénu (js/core.js openMenu). Za ním žije město, hraje hudba -->
+            <div id="menu" class="overlay menu hidden">
+                <div class="poster">
+                    <div class="poster-top">Pozemkový úřad vyhlašuje</div>
+                    <h1 class="poster-title">Oil digga</h1>
+                    <div class="poster-sub">Ropná horečka v noční poušti · vrtej, obchoduj, rozsviť město</div>
+                    <div class="poster-buttons">
+                        <button id="menu-solo" class="stamp-btn start">Hrát sám</button>
+                        <button id="menu-multi" class="stamp-btn">Multiplayer</button>
+                    </div>
+                    <div class="poster-links">
+                        <button id="menu-guide" class="tag-btn">Jak se hraje</button>
+                        <button id="menu-prefs" class="tag-btn">Předvolby</button>
+                    </div>
+                    <div id="menu-note" class="fine-print"></div>
+                </div>
+            </div>
             <!-- Konec roku (sólo): výroční vydání novin s hodnocením, čísly a grafy (js/hud.js renderYearEnd) -->
             <div id="year-end" class="overlay dim hidden">
                 <div class="newspaper results-paper yearend-paper">
@@ -222,7 +240,7 @@
                     </div>
                     <div class="np-footer">
                         <button id="yearend-again" class="stamp-btn start">Hrát znovu</button>
-                        <button id="yearend-menu" class="tag-btn hidden">Hlavní menu</button>
+                        <button id="yearend-menu" class="tag-btn">Hlavní menu</button>
                     </div>
                 </div>
             </div>

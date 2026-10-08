@@ -4,6 +4,10 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Hlavní menu a hudba
+- Hra začíná plakátem na vývěsce: Hrát sám, Multiplayer (v Discordu nebo přes server), Jak se hraje (spustí průvodce), Předvolby. Za plakátem žije město. Menu jde otevřít tlačítkem vpravo nahoře, Esc ho zavře; sólo hra pod ním stojí.
+- Tichá noční hudba: hluboký pad a občasné brnknutí v pentatonice, generované bez souborů. Vypíná se v Předvolbách (Hudba), hlasitost sdílí se zvuky.
+
 ### Konec roku a pozdní hra
 - Konec roku i bankrot ukazuje výroční vydání Pouštního kurýra: hvězdy a titul (Hledač štěstí až Král ropy), účetní uzávěrku, graf kapitálu během roku, graf tržeb po kupcích a rozpis skóre. Hodnocení běží i během hry v knize cílů.
 - V poslední éře města jde rok uzavřít dřív tlačítkem v knize cílů. Zakázky tam chodí častěji a jsou o 60 % větší, ať má konec roku tah.

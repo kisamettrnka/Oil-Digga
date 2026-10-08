@@ -105,9 +105,10 @@ const MAX_PARTICLES = 450; // gejzír při erupci jich potřebuje hodně
 let particles = [];
 // Předvolby hráče: patří jen tomuto prohlížeči, svět hry nikdy nemění
 const PREFS_KEY = 'oilDiggaPrefs';
-const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true, guide: true, focus: true };
+const DEFAULT_PREFS = { sound: true, volume: 0.5, shake: true, life: true, newsFlash: true, ads: true, guide: true, focus: true, music: true };
 const PREF_FIELDS = [
     { key: 'sound', label: 'Zvuk', options: [[true, 'Zapnutý'], [false, 'Vypnutý', 'klávesa M']] },
+    { key: 'music', label: 'Hudba', options: [[true, 'Hraje', 'tichá noční kulisa'], [false, 'Ticho']] },
     { key: 'volume', label: 'Hlasitost', options: [[0.25, 'Tichá'], [0.5, 'Střední'], [0.85, 'Hlasitá']] },
     { key: 'shake', label: 'Otřesy', options: [[true, 'Ano', 'erupce a výbuchy třesou obrazem'], [false, 'Ne']] },
     { key: 'life', label: 'Život', options: [[true, 'Plný', 'chodci, provoz, letadla, ohňostroje'], [false, 'Úsporný', 'klidné město, méně kouře, šetří výkon']] },
@@ -173,6 +174,7 @@ function initializeGame() {
     // Kreslicí smyčka běží hned (hover, kurzor, blikání), herní čas teče až po koupi pozemku
     lastTime = performance.now();
     requestAnimationFrame(gameLoop);
+    openMenu();
     console.log("Hra čeká na koupi pozemku.");
 }
 
@@ -652,7 +654,8 @@ function setPref(key, value) {
         // Bez úložiště platí předvolby jen do zavření hry
     }
     if (key === 'sound') updateSoundButton();
-    if (key === 'volume') playSound('sale'); // ukázka nové hlasitosti
+    if (key === 'volume') { playSound('sale'); setMusicVolume(); } // ukázka nové hlasitosti
+    if (key === 'music') { if (value) startMusic(); else stopMusic(); }
     if (key === 'ads') blimpAd = undefined; // vzducholoď si reklamu vylosuje znovu (nebo poletí bez ní)
     renderPrefs();
 }
@@ -873,6 +876,48 @@ function drawGameOverLegacy() {
     canvas.style.cursor = hovered ? 'pointer' : 'default';
 }
 
+
+// --- Hlavní menu ---
+// Plakát přes scénu při startu a na vyžádání; sólo hra pod ním stojí, hra na serveru běží dál.
+// Multiplayer vede do lobby (jen když běží server a hráč je v místnosti).
+let menuOpen = false;
+
+function openMenu() {
+    menuOpen = true;
+    document.getElementById('menu')?.classList.remove('hidden');
+    document.getElementById('stage')?.classList.add('menu-open');
+    if (!sharedMode && !raceMode) isPaused = true;
+    const online = typeof Net !== 'undefined' && Net.canLobby();
+    const multi = document.getElementById('menu-multi');
+    if (multi) multi.disabled = !online;
+    const note = document.getElementById('menu-note');
+    if (note) note.textContent = online ? 'Multiplayer: závod na stejné mapě, nebo jedna sdílená mapa pro všechny v místnosti.' : 'Multiplayer jde jen v Discordu, nebo přes vlastní server (viz README).';
+    uiDirty = true;
+}
+
+function closeMenu() {
+    menuOpen = false;
+    document.getElementById('menu')?.classList.add('hidden');
+    document.getElementById('stage')?.classList.remove('menu-open');
+    if (!sharedMode && !raceMode) isPaused = false;
+    uiDirty = true;
+}
+
+// Hudba smí začít až po prvním kliknutí (autoplay); menu je první klik
+function menuSolo() {
+    startMusic();
+    if (isGameOver) restartGame(null);
+    closeMenu();
+    if (typeof Net !== 'undefined' && Net.canLobby()) Net.playSolo();
+}
+
+function menuMulti() {
+    startMusic();
+    if (typeof Net === 'undefined' || !Net.canLobby()) return;
+    if (isGameOver) hideYearEnd();
+    closeMenu();
+    Net.openLobby();
+}
 
 // --- Spuštění při načtení stránky ---
 document.addEventListener('DOMContentLoaded', () => {

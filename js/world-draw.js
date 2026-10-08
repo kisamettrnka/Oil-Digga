@@ -1647,6 +1647,84 @@ const SOUNDS = {
     }
 };
 
+// --- Hudba: tichá noční kulisa z WebAudia (bez souborů) ---
+// Hluboký pad ze dvou rozladěných trojúhelníků přes dolní propust s pomalým LFO a občas
+// brnknutí v mollové pentatonice (playBell). Startuje až po prvním kliknutí (autoplay).
+const MUSIC_LEVEL = 0.32;
+const MUSIC_NOTES = [220, 261.63, 293.66, 329.63, 392, 440, 523.25];
+let music = null;
+
+function musicGain() {
+    return prefs.music ? prefs.volume * MUSIC_LEVEL : 0;
+}
+
+function setMusicVolume() {
+    if (!music) return;
+    music.out.gain.setTargetAtTime(musicGain(), music.ac.currentTime, 0.4);
+}
+
+function startMusic() {
+    if (music || !prefs.music) return;
+    try {
+        const ac = getAudioContext();
+        if (!ac) return;
+        if (ac.state === 'suspended') ac.resume().catch(() => { });
+        const out = ac.createGain();
+        out.gain.value = 0;
+        out.connect(ac.destination);
+        const filter = ac.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 420;
+        filter.Q.value = 0.7;
+        filter.connect(out);
+        const lfo = ac.createOscillator();
+        lfo.frequency.value = 0.05;
+        const lfoGain = ac.createGain();
+        lfoGain.gain.value = 160;
+        lfo.connect(lfoGain);
+        lfoGain.connect(filter.frequency);
+        lfo.start();
+        const oscs = [[55, 'triangle', 0.5, 0], [82.41, 'triangle', 0.3, 5], [110, 'sine', 0.25, -4]].map(([freq, type, gain, detune]) => {
+            const o = ac.createOscillator();
+            o.type = type;
+            o.frequency.value = freq;
+            o.detune.value = detune;
+            const g = ac.createGain();
+            g.gain.value = gain;
+            o.connect(g);
+            g.connect(filter);
+            o.start();
+            return o;
+        });
+        oscs.push(lfo);
+        out.gain.setTargetAtTime(musicGain(), ac.currentTime, 2);
+        // Brnknutí: každé 2–5 s, s pauzou po dvou tónech ať to nezní jako hodiny
+        let step = 0;
+        const pluck = () => {
+            if (!music) return;
+            if (prefs.music && prefs.volume > 0 && Math.random() < 0.75) {
+                const note = MUSIC_NOTES[Math.floor(Math.random() * MUSIC_NOTES.length)];
+                playBell(ac, out, ac.currentTime + 0.02, note, 0.18, 2.2);
+                if (Math.random() < 0.35) playBell(ac, out, ac.currentTime + 0.35, note * 1.5, 0.1, 1.6);
+            }
+            step++;
+            music.timer = setTimeout(pluck, 2000 + Math.random() * 3000 + (step % 3 === 0 ? 2500 : 0));
+        };
+        music = { ac, out, oscs, timer: setTimeout(pluck, 1500) };
+    } catch (e) {
+        // Bez WebAudia hra hraje potichu
+    }
+}
+
+function stopMusic() {
+    if (!music) return;
+    const { ac, out, oscs, timer } = music;
+    clearTimeout(timer);
+    out.gain.setTargetAtTime(0, ac.currentTime, 0.5);
+    setTimeout(() => { oscs.forEach(o => { try { o.stop(); } catch (e) { /* už stojí */ } }); out.disconnect(); }, 1500);
+    music = null;
+}
+
 function playSound(kind) {
     if (!prefs.sound || !SOUNDS[kind]) return;
     if (kind === 'sale') {

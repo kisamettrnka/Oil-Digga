@@ -139,12 +139,19 @@ const Net = (() => {
         return room?.players.find(p => p.id === youId) || null;
     }
 
+    let wantSolo = false; // hráč zvolil sólo v menu dřív, než přišel stav místnosti
+
     function onState(msg) {
         const firstState = !room;
         room = msg.room;
         youId = msg.you;
         const player = me();
         if (!player) return;
+        if (wantSolo && room.phase === 'lobby' && player.status !== 'solo') {
+            wantSolo = false;
+            sendMsg({ type: 'solo' });
+            player.status = 'solo';
+        }
 
         // Divák: hra skončila, výsledky se vrátí
         if (spectating && room.phase === 'finished') {
@@ -158,11 +165,13 @@ const Net = (() => {
         } else if (firstState || mode === 'offline') {
             // Po (znovu)připojení: rozjetý závod po výpadku pokračuje, jinak lobby
             if (player.status === 'racing' && raceId === room.raceId) setMode('race');
-            else if (player.status === 'solo') setMode('solo');
+            else if (player.status === 'solo' || wantSolo) setMode('solo');
             else setMode('lobby');
         }
         render();
         updatePresence();
+        // Otevřené hlavní menu: po příchodu stavu místnosti se odemkne Multiplayer
+        if (typeof menuOpen !== 'undefined' && menuOpen && typeof openMenu === 'function') openMenu();
     }
 
     // Server ukončil závod: zbyl jsi poslední (ostatní zkrachovali/odpadli), nebo vypršel čas
@@ -530,9 +539,29 @@ const Net = (() => {
         else window.open(url, '_blank', 'noopener');
     }
 
+    // Hlavní menu (js/core.js): je kam jít do lobby? sólo z menu, lobby z menu
+    function canLobby() {
+        return !!room && !authFailed;
+    }
+
+    function playSolo() {
+        if (!room) { wantSolo = true; return; }
+        sendMsg({ type: 'solo' });
+        if (typeof restartGame === 'function' && !(typeof isGameOver !== 'undefined' && !isGameOver && typeof isGameStarted !== 'undefined' && isGameStarted)) restartGame(null);
+        setMode('solo');
+    }
+
+    function openLobby() {
+        if (!room) return;
+        if (mode === 'solo' || mode === 'offline') sendMsg({ type: 'lobby' });
+        if (room.phase !== 'lobby' && me()?.status === 'racing') setMode('race');
+        else setMode('lobby');
+    }
+
     return {
         isRacing: () => !!raceMode,
         mode: () => mode,
+        canLobby, playSolo, openLobby,
         sendAction,
         openLink
     };
