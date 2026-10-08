@@ -10,5 +10,10 @@
   "enabledPlugins": {
     "explanatory-output-style@claude-plugins-official": false,
     "learning-output-style@claude-plugins-official": false
-  }
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false
 }
