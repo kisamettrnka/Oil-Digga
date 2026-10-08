@@ -4,6 +4,11 @@ Co se ve hře změnilo, z pohledu hráče. Každá novinka má záznam ve stejn�
 
 ## Nevydáno
 
+### Ostré plátno, větší ceníky, Soupeři na tlačítko
+- Plátno se kreslí v rozlišení obrazovky (i na retině), takže scéna, cedule a ceníky už nejsou rozmazané.
+- Ceníky kupců jsou větší a čitelnější.
+- Panel Soupeři na sdílené mapě se otevírá tlačítkem vpravo nahoře nebo klávesou P, aby nezakrýval vrty.
+
 ### Ubývání ložiska
 - Ložisko je dutina ve skále s hladinou ropy, která s těžbou klesá ode stropu ke dnu (s ryskami po čtvrtinách); vyčerpané zůstane prázdná tmavá dutina. Cedulka ložiska má ukazatel zbytku, pod čtvrtinou červený.
 

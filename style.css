@@ -1700,10 +1700,21 @@ button:disabled {
     font-size: 1em;
 }
 #hud-players .pl-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
     font-family: 'Rye', Georgia, serif;
     font-size: 1.05em;
     padding-bottom: 0.25em;
     border-bottom: 1px solid rgba(26, 18, 11, 0.45);
+}
+#hud-players .rig-close {
+    border: none;
+    background: none;
+    font: 700 1.1em 'Courier Prime', monospace;
+    color: var(--ink-soft);
+    cursor: pointer;
+    padding: 0 0.2em;
 }
 #hud-players .pl-row {
     padding: 0.4em 0 0.35em;
