@@ -1,617 +1,507 @@
 /* --- Základní nastavení --- */
+:root {
+    --hud-bg: rgba(12, 12, 20, 0.82);
+    --hud-bg-solid: rgba(12, 12, 20, 0.92);
+    --hud-border: rgba(190, 200, 240, 0.14);
+    --hud-text: #f1ece6;
+    --hud-muted: rgba(220, 220, 235, 0.6);
+    --hud-accent: #ffb45a;
+    --hud-gold: #ffd36b;
+    --hud-cool: #9fb4ff;
+    --hud-good: #6ee39a;
+    --hud-bad: #ff7a6a;
+}
+
 body, html {
     width: 100%;
     height: 100%;
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    font-family: 'Verdana', sans-serif;
-    background-color: #333; /* Tmavé pozadí pro případ, že by se hra nenačetla */
-    color: #ffffff;
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background-color: #050508; /* Tmavé pozadí pro případ, že by se hra nenačetla */
+    color: var(--hud-text);
     overflow: hidden;
+}
+
+*, *::before, *::after {
+    box-sizing: inherit;
 }
 
 #game-wrapper {
+    position: fixed;
+    inset: 0;
     display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    height: 100vh;
-    background-color: #000;
-}
-
-/* --- Horní lišta --- */
-#top-bar {
-    display: flex;
+    align-items: center;
     justify-content: center;
-    align-items: center;
-    background-image: url('https://www.transparenttextures.com/patterns/wood-planks.png');
-    background-color: #8B5A2B;
-    border-bottom: none;
-    padding: 18px 30px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    flex-shrink: 0;
-    max-width: 1400px;
-    gap: 40px;
-    margin-left: auto;
-    margin-right: auto;
-    margin-top: 10px;
-    padding: 10px 15px;
-    margin-bottom: -30px;
-    z-index: 99;
-    border-bottom-left-radius: 12px;
-    border-bottom-right-radius: 12px;
-
+    background: #050508;
 }
 
-#top-bar-container {
-    width: 100%;
-    background-image: url('https://www.transparenttextures.com/patterns/wood-planks.png');
-    background-color: #8B5A2B;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 0;
-}
-
-.time-controls-group {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-
-.menu-group {
-    display: flex;
-    gap: 3px;
-    align-items: stretch;
-}
-
-/* --- Kulatá tlačítka (Pauza/Rychlost) --- */
-.menu-btn-round {
-    background: linear-gradient(145deg, #E6C29E, #C49A6C); /* Světlejší dřevo */
-    border: 3px solid #6D4C3A;
-    border-radius: 50%;
-    width: 70px;
-    height: 70px;
-    cursor: pointer;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    box-shadow: inset 0 0 8px rgba(0,0,0,0.2), 0 3px 5px rgba(0,0,0,0.3);
-    transition: all 0.15s ease-in-out;
-    font-size: 1.5em;
-}
-.menu-btn-round:hover {
-    filter: brightness(1.1);
-}
-.menu-btn-round:active {
-    transform: scale(0.95);
-    filter: brightness(0.95);
-}
-.menu-btn-round img {
-    width: 28px;
-    height: 28px;
-    filter: invert(25%) sepia(21%) saturate(1001%) hue-rotate(348deg) brightness(93%) contrast(87%);
-}
-
-/* --- Čtvercová tlačítka (Nákup) --- */
-.menu-btn-square {
-    background-color: #FDF5E6; /* Pergamen */
-    border: 3px solid #A07855;
-    border-radius: 8px;
-    width: 100px;
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    align-items: center;
-    transition: all 0.2s;
-    user-select: none;
+/* Scéna drží poměr 16:9 jako plátno, HUD se škáluje jednotkami cqw (1cqw = 1 % šířky scény) */
+#stage {
     position: relative;
-    padding: 6px;
+    width: min(100vw, calc(100vh * 16 / 9));
+    aspect-ratio: 16 / 9;
+    container-type: size;
+    font-size: clamp(7.5px, 0.82cqw, 15px);
     overflow: hidden;
-    min-width: 100px;
-}
-.menu-btn-square:hover {
-    filter: brightness(1.05);
-}
-.menu-btn-square .icon {
-    width: 100%;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-}
-.menu-btn-square .icon svg,
-.menu-btn-square .icon img {
-    width: 48px;
-    height: 48px;
-    object-fit: contain;
-}
-.menu-btn-square .price {
-    background-color: #B58A5F; /* Dřevěný podklad */
-    border-top: 2px solid #D4B494; /* Světlejší horní hrana pro 3D efekt */
-    color: #FDEFB2; /* Zlatavá barva textu */
-    font-weight: bold;
-    font-size: 15px;
-    padding: 1px 0;
-    width: 100%;
-    text-align: center;
-    pointer-events: none;
-    text-shadow: 1px 1px 2px #00000080;
-    box-sizing: border-box;
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    border-radius: 0 0 5px 5px;
-}
-
-.menu-btn-square.active-build-mode {
-    filter: brightness(1.15);
-    box-shadow: inset 0 0 15px #FFD700;
-}
-
-/* --- Kalendář --- */
-#date-display {
-    background: #FDF5E6;
-    border: 3px solid #A07855;
-    border-radius: 8px;
-    padding: 5px 12px;
-    text-align: center;
-    color: #3D2B1F;
-    font-weight: bold;
-    font-family: 'Georgia', serif;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.15);
-    position: relative;
-    min-width: 55px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-}
-#calendar-top {
-    position: absolute;
-    top: 3px;
-    left: 10px;
-    right: 10px;
-    height: 5px;
-    background-color: #D9534F; /* Červená barva */
-    border: 1px solid #A94442;
-    border-radius: 2px;
-}
-#date-display #month {
-    font-size: 0.9em;
-    text-transform: uppercase;
-    margin-top: 8px;
-    display: block;
-}
-#date-display #day {
-    font-size: 1.9em;
-    line-height: 1;
-}
-
-/* --- Peníze --- */
-#money-container {
-    background-color: #2E231A;
-    /* border: 5px solid #000; */
-    /* border-image: ...; */
-    border: none;
-    border-radius: 10px;
-    padding: 8px 30px;
-    color: #FDD835;
-    font-size: 2.5em;
-    font-family: 'Courier New', monospace;
-    font-weight: bold;
-    text-shadow: 2px 2px 3px #00000090;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 200px;
-}
-#money-container::before {
-    content: '$';
-    margin-right: 10px;
-    font-size: 0.8em;
-}
-
-/* --- Hlavní obsah --- */
-#main-content {
-    flex-grow: 1;
-    display: flex;
-    overflow: hidden;
-    position: relative; /* Pro pozicování plátna */
 }
 
 #game-canvas-container {
-    flex-grow: 1;
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
-    background-color: #6B8D94; /* Barva oblohy jako fallback */
+    background-color: #0b0a12;
 }
 
 #loading-text {
     font-size: 2em;
-    color: white;
+    color: var(--hud-text);
 }
 
 canvas#turmoil-game {
     display: block;
-    width: auto;
-    height: auto;
-    max-width: 100%;
-    max-height: 100%;
-    aspect-ratio: 16 / 9;
-    object-fit: contain;
-    position: relative;
+    width: 100%;
+    height: 100%;
     touch-action: none;
 }
 
-/* --- Ostatní a pomocné styly --- */
+/* --- Společný vzhled panelů --- */
+.hud-panel {
+    position: absolute;
+    background: linear-gradient(180deg, var(--hud-bg-solid), var(--hud-bg));
+    border: 1px solid var(--hud-border);
+    border-radius: 0.6em;
+    box-shadow: 0 0.4em 1.6em rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+button {
+    font-family: inherit;
+    color: inherit;
+}
+
 button:disabled {
-    filter: grayscale(80%) brightness(0.8);
     cursor: not-allowed;
 }
-button:disabled:hover {
-    filter: grayscale(80%) brightness(0.8);
-}
-.purchased {
-    background-color: #4CAF50 !important;
-    cursor: not-allowed;
-}
-.purchased .icon {
-    color: white;
-}
-.purchased .price {
-    visibility: hidden;
-}
 
-/* --- Tlačítka pro upgrade --- */
-.upgrade-button {
-    position: absolute;
-    width: 20px;
-    height: 20px;
-    background-color: #C0C0C0;
-    border: 2px solid #808080;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: bold;
-    color: white;
+/* --- Kalendář a čas (vlevo nahoře) --- */
+#hud-clock {
+    top: 0.8em;
+    left: 0.8em;
     display: flex;
     align-items: center;
-    justify-content: center;
-    user-select: none;
+    gap: 0.7em;
+    padding: 0.4em 0.8em 0.4em 0.4em;
+    border-radius: 3em 0.6em 0.6em 3em;
 }
 
-.calendar-icon {
-    width: 60px;
-    height: 60px;
-    background-color: #f0e6d2;
-    border: 3px solid #5a3a22;
-    border-radius: 6px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    font-family: 'Georgia', serif;
-    color: #5a3a22;
-    margin-right: 20px;
-}
-
-.calendar-top {
-    width: 100%;
-    height: 15px;
-    background-color: #c94a4a;
-    border-bottom: 3px solid #5a3a22;
-    border-radius: 3px 3px 0 0;
-}
-
-.calendar-body {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    flex-grow: 1;
-    padding-bottom: 5px;
-}
-
-#calendar-month {
-    font-size: 14px;
-    font-weight: bold;
-    text-transform: uppercase;
-    line-height: 1;
-}
-
-#calendar-day {
-    font-size: 24px;
-    font-weight: bold;
-    line-height: 1;
-}
-
-.time-controls {
-    display: flex;
-    gap: 5px;
-}
-
-.side-panel-left, .side-panel-right {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 120px; /* Zvětšeno pro nový design */
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 15px; /* Mezera mezi ovládáním a budovou */
-    z-index: 10;
-}
-
-.side-panel-left {
-    left: 15px;
-}
-
-.side-panel-right {
-    right: 15px;
-}
-
-.company-controls {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 5px;
-}
-
-.arrow-btn {
-    width: 40px; /* Zvětšeno */
-    height: 40px; /* Zvětšeno */
+#date-dial {
+    --year: 0;
+    width: 4.6em;
+    height: 4.6em;
     border-radius: 50%;
-    border: 2px solid #5a3a22;
-    background-color: rgba(255, 255, 255, 0.7);
-    color: #5a3a22;
-    font-size: 20px; /* Větší symbol šipky */
-    font-weight: bold;
-    cursor: pointer;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 0;
-    line-height: 1;
-}
-
-.arrow-btn:hover {
-    background-color: white;
-}
-
-.company-info {
-    background-color: #f0e6d2;
-    border: 2px solid #5a3a22;
-    padding: 5px 15px;
-    border-radius: 5px;
-    text-align: center;
-    font-family: 'Georgia', serif;
-    color: #3d2b1f;
-    width: 100%;
-}
-
-#left-price, #right-price {
-    font-size: 20px;
-    font-weight: bold;
-}
-
-#left-truck-count, #right-truck-count {
-    position: absolute;
-    font-size: 16px;
-    background-color: #c94a4a;
-    color: white;
-    border-radius: 50%;
-    width: 24px;
-    height: 24px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    top: 52px; /* Upravit podle potřeby */
-    right: -10px; /* Upravit podle potřeby */
-    border: 2px solid white;
-}
-
-.company-building {
-    width: 120px; /* Zvětšeno */
-    height: 120px; /* Zvětšeno */
-    background-color: #b0c4de;
-    border: 3px solid #5a3a22;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    color: white;
-    font-size: 28px;
-    font-weight: bold;
-    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-    line-height: 1.1;
-}
-
-.bottom-bar {
-    position: absolute;
-}
-
-.upgrade-btn-small.active-build-mode,
-.upgrade-btn.active-build-mode {
-    background-color: #a0d8a0;
-    box-shadow: 0 0 15px 5px #78c878;
-    border-color: #5a8a5a;
-}
-
-/* --- Turmoil originální horní menu --- */
-#turmoil-top-bar {
-    display: flex;
-    align-items: flex-end;
-    background: #c9a063;
-    border-bottom: 4px solid #7b5a36;
-    padding: 0 8px;
-    gap: 4px;
-    height: 56px;
-    box-shadow: 0 2px 8px #0006;
-    font-family: 'Verdana', 'Arial', sans-serif;
-}
-.turmoil-box {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-end;
-    background: #f5e2c0;
-    border: 2px solid #a97a4c;
-    border-radius: 6px 6px 10px 10px;
-    width: 48px;
-    height: 48px;
-    margin: 0 1px;
-    box-shadow: 0 1px 2px #0002;
-    position: relative;
-    padding: 0;
-}
-.turmoil-box img {
-    width: 28px;
-    height: 28px;
-    margin-top: 2px;
-    object-fit: contain;
-}
-.turmoil-price {
-    background: #b98a53;
-    color: #fffbe0;
-    font-size: 0.85em;
-    font-weight: bold;
-    border-radius: 0 0 6px 6px;
-    width: 100%;
-    text-align: center;
-    padding: 2px 0 1px 0;
-    margin: 0;
-    position: absolute;
-    left: 0;
-    bottom: -18px;
-    border-bottom: 2px solid #7b5a36;
-    border-top: 1px solid #e5cba0;
-    box-shadow: 0 2px 4px #0002;
-}
-.money-box {
-    background: #3a2a1a;
-    border: 3px solid #000;
-    border-radius: 8px;
-    color: #ffd700;
-    font-size: 1.5em;
-    font-family: 'Courier New', monospace;
-    font-weight: bold;
-    min-width: 90px;
-    height: 38px;
-    display: flex;
-    align-items: center;
     justify-content: center;
-    margin: 0 8px;
-    box-shadow: 0 1px 2px #0004;
-    flex-direction: row;
-    position: relative;
+    background:
+        radial-gradient(circle, #121220 58%, transparent 60%),
+        conic-gradient(var(--hud-accent) calc(var(--year) * 1turn), rgba(255, 255, 255, 0.08) 0);
+    box-shadow: 0 0 1.2em rgba(255, 170, 80, 0.25);
+    font-variant-numeric: tabular-nums;
 }
-.money-label {
-    font-size: 1em;
-    margin-right: 2px;
-    color: #ffd700;
-}
-.turmoil-btn {
-    background: #e6c29e;
-    border: 2px solid #6d4c2b;
-    color: #6d4c2b;
-    font-size: 1.3em;
-    margin: 0 2px;
-    box-shadow: 0 1px 2px #0003;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: filter 0.1s;
-}
-.turmoil-btn:active {
-    filter: brightness(0.95);
-}
-.turmoil-btn:disabled {
-    filter: grayscale(80%) brightness(0.8);
-    cursor: not-allowed;
-}
-.round {
-    border-radius: 50%;
-    width: 38px;
-    height: 38px;
-    min-width: 38px;
-    min-height: 38px;
-    align-items: center;
-    justify-content: center;
-    display: flex;
-}
-.date-box {
-    background: #f5e2c0;
-    border: 2px solid #a97a4c;
-    border-radius: 6px 6px 10px 10px;
-    width: 56px;
-    height: 48px;
-    font-family: 'Georgia', serif;
-    font-weight: bold;
-    color: #a94a2c;
-    font-size: 1em;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-}
-.date-label {
+#date-dial #month {
     font-size: 0.8em;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    color: var(--hud-accent);
+}
+#date-dial #day {
+    font-size: 1.7em;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.time-buttons {
+    display: flex;
+    gap: 0.25em;
+}
+.time-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.4em;
+    color: var(--hud-muted);
+    font-size: 0.85em;
+    letter-spacing: -0.15em;
+    padding: 0.35em 0.6em 0.35em 0.45em;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.time-btn:hover {
+    color: var(--hud-text);
+    background: rgba(255, 255, 255, 0.06);
+}
+.time-btn.active {
+    color: var(--hud-accent);
+    border-color: rgba(255, 180, 90, 0.4);
+    background: rgba(255, 180, 90, 0.12);
+}
+
+/* --- Zdroje (nahoře uprostřed) --- */
+#hud-stats {
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    padding: 0.55em 1.2em;
+    border-top: none;
+    border-radius: 0 0 0.9em 0.9em;
+    font-variant-numeric: tabular-nums;
+}
+.stat {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4em;
+    padding: 0 1em;
+    font-size: 1.15em;
+    font-weight: 700;
+    white-space: nowrap;
+    border-left: 1px solid var(--hud-border);
+}
+.stat:first-child {
+    border-left: none;
+}
+.stat svg {
+    width: 1.05em;
+    height: 1.05em;
+    fill: var(--hud-cool);
+    align-self: center;
+}
+.stat .rate {
+    font-size: 0.72em;
+    font-weight: 600;
+    color: var(--hud-good);
+}
+.stat .rate.negative {
+    color: var(--hud-bad);
+}
+.stat.money {
+    color: var(--hud-gold);
+    font-size: 1.35em;
+    text-shadow: 0 0 0.8em rgba(255, 190, 80, 0.4);
+}
+.stat.money svg {
+    fill: var(--hud-gold);
+}
+
+/* --- Roh vpravo nahoře --- */
+#hud-corner {
+    position: absolute;
+    top: 0.8em;
+    right: 0.8em;
+    display: flex;
+    gap: 0.4em;
+}
+.hud-icon-btn {
+    width: 2.6em;
+    height: 2.6em;
+    border-radius: 0.5em;
+    border: 1px solid var(--hud-border);
+    background: var(--hud-bg-solid);
+    color: var(--hud-text);
+    cursor: pointer;
+    font-size: 1em;
+    font-weight: 700;
+}
+.hud-icon-btn:hover {
+    border-color: rgba(255, 190, 110, 0.6);
+}
+.hud-icon-btn.muted {
+    opacity: 0.55;
+}
+
+/* --- Oznámení (vlevo) --- */
+#hud-toasts {
+    position: absolute;
+    top: 4.6em;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 19em;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4em;
+    pointer-events: none;
+}
+.toast {
+    display: flex;
+    align-items: center;
+    gap: 0.7em;
+    padding: 0.4em 0.8em;
+    background: linear-gradient(90deg, var(--hud-bg-solid), rgba(12, 12, 20, 0.7));
+    border-left: 3px solid var(--hud-accent);
+    border-radius: 0.3em;
+    animation: toast-in 0.35s ease-out;
+    transition: opacity 0.6s, transform 0.6s;
+}
+.toast.cool {
+    border-left-color: var(--hud-cool);
+}
+.toast.bad {
+    border-left-color: var(--hud-bad);
+}
+.toast.leaving {
+    opacity: 0;
+    transform: translateX(-1em);
+}
+.toast .toast-icon {
+    font-size: 1.4em;
+}
+.toast .toast-title {
+    font-weight: 700;
+    font-size: 0.95em;
     text-transform: uppercase;
-    margin-bottom: 0;
+    letter-spacing: 0.04em;
 }
-.date-value {
-    font-size: 1.3em;
-    margin-top: -2px;
+.toast .toast-sub {
+    font-size: 0.8em;
+    color: var(--hud-muted);
 }
-.tool-box, .build-box {
-    min-width: 48px;
-    min-height: 48px;
+@keyframes toast-in {
+    from { opacity: 0; transform: translateX(-1.5em); }
+    to { opacity: 1; transform: none; }
 }
-#turmoil-top-bar .turmoil-btn img {
-    margin: 0 auto;
+
+/* --- Cíle roku (vpravo) --- */
+#hud-goals {
+    top: 4.2em;
+    right: 7.6%;
+    width: 17em;
+    padding: 0.8em 1em;
+    pointer-events: none;
 }
-#turmoil-top-bar .turmoil-btn {
-    padding: 0;
-    width: 48px;
-    height: 48px;
-    border-radius: 6px 6px 10px 10px;
-    background: #f5e2c0;
-    border: 2px solid #a97a4c;
-    box-shadow: 0 1px 2px #0002;
+#hud-goals .goals-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    font-weight: 800;
+    font-size: 0.95em;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 0.5em;
+}
+#hud-goals .goals-title::before {
+    content: '';
+    width: 0.55em;
+    height: 0.55em;
+    border: 2px solid var(--hud-accent);
+    transform: rotate(45deg);
+}
+#hud-goals .goal {
+    font-size: 0.85em;
+    margin: 0.45em 0;
+}
+#hud-goals .goal-name {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5em;
+}
+#hud-goals .goal-name .value {
+    font-variant-numeric: tabular-nums;
+    color: var(--hud-muted);
+}
+#hud-goals .goal.done .goal-name {
+    color: var(--hud-good);
+}
+#hud-goals .bar {
+    height: 0.3em;
+    margin-top: 0.3em;
+    border-radius: 1em;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+#hud-goals .bar > div {
+    height: 100%;
+    background: linear-gradient(90deg, #ff8a3a, var(--hud-gold));
+}
+#hud-goals .goal.done .bar > div {
+    background: var(--hud-good);
+}
+#hud-goals .goals-optional {
+    margin-top: 0.7em;
+    padding-top: 0.5em;
+    border-top: 1px solid var(--hud-border);
+    font-size: 0.7em;
+    letter-spacing: 0.12em;
+    color: var(--hud-muted);
+    text-transform: uppercase;
+}
+
+/* --- Panel nástrojů (dole uprostřed) --- */
+#hud-toolbar {
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0.6em;
+    padding: 0.4em 0.6em 0.6em;
+    border-bottom: none;
+    border-radius: 0.9em 0.9em 0 0;
+}
+.tool-group + .tool-group {
+    border-left: 1px solid var(--hud-border);
+    padding-left: 0.6em;
+}
+.group-label {
+    font-size: 0.68em;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--hud-muted);
+    margin: 0 0 0.35em 0.3em;
+}
+.group-buttons {
+    display: flex;
+    gap: 0.3em;
+}
+.tool-btn {
+    position: relative;
+    width: 6.4em;
+    padding: 0.45em 0.3em 0.35em;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-end;
-    position: relative;
+    gap: 0.15em;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+    border: 1px solid var(--hud-border);
+    border-radius: 0.5em;
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s, background 0.15s;
 }
-#turmoil-top-bar .turmoil-btn.round {
-    background: #e6c29e;
-    border-radius: 50%;
-    width: 38px;
-    height: 38px;
-    min-width: 38px;
-    min-height: 38px;
+.tool-btn:hover:not(:disabled) {
+    border-color: rgba(255, 190, 110, 0.6);
+    box-shadow: 0 0 1em rgba(255, 160, 80, 0.25);
+    transform: translateY(-2px);
+}
+.tool-btn .icon {
+    height: 2.8em;
+    display: flex;
     align-items: center;
     justify-content: center;
-    display: flex;
+    pointer-events: none;
 }
-#turmoil-top-bar .turmoil-btn .turmoil-price {
+.tool-btn .icon svg {
+    width: 2.5em;
+    height: 2.5em;
+    padding: 0.35em;
+    fill: none;
+    stroke: #e9e4f2;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    background: radial-gradient(circle at 50% 30%, rgba(160, 175, 230, 0.22), rgba(20, 20, 32, 0.6));
+    border: 1px solid rgba(190, 200, 240, 0.18);
+    border-radius: 0.6em;
+}
+.tool-btn .icon svg .accent {
+    stroke: var(--hud-accent);
+}
+.tool-btn:hover:not(:disabled) .icon svg {
+    stroke: #fff;
+    filter: drop-shadow(0 0 0.35em rgba(255, 180, 90, 0.6));
+}
+.tool-btn.active-build-mode .icon svg {
+    stroke: var(--hud-accent);
+    border-color: var(--hud-accent);
+}
+.tool-btn .label {
+    font-size: 0.72em;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    pointer-events: none;
+}
+.tool-btn .price {
+    font-size: 0.8em;
+    font-weight: 700;
+    color: var(--hud-gold);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+}
+.tool-btn.active-build-mode {
+    background: linear-gradient(180deg, rgba(255, 170, 80, 0.28), rgba(255, 170, 80, 0.08));
+    border-color: var(--hud-accent);
+    box-shadow: inset 0 0 0 1px var(--hud-accent), 0 0 1.2em rgba(255, 170, 80, 0.45);
+}
+.tool-btn.active-build-mode::after {
+    content: '';
     position: absolute;
-    left: 0;
-    bottom: -18px;
-    width: 100%;
+    left: 20%;
+    right: 20%;
+    bottom: -1px;
+    height: 2px;
+    background: var(--hud-accent);
+    box-shadow: 0 0 0.6em var(--hud-accent);
 }
-/* --- Konec Turmoil menu --- */
+.tool-btn:disabled {
+    opacity: 0.4;
+    filter: grayscale(0.7);
+}
 
-#mole-btn .icon img {
-    width: 60px;
-    height: 60px;
+/* --- Deník událostí (vpravo dole) --- */
+#hud-log {
+    right: 0.8em;
+    bottom: 0.8em;
+    width: 21em;
+    padding: 0.6em 0.9em;
+    font-size: 0.85em;
+    pointer-events: none;
 }
-#truck-btn .icon img {
-    width: 60px;
-    height: 60px;
-} 
+#hud-log:empty {
+    display: none;
+}
+.log-row {
+    display: flex;
+    gap: 0.6em;
+    padding: 0.15em 0;
+    color: var(--hud-muted);
+    white-space: nowrap;
+}
+.log-row .text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.log-row:first-child {
+    color: var(--hud-text);
+}
+.log-row .when {
+    flex-shrink: 0;
+    min-width: 4.2em;
+    font-variant-numeric: tabular-nums;
+    color: var(--hud-accent);
+}
+
+/* --- Malá scéna (Discord v menším okně): kompaktní HUD, ať nezakrývá hrací plochu --- */
+@container (max-width: 1200px) {
+    .tool-btn .label,
+    .group-label,
+    #hud-goals .goals-optional,
+    #hud-goals .goals-optional ~ .goal,
+    .stat .rate {
+        display: none;
+    }
+    .tool-btn {
+        width: 5em;
+    }
+    #hud-goals {
+        width: 15em;
+    }
+    #hud-log {
+        width: 18em;
+    }
+}

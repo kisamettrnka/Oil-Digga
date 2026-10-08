@@ -27,6 +27,13 @@ async function setupDiscordSdk() {
 
 
 // --- Globální proměnné a konstanty ---
+const GROUND_RATIO = 0.44;        // povrch (přední hrana desky) ve 44 % výšky plátna
+const POCKET_BOTTOM_MARGIN = 125; // spodní pás plátna zakrývá panel nástrojů
+
+function getGroundLevel() {
+    return Math.floor(canvas.height * GROUND_RATIO);
+}
+
 let canvas = null;
 let ctx = null;
 let lastTime = 0;
@@ -44,7 +51,6 @@ let oilPockets = [];
 let plots = [];
 let pipeNetworks = [];
 let trucks = [];
-let temporaryEffects = [];
 let lastBoughtHighlightTimer = 0;
 let lastBoughtPlotId = null;
 
@@ -53,9 +59,6 @@ const PLOT_COUNT = 8;
 const VRT_COST = 350;
 const SILO_COST = 250;
 const TRUCK_COST = 150;
-const DOWSER_COST = 100;
-const SCANNER_COST = 500;
-const MOLE_COST = 300;
 const PIPE_COST_PER_PIXEL = 2;
 const TRUCK_SPEED = 150;
 const TRUCK_CAPACITY = 100;
@@ -69,13 +72,11 @@ const MIN_LOAD_AMOUNT = 25;
 const MAX_TRUCKS = 8;
 const MAX_FRAME_MS = 100; // Strop reálného času jednoho snímku (po návratu na kartu apod.)
 const CONTROL_HIT_PAD = 8; // Zvětšení klikací plochy šipek na plátně
-const DOWSER_MEDIUM_OIL = 8500;
-const DOWSER_LARGE_OIL = 11500;
 const DEV = false;
 
 // Stav UI a ovládání
 let mousePos = { x: 0, y: 0 };
-let currentBuildMode = null; // 'vrt', 'silo', 'mole'
+let currentBuildMode = null; // 'vrt', 'silo', 'seismic', 'radar'
 let selectedDerrickPlotId = null; // Pro pokládání potrubí
 let plotWidth;
 
@@ -91,6 +92,12 @@ let trucksAssignedRight = 0;
 let priceUpdateTimer = 0;
 let nextNetworkId = 0;
 
+// HUD: deník událostí a zisk za poslední den (jen pro zobrazení)
+const EVENT_LOG_LEN = 4;
+let eventLog = [];
+let revenueAtDayStart = 0;
+let lastDayIncome = 0;
+
 // Historie cen pro graf na budovách firem
 const PRICE_HISTORY_LEN = 24;
 let leftPriceHistory = [1.00];
@@ -104,8 +111,8 @@ let audioCtx = null;
 
 // Hitboxy pro ovládací prvky na plátně
 let companyControls = {
-    leftUp: {}, leftDown: {}, leftTrucks: {},
-    rightUp: {}, rightDown: {}, rightTrucks: {}
+    leftUp: {}, leftDown: {},
+    rightUp: {}, rightDown: {}
 };
 
 // Herní čas
@@ -113,75 +120,13 @@ let day = 1;
 let month = 1;
 const daysInMonth = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const monthNames = ["", "LED", "ÚNO", "BŘE", "DUB", "KVĚ", "ČER", "ČVC", "SRP", "ZÁŘ", "ŘÍJ", "LIS", "PRO"];
+const MONTH_FULL_NAMES = ["", "leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
 const MS_PER_DAY = 10000; // Kolik reálných ms trvá jeden herní den
 let dayTimer = 0;
 
-// Stavy nástrojů
-let moleState = {
-    active: false,
-    startPoint: null
-};
-let scannerEffect = {
-    active: false,
-    duration: 0,
-    totalDuration: 3000, // 3 sekundy
-    progress: 0
-};
-
-// --- Načítání obrázků ---
-let derrickImage = null, siloImage = null, truckImage = null;
-let dowserImage = null, scannerImage = null, moleImage = null;
-let imagesLoaded = 0;
-const totalImages = 6;
-let imagesFailed = 0;
-
-function imageLoaded() {
-    imagesLoaded++;
-    if (imagesLoaded + imagesFailed === totalImages) {
-        console.log("Všechny obrázky načteny nebo selhaly. Spouštím hru.");
-        initializeGame();
-    }
-}
-
-function imageFailed() {
-    imagesFailed++;
-    if (imagesLoaded + imagesFailed === totalImages) {
-        console.log("Všechny obrázky načteny nebo selhaly. Spouštím hru.");
-        initializeGame();
-    }
-}
-
+// Hra nemá obrázky na plátně (vše je vektorové), ikony v HUD se načítají přes index.html
 function loadImages() {
-    console.log("Zahajuji načítání obrázků...");
-    derrickImage = new window.Image();
-    derrickImage.onload = imageLoaded;
-    derrickImage.onerror = imageFailed;
-    derrickImage.src = assetUrl('img/oil-tower.png');
-
-    siloImage = new window.Image();
-    siloImage.onload = imageLoaded;
-    siloImage.onerror = imageFailed;
-    siloImage.src = assetUrl('img/tank.png');
-
-    truckImage = new window.Image();
-    truckImage.onload = imageLoaded;
-    truckImage.onerror = imageFailed;
-    truckImage.src = assetUrl('img/tanker.png');
-
-    dowserImage = new window.Image();
-    dowserImage.onload = imageLoaded;
-    dowserImage.onerror = imageFailed;
-    dowserImage.src = assetUrl('img/divining rod.png');
-
-    scannerImage = new window.Image();
-    scannerImage.onload = imageLoaded;
-    scannerImage.onerror = imageFailed;
-    scannerImage.src = assetUrl('img/binocular.png');
-
-    moleImage = new window.Image();
-    moleImage.onload = imageLoaded;
-    moleImage.onerror = imageFailed;
-    moleImage.src = assetUrl('img/mole.png');
+    initializeGame();
 }
 
 
@@ -241,7 +186,6 @@ function restartGame() {
 
     pipeNetworks = [];
     trucks = [];
-    temporaryEffects = [];
     lastBoughtHighlightTimer = 0;
     lastBoughtPlotId = null;
 
@@ -266,9 +210,15 @@ function restartGame() {
     month = 1;
     dayTimer = 0;
 
-    moleState = { active: false, startPoint: null };
-    scannerEffect.active = false;
-    scannerEffect.duration = 0;
+    eventLog = [];
+    revenueAtDayStart = 0;
+    lastDayIncome = 0;
+    renderEventLog();
+    document.getElementById('hud-toasts').innerHTML = '';
+
+    seismicWaves = [];
+    radarPulses = [];
+    drone = null;
 
     isGameStarted = false;
     generatePlotsAndPockets();
@@ -287,7 +237,7 @@ function generatePlotsAndPockets() {
         plots.push({
             id: i,
             x: sideMargin + i * plotWidth,
-            y: Math.floor(canvas.height / 3),
+            y: getGroundLevel(),
             owner: null,
             hasVrt: false,
             siloCount: 0,
@@ -297,13 +247,16 @@ function generatePlotsAndPockets() {
 
     // Generování ložisek ropy
     oilPockets = [];
-    const groundLevel = Math.floor(canvas.height / 3);
+    const groundLevel = getGroundLevel();
     const numberOfPockets = 5 + Math.floor(Math.random() * 5);
     for (let i = 0; i < numberOfPockets; i++) {
         const pocketWidth = 80 + Math.random() * 170;
         const x = Math.random() * (canvas.width - pocketWidth);
-        const y = groundLevel + 100 + Math.random() * (canvas.height - groundLevel - 200);
         const height = 40 + Math.random() * 80;
+        // Celé ložisko musí být nad spodním panelem HUD, jinak by na něj nešlo kliknout
+        const minY = groundLevel + 80;
+        const maxY = canvas.height - POCKET_BOTTOM_MARGIN - height;
+        const y = minY + Math.random() * Math.max(0, maxY - minY);
         const richness = 5000 + Math.random() * 10000;
         let vertices = [];
         // between 3 and 6 vertices
@@ -327,9 +280,480 @@ function generatePlotsAndPockets() {
 }
 
 
+// --- Život ve scéně: lidé, auta, letadla, ohňostroje ---
+// Kulisy, které nehrají: poloha je většinou funkcí času ambientClock (s), stav mají jen
+// ohňostroje. ambientClock běží reálným časem (ne herní rychlostí) a stojí v pauze.
+const FIREWORK_GRAVITY = 70;          // px/s²
+const FIREWORK_COLORS = ['255, 190, 90', '255, 120, 80', '140, 200, 255', '255, 240, 200', '190, 140, 255'];
+let ambientClock = 0;
+let fireworks = [];                    // rakety { x, y, vy, targetY, color } a jiskry { x, y, vx, vy, age, life, color }
+let nextFireworkAt = 6;
+
+function updateAmbient(frameMs) {
+    const dt = frameMs / 1000;
+    ambientClock += dt;
+
+    if (ambientClock >= nextFireworkAt) { // občas někdo ve městě slaví
+        const groundLevel = getGroundLevel();
+        launchFirework(120 + Math.random() * (canvas.width - 240), getSlabBackY(groundLevel) + 40);
+        nextFireworkAt = ambientClock + 9 + Math.random() * 10;
+    }
+
+    const next = [];
+    fireworks.forEach(f => {
+        if (f.kind === 'rocket') {
+            f.y += f.vy * dt;
+            f.trail = (f.trail || 0) + dt;
+            if (f.trail > 0.03) { // jiskry za raketou
+                f.trail = 0;
+                next.push({ kind: 'spark', x: f.x, y: f.y, vx: (Math.random() - 0.5) * 12, vy: 20, age: 0, life: 0.5, color: '255, 200, 120', size: 1.2 });
+            }
+            if (f.y <= f.targetY) {
+                const count = 34;
+                for (let i = 0; i < count; i++) {
+                    const a = (i / count) * Math.PI * 2;
+                    const speed = 60 + Math.random() * 40;
+                    next.push({ kind: 'spark', x: f.x, y: f.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, age: 0, life: 1.4 + Math.random() * 0.5, color: f.color, size: 2 });
+                }
+            } else {
+                next.push(f);
+            }
+        } else {
+            f.age += dt;
+            f.vy += FIREWORK_GRAVITY * dt;
+            f.vx *= 1 - dt * 0.8;
+            f.x += f.vx * dt;
+            f.y += f.vy * dt;
+            if (f.age < f.life) next.push(f);
+        }
+    });
+    fireworks = next.slice(-500);
+}
+
+// Raketa vystřelí z bodu (x, y) do noční oblohy
+function launchFirework(x, y, color) {
+    fireworks.push({
+        kind: 'rocket', x, y, vy: -260 - Math.random() * 60,
+        targetY: 40 + Math.random() * 80,
+        color: color || FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)]
+    });
+}
+
+function drawFireworks() {
+    if (!fireworks.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    fireworks.forEach(f => {
+        if (f.kind === 'rocket') {
+            ctx.fillStyle = 'rgba(255, 230, 180, 0.95)';
+            ctx.fillRect(f.x - 1, f.y - 3, 2, 5);
+            return;
+        }
+        const k = 1 - f.age / f.life;
+        ctx.fillStyle = `rgba(${f.color}, ${k})`;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.size * (0.5 + k * 0.5), 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.restore();
+}
+
+// Opakovaný přelet: vrací postup 0–1 během letu, jinak null (period a duration v sekundách)
+function flightProgress(period, duration, offset) {
+    const phase = (ambientClock + offset) % period;
+    return phase < duration ? phase / duration : null;
+}
+
+function drawSkyLife(groundLevel) {
+    const t = ambientClock;
+    const backY = getSlabBackY(groundLevel);
+
+    // Padající hvězda
+    const starCycle = Math.floor((t + 3) / 7);
+    const starPhase = ((t + 3) % 7) / 0.7;
+    if (starPhase < 1) {
+        const sx = 200 + (starCycle * 397) % (canvas.width - 400);
+        const sy = 20 + (starCycle * 53) % 60;
+        const x = sx + starPhase * 160, y = sy + starPhase * 50;
+        const grad = ctx.createLinearGradient(x - 60, y - 19, x, y);
+        grad.addColorStop(0, 'rgba(220, 230, 255, 0)');
+        grad.addColorStop(1, `rgba(230, 240, 255, ${0.9 * (1 - starPhase)})`);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x - 60, y - 19);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+    }
+
+    // Vzducholoď s reklamou a světlometem na město
+    const blimp = flightProgress(90, 70, 20);
+    if (blimp !== null) drawBlimp(-160 + blimp * (canvas.width + 320), backY - 62 + Math.sin(t * 0.6) * 4, groundLevel);
+
+    // Netopýři
+    const bats = flightProgress(34, 16, 5);
+    if (bats !== null) {
+        for (let i = 0; i < 7; i++) {
+            const x = canvas.width + 60 - bats * (canvas.width + 200) + (i % 4) * 26 + Math.sin(t * 2 + i) * 8;
+            const y = backY - 40 + (i * 13) % 34 + Math.sin(t * 3 + i * 1.7) * 6;
+            const flap = Math.sin(t * 16 + i * 2) * 4;
+            ctx.strokeStyle = '#0c0b12';
+            ctx.lineWidth = 1.6;
+            ctx.beginPath();
+            ctx.moveTo(x - 6, y - flap);
+            ctx.quadraticCurveTo(x - 3, y - 2, x, y);
+            ctx.quadraticCurveTo(x + 3, y - 2, x + 6, y - flap);
+            ctx.stroke();
+        }
+    }
+
+    // Dvouplošník s navigačními světly a kouřovou stopou
+    const plane = flightProgress(27, 11, 0);
+    if (plane !== null) drawBiplane(canvas.width + 80 - plane * (canvas.width + 160), 58 + Math.sin(t * 1.4) * 8, -1);
+
+    drawFireworks();
+}
+
+function drawBlimp(x, y, groundLevel) {
+    const t = ambientClock;
+    // Kužel světlometu přejíždí po městě
+    const aimX = x + Math.sin(t * 0.7) * 140;
+    const aimY = getSlabBackY(groundLevel) + 70;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const beam = ctx.createLinearGradient(x, y + 14, aimX, aimY);
+    beam.addColorStop(0, 'rgba(255, 240, 200, 0.22)');
+    beam.addColorStop(1, 'rgba(255, 240, 200, 0)');
+    ctx.fillStyle = beam;
+    ctx.beginPath();
+    ctx.moveTo(x - 3, y + 14);
+    ctx.lineTo(x + 3, y + 14);
+    ctx.lineTo(aimX + 34, aimY);
+    ctx.lineTo(aimX - 34, aimY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 230, 180, 0.08)';
+    ctx.beginPath();
+    ctx.ellipse(aimX, aimY, 36, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    const body = ctx.createLinearGradient(0, y - 22, 0, y + 22);
+    body.addColorStop(0, '#5c5e78');
+    body.addColorStop(0.5, '#3a3b52');
+    body.addColorStop(1, '#1d1e2c');
+    ctx.fillStyle = '#1d1e2c'; // ocasní plochy
+    ctx.beginPath();
+    ctx.moveTo(x - 62, y);
+    ctx.lineTo(x - 82, y - 18);
+    ctx.lineTo(x - 70, y);
+    ctx.lineTo(x - 82, y + 18);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 72, 21, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(180, 195, 255, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 72, 21, 0, Math.PI * 1.1, Math.PI * 1.9);
+    ctx.stroke();
+    // Svítící nápis
+    ctx.font = '13px "Rye", Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffcf80';
+    ctx.fillText('OIL DIGGA', x + 4, y + 1);
+    drawGlow(x + 4, y, 50, '255, 170, 80', 0.12);
+    // Gondola a světla
+    ctx.fillStyle = '#15151f';
+    pathRoundRect(x - 12, y + 18, 24, 8, 3);
+    ctx.fill();
+    ctx.fillStyle = '#ffd890';
+    ctx.fillRect(x - 8, y + 20, 3, 3);
+    ctx.fillRect(x - 1, y + 20, 3, 3);
+    ctx.fillRect(x + 6, y + 20, 3, 3);
+    const blink = Math.sin(t * 4) > 0.6;
+    if (blink) drawGlow(x + 72, y, 10, '255, 60, 50', 0.9);
+    if (!blink) drawGlow(x - 70, y - 14, 8, '255, 255, 255', 0.6);
+}
+
+function drawBiplane(x, y, dir) {
+    const t = ambientClock;
+    // Kouřová stopa za letadlem
+    for (let i = 1; i <= 8; i++) {
+        const px = x - dir * i * 14;
+        ctx.fillStyle = `rgba(150, 150, 175, ${0.16 * (1 - i / 9)})`;
+        ctx.beginPath();
+        ctx.arc(px, y + Math.sin(t * 3 + i) * 1.5, 2 + i * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(dir, 1);
+    ctx.fillStyle = '#1a1a24';
+    ctx.beginPath(); // trup
+    ctx.moveTo(14, -2);
+    ctx.lineTo(-14, -1);
+    ctx.lineTo(-20, -6);
+    ctx.lineTo(-18, 2);
+    ctx.lineTo(14, 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(-4, -8, 12, 2); // horní křídlo
+    ctx.fillRect(-4, 3, 12, 2);  // dolní křídlo
+    ctx.fillStyle = 'rgba(180, 195, 255, 0.5)';
+    ctx.fillRect(-4, -8, 12, 0.8);
+    ctx.fillStyle = 'rgba(200, 210, 240, 0.35)'; // vrtule
+    ctx.beginPath();
+    ctx.ellipse(16, 0, 1.5, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    const blink = Math.sin(t * 7) > 0;
+    drawGlow(x + 2, y - 8, 6, blink ? '255, 60, 50' : '60, 255, 120', 0.9);
+}
+
+// Malý panáček: hlava, tělo, kmitající nohy; lamp = svítí lucernou nebo čelovkou
+function drawWalker(x, y, s, phase, dir, opts = {}) {
+    const moving = opts.moving !== false;
+    const leg = moving ? Math.sin(phase) * 2.2 * s : 0.6 * s;
+    ctx.strokeStyle = opts.color || '#0e0d16';
+    ctx.lineWidth = 1.4 * s;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x, y - 5 * s);
+    ctx.lineTo(x - leg, y);
+    ctx.moveTo(x, y - 5 * s);
+    ctx.lineTo(x + leg, y);
+    ctx.moveTo(x, y - 5 * s);
+    ctx.lineTo(x, y - 10 * s);
+    ctx.moveTo(x, y - 9 * s);
+    ctx.lineTo(x + dir * 2.5 * s, y - 6.5 * s + (moving ? Math.cos(phase) * s : 0));
+    ctx.stroke();
+    ctx.fillStyle = opts.helmet || opts.color || '#0e0d16';
+    ctx.beginPath();
+    ctx.arc(x, y - 12 * s, 1.9 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(170, 190, 255, 0.35)'; // měsíc na rameni
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(x + s, y - 10 * s);
+    ctx.lineTo(x + s, y - 6 * s);
+    ctx.stroke();
+    if (opts.lamp) drawGlow(x + dir * 3 * s, y - (opts.helmet ? 12 : 6) * s, 9 * s, '255, 190, 100', 0.55);
+}
+
+// Auto ve městě (staré "plechovka" s reflektory)
+function drawTownCar(x, y, s, dir, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(dir * s, s);
+    ctx.fillStyle = 'rgba(5, 5, 12, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(0, 0.5, 11, 1.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.fillRect(-10, -6, 20, 4);
+    ctx.fillRect(-6, -10, 9, 4);
+    ctx.fillStyle = 'rgba(255, 200, 120, 0.6)'; // okno se světlem z palubní desky
+    ctx.fillRect(-4, -9, 5, 2.5);
+    ctx.fillStyle = '#0b0b12';
+    ctx.beginPath();
+    ctx.arc(-6, -1.5, 2.2, 0, Math.PI * 2);
+    ctx.arc(6, -1.5, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const fx = x + dir * 10 * s;
+    const beam = ctx.createLinearGradient(fx, 0, fx + dir * 40 * s, 0);
+    beam.addColorStop(0, 'rgba(255, 220, 150, 0.35)');
+    beam.addColorStop(1, 'rgba(255, 220, 150, 0)');
+    ctx.fillStyle = beam;
+    ctx.beginPath();
+    ctx.moveTo(fx, y - 4 * s);
+    ctx.lineTo(fx + dir * 40 * s, y - 8 * s);
+    ctx.lineTo(fx + dir * 40 * s, y + 1 * s);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    drawGlow(x - dir * 10 * s, y - 4 * s, 4 * s, '255, 50, 40', 0.7);
+}
+
+const TOWN_CAR_COLORS = ['#3b2a2a', '#22303f', '#2f3a2a', '#3a3340', '#4a3a22'];
+
+// Chůze se zastávkami: cyklus period s, z toho walk s chůze, zbytek stojí.
+// Vrací ušlou dráhu v sekundách chůze a jestli se zrovna jde.
+function stopAndGo(t, period, walk) {
+    const cycle = Math.floor(t / period);
+    const inCycle = t - cycle * period;
+    return { walked: cycle * walk + Math.min(inCycle, walk), moving: inCycle < walk };
+}
+
+function wrapX(x, span) {
+    return ((x % span) + span) % span - 30;
+}
+
+// Hlavní ulice: chodci se drží chodníků (za ulicí doleva, před ní doprava), občas se zastaví;
+// pod lampami stojí skupinky; auta jedou ve dvou pruzích stálou rychlostí, takže se nepředjíždějí.
+// Kreslí se před přední řadou domů, ta je pak zakryje.
+const STREET_GROUPS = [230, 610, 1010, 1380];
+
+function drawTownLife(groundLevel) {
+    const t = ambientClock;
+    const L = getTownLayout(groundLevel);
+    const s = L.streetScale;
+    const span = canvas.width + 60;
+
+    [{ y: L.streetY - 3 * s, dir: -1, speed: 46 }, { y: L.streetY + 4 * s, dir: 1, speed: 38 }].forEach((lane, li) => {
+        for (let i = 0; i < 3; i++) {
+            const x = wrapX(i * span / 3 + li * 170 + lane.dir * t * lane.speed * s, span);
+            drawTownCar(x, lane.y, s, lane.dir, TOWN_CAR_COLORS[(i * 2 + li) % TOWN_CAR_COLORS.length]);
+        }
+    });
+
+    [{ y: L.sidewalkNorth, dir: -1, count: 9 }, { y: L.sidewalkSouth, dir: 1, count: 9 }].forEach((walk, wi) => {
+        for (let i = 0; i < walk.count; i++) {
+            const period = 10 + (i % 3) * 2;
+            const { walked, moving } = stopAndGo(t + i * 3.1, period, period - 3);
+            const x = wrapX(i * span / walk.count + wi * 60 + walk.dir * walked * 10 * s, span);
+            drawWalker(x, walk.y, s * 1.3, t * 7 + i, walk.dir, { moving, lamp: i % 4 === 0 });
+        }
+    });
+
+    // Skupinky pod lampami: stojí čelem k sobě a pohupují se
+    STREET_GROUPS.forEach((gx, gi) => {
+        const gy = gi % 2 ? L.sidewalkSouth : L.sidewalkNorth;
+        const size = 2 + gi % 2;
+        for (let k = 0; k < size; k++) {
+            const x = gx + (k - (size - 1) / 2) * 7 * s + Math.sin(t * 0.8 + gi + k) * 0.6;
+            drawWalker(x, gy, s * 1.3, 0, k < size / 2 ? 1 : -1, { moving: false, lamp: k === 0 && gi === 2 });
+        }
+    });
+}
+
+// Přední řada domů a promenáda před městem (pomalé procházky v obou směrech)
+function drawTownFront(groundLevel) {
+    ctx.drawImage(getTownFrontCache(), 0, 0);
+    const t = ambientClock;
+    const L = getTownLayout(groundLevel);
+    const s = slabScaleAt(L.promenadeY, groundLevel);
+    const span = canvas.width + 60;
+    for (let i = 0; i < 8; i++) {
+        const dir = i % 2 ? 1 : -1;
+        const { walked, moving } = stopAndGo(t + i * 2.3, 14, 9);
+        const x = wrapX(i * span / 8 + dir * walked * 7 * s, span);
+        drawWalker(x, L.promenadeY + (dir > 0 ? 2 : -2) * s, s * 1.3, t * 6 + i, dir, { moving, lamp: i === 3 });
+    }
+}
+
+// Dělníci u vrtu chodí sem a tam, mají přilbu s čelovkou
+function drawRigWorkers(centerX, baseY, plotId) {
+    const t = ambientClock;
+    for (let k = 0; k < 2; k++) {
+        const phase = t * 0.35 + plotId * 1.7 + k * 2.4;
+        const x = centerX + Math.sin(phase) * 42 + (k ? 20 : -20);
+        const dir = Math.cos(phase) >= 0 ? 1 : -1;
+        drawWalker(x, baseY + 3 + k * 2, 1.15, t * 6 + k * 3, dir, { helmet: '#ffc23a', lamp: true });
+    }
+}
+
+// --- Kamera: přiblížení, posun a třes ---
+// Svět má souřadnice plátna při zoomu 1. Kamera ukazuje výřez od (x, y) o velikosti plátna / zoom;
+// tx/ty/tzoom jsou cíle, ke kterým se kamera plynule dotahuje.
+const CAMERA_MAX_ZOOM = 2.2;
+const DRAG_THRESHOLD = 6;
+const CAMERA_KEY_STEP = 70;
+
+let camera = { x: 0, y: 0, zoom: 1, tx: 0, ty: 0, tzoom: 1, shake: 0 };
+let dragState = null;
+let suppressNextClick = false;
+let pointerScreen = { x: 800, y: 450 }; // poslední poloha myši v pixelech plátna (paralaxa)
+
+function clampCamera(alsoCurrent = false) {
+    const maxX = canvas.width - canvas.width / camera.tzoom;
+    const maxY = canvas.height - canvas.height / camera.tzoom;
+    camera.tx = Math.max(0, Math.min(maxX, camera.tx));
+    camera.ty = Math.max(0, Math.min(maxY, camera.ty));
+    if (alsoCurrent) {
+        camera.x = Math.max(0, Math.min(canvas.width - canvas.width / camera.zoom, camera.x));
+        camera.y = Math.max(0, Math.min(canvas.height - canvas.height / camera.zoom, camera.y));
+    }
+}
+
+// Přiblíží kolem bodu (px, py) v pixelech plátna, bod pod kurzorem zůstane na místě
+function zoomCameraAt(px, py, factor) {
+    const worldX = camera.tx + px / camera.tzoom;
+    const worldY = camera.ty + py / camera.tzoom;
+    camera.tzoom = Math.max(1, Math.min(CAMERA_MAX_ZOOM, camera.tzoom * factor));
+    camera.tx = worldX - px / camera.tzoom;
+    camera.ty = worldY - py / camera.tzoom;
+    clampCamera();
+}
+
+function resetCamera(instant = false) {
+    camera.tx = camera.ty = 0;
+    camera.tzoom = 1;
+    if (instant) {
+        camera.x = camera.y = 0;
+        camera.zoom = 1;
+        camera.shake = 0;
+    }
+}
+
+function shakeCamera(strength) {
+    camera.shake = Math.max(camera.shake, strength);
+}
+
+function updateCamera(frameMs) {
+    const k = 1 - Math.exp(-frameMs / 90);
+    camera.zoom += (camera.tzoom - camera.zoom) * k;
+    camera.x += (camera.tx - camera.x) * k;
+    camera.y += (camera.ty - camera.y) * k;
+    if (Math.abs(camera.tzoom - camera.zoom) < 0.001) camera.zoom = camera.tzoom;
+    clampCamera(true);
+    camera.shake *= Math.exp(-frameMs / 120);
+    if (camera.shake < 0.2) camera.shake = 0;
+}
+
+function applyCameraTransform() {
+    const sx = camera.shake ? (Math.random() - 0.5) * camera.shake : 0;
+    const sy = camera.shake ? (Math.random() - 0.5) * camera.shake : 0;
+    const z = camera.zoom;
+    ctx.setTransform(z, 0, 0, z, -camera.x * z + sx, -camera.y * z + sy);
+}
+
+function handleCameraKey(event) {
+    const step = CAMERA_KEY_STEP / camera.tzoom;
+    switch (event.key) {
+        case 'ArrowLeft': case 'a': case 'A': camera.tx -= step; break;
+        case 'ArrowRight': case 'd': case 'D': camera.tx += step; break;
+        case 'ArrowUp': case 'w': case 'W': camera.ty -= step; break;
+        case 'ArrowDown': case 's': case 'S': camera.ty += step; break;
+        case '+': case '=': zoomCameraAt(canvas.width / 2, canvas.height / 2, 1.25); return;
+        case '-': case '_': zoomCameraAt(canvas.width / 2, canvas.height / 2, 1 / 1.25); return;
+        case '0': resetCamera(); return;
+        default: return;
+    }
+    event.preventDefault();
+    clampCamera();
+}
+
 // --- Herní smyčka a kreslení ---
 
+let lastFrameTime = 0;
+
 function gameLoop(timestamp) {
+    // Kamera, kulisy a průzkumné nástroje běží i před koupí prvního pozemku
+    const frameMs = Math.min(timestamp - (lastFrameTime || timestamp), MAX_FRAME_MS);
+    lastFrameTime = timestamp;
+    updateCamera(frameMs);
+    if (!isPaused && !isGameOver) {
+        updateToolEffects(frameMs * gameSpeed);
+        updateAmbient(frameMs);
+    }
+
     if (isGameOver) {
         drawGameOver();
         requestAnimationFrame(gameLoop);
@@ -358,6 +782,8 @@ function update(dt) {
         dayTimer -= MS_PER_DAY;
         day++;
         const ownedPlots = plots.filter(p => p.owner === 'player').length;
+        lastDayIncome = totalRevenue - revenueAtDayStart - ownedPlots * DAILY_LAND_TAX;
+        revenueAtDayStart = totalRevenue;
         if (ownedPlots > 0) {
             money -= ownedPlots * DAILY_LAND_TAX;
             if (money < 0) {
@@ -376,6 +802,7 @@ function update(dt) {
             } else {
                 day = 1;
                 month++;
+                logEvent(`Začíná ${MONTH_FULL_NAMES[month]}.`);
             }
         }
     }
@@ -412,61 +839,66 @@ function update(dt) {
         if (pocket.oil <= 0) {
             pocket.oil = 0;
             network.isPumping = false;
+            notify('Ložisko vyčerpáno', `Vrt na pozemku ${network.derrickId + 1} přestal čerpat`, 'bad', '🛢️');
         }
     });
 
+    emitDerrickSmoke(dt);
     updateTrucks(dt);
     updateParticles(dt);
 
-    temporaryEffects = temporaryEffects.filter(effect => {
-        effect.duration -= dt;
-        return effect.duration > 0;
-    });
-
-    if (scannerEffect.active) {
-        scannerEffect.duration -= dt;
-        if (scannerEffect.duration <= 0) scannerEffect.active = false;
-    }
 }
 
 function draw() {
-    const groundLevel = Math.floor(canvas.height / 3);
+    const groundLevel = getGroundLevel();
 
-    // Vyčištění a pozadí
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Vyčištění a pozadí; svět se kreslí přes kameru, překryvy (vinětace, pauza) v souřadnicích obrazovky
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#07080f';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    applyCameraTransform();
+    drawFarLayer(groundLevel);
     drawSkyAndGround(groundLevel);
+    drawSkyLife(groundLevel);
+    drawTownLife(groundLevel);
+    drawTownFront(groundLevel);
 
-    // Kreslení herních prvků
+    // Kreslení herních prvků (podzemí, pak deska odzadu dopředu)
     drawOilPockets(groundLevel);
+    drawToolEffects(groundLevel);
     drawPipeNetworks();
     drawPlots(groundLevel);
 
+    const structureY = groundLevel - STRUCTURE_BASE_OFFSET;
     plots.forEach(plot => {
         const centerX = plot.x + plotWidth / 2;
+        const network = pipeNetworks.find(n => n.derrickId === plot.id);
         if (plot.hasVrt) {
-            const network = pipeNetworks.find(n => n.derrickId === plot.id);
-            drawDerrick(centerX, plot.y, plot.id, network ? network.isPumping : false, network);
+            drawDerrick(centerX, structureY, plot.id, network ? network.isPumping : false, network);
+            drawRigWorkers(centerX, structureY, plot.id);
         }
         // Kreslení sil (hladina ukazuje zaplnění zásobníku vrtu)
-        const siloNetwork = pipeNetworks.find(n => n.derrickId === plot.id);
-        const siloFill = siloNetwork && siloNetwork.oilCapacity > 0
-            ? Math.min(1, siloNetwork.oilStored / siloNetwork.oilCapacity) : 0;
+        const siloFill = network && network.oilCapacity > 0
+            ? Math.min(1, network.oilStored / network.oilCapacity) : 0;
         for (let i = 0; i < plot.siloCount; i++) {
-            drawSilo(centerX + SILO_OFFSET_X + i * SILO_STEP, plot.y, siloFill);
+            drawSilo(centerX + SILO_OFFSET_X + i * SILO_STEP, structureY + 4 + i * 2, siloFill);
         }
+        if (plot.hasVrt && network) drawStorageChip(centerX, structureY - DERRICK_HEIGHT - 26, network);
     });
 
     // Budovy a UI na plátně
     drawCompanyBuildings(groundLevel);
 
-    // Silnice nad zemí, po ní jezdí auta
-    drawRoad(groundLevel);
+    // Silnice je zapečená v pozadí, auta jezdí po předním pásu desky
     drawTrucks(groundLevel);
     drawParticles();
+    drawAmbientDust();
+    drawDrone(groundLevel);
 
     // Kreslení dočasných efektů a náhledů
     drawEffectsAndPreviews(groundLevel);
-    drawSoundButton();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(getVignette(), 0, 0);
 
     // Aktualizace HTML UI
     updateUI();
@@ -485,22 +917,46 @@ function draw() {
     }
 }
 
-function updateUI() {
-    // Peníze
-    document.getElementById('money-value').textContent = Math.floor(money);
+// Zapíše text jen při změně: updateUI běží každý snímek a zbytečné zápisy do DOM stojí výkon
+function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el && el.textContent !== text) el.textContent = text;
+}
 
-    // Kalendář
-    document.getElementById('month').textContent = monthNames[month];
-    document.getElementById('day').textContent = day;
+function formatRate(value, prefix = '') {
+    const rounded = Math.round(value);
+    return `${rounded >= 0 ? '+' : '−'}${prefix}${Math.abs(rounded).toLocaleString('cs-CZ')}/den`;
+}
+
+function updateUI() {
+    // Peníze a zdroje
+    setText('money-value', Math.floor(money).toLocaleString('cs-CZ'));
+    const pumpingRigs = pipeNetworks.filter(n => n.derrickId >= 0 && n.isPumping);
+    setText('stat-rigs', `${pumpingRigs.length}/${plots.filter(p => p.hasVrt).length}`);
+    setText('stat-trucks', `${trucksOwned}/${MAX_TRUCKS}`);
+    const storedOil = pipeNetworks.reduce((sum, n) => sum + (n.derrickId >= 0 ? n.oilStored : 0), 0);
+    setText('stat-oil', Math.floor(storedOil).toLocaleString('cs-CZ'));
+    setText('stat-oil-rate', formatRate(pumpingRigs.length * OIL_PER_SECOND * MS_PER_DAY / 1000));
+    setText('stat-sold', Math.floor(totalOilSold).toLocaleString('cs-CZ'));
+    setText('stat-income', formatRate(lastDayIncome, '$'));
+    document.getElementById('stat-income').classList.toggle('negative', lastDayIncome < 0);
+
+    // Kalendář: kruh kolem data ukazuje, kolik roku uběhlo
+    setText('month', monthNames[month]);
+    setText('day', String(day));
+    const daysBefore = daysInMonth.slice(1, month).reduce((a, b) => a + b, 0);
+    document.getElementById('date-dial').style.setProperty('--year', ((daysBefore + day - 1) / 365).toFixed(4));
+
+    renderGoals();
 
     // Tlačítka
     const buttons = [
         { el: document.getElementById('vrt-btn'), cost: VRT_COST, mode: 'vrt' },
         { el: document.getElementById('silo-btn'), cost: SILO_COST, mode: 'silo' },
         { el: document.getElementById('truck-btn'), cost: TRUCK_COST, isTruck: true },
-        { el: document.getElementById('mole-btn'), cost: MOLE_COST, mode: 'mole' },
-        { el: document.getElementById('scanner-btn'), cost: SCANNER_COST, isScanner: true },
-        { el: document.getElementById('dowser-btn'), cost: DOWSER_COST, needsOwnedPlot: true },
+        { el: document.getElementById('seismic-btn'), cost: SEISMIC_COST, mode: 'seismic', needsOwnedPlot: true },
+        { el: document.getElementById('drone-btn'), cost: DRONE_COST, isDrone: true },
+        { el: document.getElementById('radar-btn'), cost: RADAR_COST, mode: 'radar' },
     ];
 
     buttons.forEach(item => {
@@ -512,7 +968,7 @@ function updateUI() {
             const canBuildSilo = plots.some(p => p.owner === 'player' && p.hasVrt && p.siloCount < MAX_SILOS_PER_PLOT);
             isDisabled = isDisabled || !canBuildSilo;
         }
-        if (item.isScanner) isDisabled = isDisabled || scannerEffect.active;
+        if (item.isDrone) isDisabled = isDisabled || drone !== null;
         if (item.needsOwnedPlot) isDisabled = isDisabled || !plots.some(p => p.owner === 'player');
         item.el.disabled = isDisabled;
 
@@ -524,27 +980,803 @@ function updateUI() {
         if (item.mode) {
             item.el.classList.toggle('active-build-mode', currentBuildMode === item.mode);
         }
+        if (item.isDrone) item.el.classList.toggle('active-build-mode', drone !== null);
     });
 
     // Rychlost hry
-    const speedBtn = document.getElementById('speed-btn');
-    if (speedBtn) {
-        const speedLabels = { 1: '►', 2: '►►', 4: '►►►' };
-        speedBtn.textContent = speedLabels[gameSpeed] || '►';
-        speedBtn.style.filter = gameSpeed > 1 ? 'hue-rotate(120deg)' : 'none';
+    document.getElementById('pause-btn').classList.toggle('active', isPaused);
+    document.querySelectorAll('.time-btn[data-speed]').forEach(btn => {
+        btn.classList.toggle('active', !isPaused && Number(btn.dataset.speed) === gameSpeed);
+    });
+}
+
+// --- HUD: cíle, oznámení a deník ---
+
+// Cíle roku jsou zatím jen ukazatel postupu, hra je nevyhodnocuje
+function getYearGoals() {
+    const pumping = pipeNetworks.filter(n => n.derrickId >= 0 && n.isPumping).length;
+    return {
+        main: [
+            { name: 'Vydělej $20 000', value: totalRevenue, target: 20000, money: true },
+            { name: 'Měj 3 čerpající vrty', value: pumping, target: 3 }
+        ],
+        optional: [
+            { name: 'Prodej 2 000 barelů', value: totalOilSold, target: 2000 },
+            { name: 'Vlastni 6 kamionů', value: trucksOwned, target: 6 }
+        ]
+    };
+}
+
+let lastGoalsHtml = '';
+
+function renderGoals() {
+    const goals = getYearGoals();
+    const row = g => {
+        const ratio = Math.min(1, g.value / g.target);
+        const fmt = v => (g.money ? '$' : '') + Math.floor(v).toLocaleString('cs-CZ');
+        return `<div class="goal${ratio >= 1 ? ' done' : ''}">` +
+            `<div class="goal-name"><span>${g.name}</span><span class="value">${fmt(Math.min(g.value, g.target))} / ${fmt(g.target)}</span></div>` +
+            `<div class="bar"><div style="width:${(ratio * 100).toFixed(1)}%"></div></div></div>`;
+    };
+    const html = '<div class="goals-title">Ropná horečka</div>' + goals.main.map(row).join('') +
+        '<div class="goals-optional">Volitelné</div>' + goals.optional.map(row).join('');
+    if (html !== lastGoalsHtml) {
+        document.getElementById('hud-goals').innerHTML = html;
+        lastGoalsHtml = html;
     }
+}
+
+const TOAST_MS = 4500;
+const MAX_TOASTS = 3;
+
+// Oznámení vlevo nahoře; zároveň se zapíše do deníku událostí
+function notify(title, sub, kind = '', icon = '⛽') {
+    logEvent(`${title}${sub ? ' – ' + sub : ''}`);
+    const box = document.getElementById('hud-toasts');
+    if (!box) return;
+    const toast = document.createElement('div');
+    toast.className = `toast ${kind}`;
+    toast.innerHTML = '<div class="toast-icon"></div><div><div class="toast-title"></div><div class="toast-sub"></div></div>';
+    toast.querySelector('.toast-icon').textContent = icon;
+    toast.querySelector('.toast-title').textContent = title;
+    toast.querySelector('.toast-sub').textContent = sub || '';
+    box.prepend(toast);
+    while (box.children.length > MAX_TOASTS) box.lastChild.remove();
+    setTimeout(() => toast.classList.add('leaving'), TOAST_MS);
+    setTimeout(() => toast.remove(), TOAST_MS + 700);
+}
+
+function logEvent(text) {
+    eventLog.unshift({ when: `${day}. ${monthNames[month]}`, text });
+    if (eventLog.length > EVENT_LOG_LEN) eventLog.length = EVENT_LOG_LEN;
+    renderEventLog();
+}
+
+function renderEventLog() {
+    const box = document.getElementById('hud-log');
+    if (!box) return;
+    box.innerHTML = '';
+    eventLog.forEach(entry => {
+        const row = document.createElement('div');
+        row.className = 'log-row';
+        row.innerHTML = '<span class="when"></span><span class="text"></span>';
+        row.querySelector('.when').textContent = entry.when;
+        row.querySelector('.text').textContent = entry.text;
+        box.appendChild(row);
+    });
 }
 
 
 // --- Kreslící pod-funkce ---
 
-function drawSkyAndGround(groundLevel) {
-    // Obloha
-    ctx.fillStyle = '#87CEEB';
-    ctx.fillRect(0, 0, canvas.width, groundLevel);
-    // Podzemí
-    ctx.fillStyle = '#8B5A2B';
-    ctx.fillRect(0, groundLevel, canvas.width, canvas.height - groundLevel);
+// --- Vizuál: dioráma (2.5D) ---
+// Herní logika zůstává 2D: groundLevel je přední hrana desky povrchu, nad ní se kreslí
+// šikmá deska viděná zvysoka (SLAB_DEPTH px) s nočním městem, pod ní řez podzemím.
+// Statické vrstvy (nebe, město, horniny) se předkreslí jednou do sceneCache.
+// Paleta: studené měsíční světlo na písku + teplé lampy, plameny rafinerií a žhnoucí ropa.
+const SLAB_DEPTH = 250;            // výška horní desky na obrazovce
+const VANISH_Y = -520;             // úběžník dělicích čar pozemků (x = střed plátna)
+const ROAD_DEPTH = 34;             // silnice zabírá přední pás desky
+const STRUCTURE_BASE_OFFSET = 40;  // vrty a sila stojí hned za silnicí
+const BUILDING_BASE_OFFSET = 34;   // budovy firem stojí na zadní hraně silnice
+const TOWN_DEPTH = 118;            // město zabírá zadní pás desky, vpředu je místo pro vrty
+const DERRICK_HEIGHT = 118;
+const MOON_X = 1180;               // měsíc, podle něj se nasvěcují hrany
+const MOON_Y = 92;
+const LIP_HEIGHT = 30;             // průměrná výška skalní hrany řezu pod deskou
+
+let sceneCache = null;
+let vignetteCache = null;
+let sceneChimneys = []; // komíny ve městě, kouří se z nich za běhu
+let townFrontCache = null; // domy před hlavní ulicí: kreslí se až po chodcích, aby je zakryly
+let townFrontItems = [];
+
+// Deterministické náhody pro kulisy, ať scéna vypadá při každém načtení stejně
+function seededRandom(seed) {
+    let s = seed >>> 0;
+    return () => {
+        s = (s + 0x6D2B79F5) >>> 0;
+        let t = s;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+function getSlabBackY(groundLevel) {
+    return groundLevel - SLAB_DEPTH;
+}
+
+// Měřítko perspektivy v hloubce y (1 = přední hrana desky)
+function slabScaleAt(y, groundLevel) {
+    return (y - VANISH_Y) / (groundLevel - VANISH_Y);
+}
+
+// X v hloubce y na desce pro bod, který je na přední hraně v x (perspektiva ke středu)
+function slabXAt(x, y, groundLevel) {
+    return canvas.width / 2 + (x - canvas.width / 2) * slabScaleAt(y, groundLevel);
+}
+
+function slabBackX(x, groundLevel) {
+    return slabXAt(x, getSlabBackY(groundLevel), groundLevel);
+}
+
+// Lichoběžník pozemku na desce, od frontY (výchozí přední hrana) po backY (výchozí zadní hrana)
+function traceSlabQuad(x0, x1, groundLevel, frontY = groundLevel, backY = getSlabBackY(groundLevel)) {
+    ctx.beginPath();
+    ctx.moveTo(slabXAt(x0, frontY, groundLevel), frontY);
+    ctx.lineTo(slabXAt(x1, frontY, groundLevel), frontY);
+    ctx.lineTo(slabXAt(x1, backY, groundLevel), backY);
+    ctx.lineTo(slabXAt(x0, backY, groundLevel), backY);
+    ctx.closePath();
+}
+
+function createLayer() {
+    const layer = document.createElement('canvas');
+    layer.width = canvas.width;
+    layer.height = canvas.height;
+    return layer;
+}
+
+// Kreslí do vrstvy stejnými funkcemi jako do plátna (dočasně podvrhne globální ctx)
+function paintLayer(layer, painter) {
+    const mainCtx = ctx;
+    ctx = layer.getContext('2d');
+    try {
+        painter();
+    } finally {
+        ctx = mainCtx;
+    }
+    return layer;
+}
+
+function getSceneCache() {
+    if (!sceneCache) {
+        const groundLevel = getGroundLevel();
+        sceneChimneys = [];
+        sceneCache = paintLayer(createLayer(), () => {
+            const rand = seededRandom(1859); // rok prvního ropného vrtu
+            drawSlab(groundLevel, rand);
+            drawTown(groundLevel, rand);
+            drawRoad(groundLevel);
+            drawUnderground(groundLevel, rand);
+            drawCliff(groundLevel, rand);
+        });
+        townFrontCache = paintLayer(createLayer(), () => {
+            townFrontItems.forEach(item => drawTownItem(item, groundLevel));
+        });
+    }
+    return sceneCache;
+}
+
+function getTownFrontCache() {
+    getSceneCache();
+    return townFrontCache;
+}
+
+// Vzdálená vrstva (nebe, měsíc, hory) je širší než plátno a posouvá se pomaleji než svět
+// (paralaxa při posunu kamery a jemné naklonění podle myši)
+const FAR_PAD = 40;
+let farCache = null;
+
+function getFarCache() {
+    if (!farCache) {
+        const groundLevel = getGroundLevel();
+        farCache = document.createElement('canvas');
+        farCache.width = canvas.width + FAR_PAD * 2;
+        farCache.height = getSlabBackY(groundLevel) + 20;
+        paintLayer(farCache, () => {
+            const rand = seededRandom(1901);
+            ctx.translate(FAR_PAD, 0);
+            drawSky(groundLevel, rand);
+            drawMountains(groundLevel, rand);
+        });
+    }
+    return farCache;
+}
+
+function drawFarLayer() {
+    const tiltX = (pointerScreen.x / canvas.width - 0.5) * -24;
+    const tiltY = (pointerScreen.y / canvas.height) * -8;
+    ctx.drawImage(getFarCache(), -FAR_PAD + camera.x * 0.45 + tiltX, camera.y * 0.35 + tiltY);
+}
+
+function getVignette() {
+    if (!vignetteCache) {
+        vignetteCache = paintLayer(createLayer(), () => {
+            const w = canvas.width, h = canvas.height;
+            const g = ctx.createRadialGradient(w / 2, h * 0.45, h * 0.3, w / 2, h * 0.5, w * 0.6);
+            g.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            g.addColorStop(1, 'rgba(4, 4, 10, 0.6)');
+            ctx.fillStyle = g;
+            ctx.fillRect(0, 0, w, h);
+        });
+    }
+    return vignetteCache;
+}
+
+function drawSkyAndGround() {
+    ctx.drawImage(getSceneCache(), 0, 0);
+}
+
+function drawSky(groundLevel, rand) {
+    const backY = getSlabBackY(groundLevel);
+    const sky = ctx.createLinearGradient(0, 0, 0, backY);
+    sky.addColorStop(0, '#070912');
+    sky.addColorStop(0.6, '#141a2e');
+    sky.addColorStop(1, '#2a2a40');
+    ctx.fillStyle = sky;
+    ctx.fillRect(-FAR_PAD, 0, canvas.width + FAR_PAD * 2, backY + 20);
+
+    for (let i = 0; i < 90; i++) {
+        const y = rand() * backY * 0.8;
+        ctx.fillStyle = `rgba(220, 230, 255, ${0.15 + rand() * 0.55})`;
+        ctx.fillRect(rand() * (canvas.width + FAR_PAD * 2) - FAR_PAD, y, 1.4, 1.4);
+    }
+
+    drawGlow(MOON_X, MOON_Y, 160, '150, 170, 230', 0.22);
+    ctx.fillStyle = '#e8ecf7';
+    ctx.beginPath();
+    ctx.arc(MOON_X, MOON_Y, 17, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(160, 170, 200, 0.35)'; // krátery
+    [[-5, -4, 4], [6, 3, 3], [-2, 7, 2]].forEach(([dx, dy, r]) => {
+        ctx.beginPath();
+        ctx.arc(MOON_X + dx, MOON_Y + dy, r, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // Teplý opar nad městem u obzoru
+    const haze = ctx.createLinearGradient(0, backY - 60, 0, backY + 2);
+    haze.addColorStop(0, 'rgba(255, 140, 80, 0)');
+    haze.addColorStop(1, 'rgba(255, 140, 80, 0.16)');
+    ctx.fillStyle = haze;
+    ctx.fillRect(-FAR_PAD, backY - 60, canvas.width + FAR_PAD * 2, 80);
+}
+
+// Stolové hory na obzoru: tmavé siluety s měsíčním světlem na hranách
+function drawMountains(groundLevel, rand) {
+    const backY = getSlabBackY(groundLevel);
+    [
+        { color: '#1b1f33', rim: 'rgba(150, 170, 230, 0.25)', maxH: 70, minH: 18 },
+        { color: '#141623', rim: 'rgba(150, 170, 230, 0.18)', maxH: 44, minH: 8 }
+    ].forEach(layer => {
+        const pts = [];
+        let x = -FAR_PAD;
+        let h = layer.minH;
+        pts.push([x, backY - h]);
+        while (x < canvas.width + FAR_PAD) {
+            const isMesa = rand() < 0.5;
+            const nextH = isMesa ? layer.maxH * (0.5 + rand() * 0.5) : layer.minH + rand() * layer.minH;
+            const slope = 12 + rand() * 22;
+            const flat = isMesa ? 50 + rand() * 130 : 30 + rand() * 70;
+            pts.push([x + slope, backY - nextH], [x + slope + flat, backY - nextH]);
+            x += slope + flat;
+            h = nextH;
+        }
+        ctx.fillStyle = layer.color;
+        ctx.beginPath();
+        ctx.moveTo(-FAR_PAD, backY + 20); // pata hor je schovaná za deskou (paralaxa ji posouvá)
+        pts.forEach(([px, py]) => ctx.lineTo(px, py));
+        ctx.lineTo(canvas.width + FAR_PAD * 2, backY + 20);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = layer.rim;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        pts.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
+        ctx.stroke();
+    });
+}
+
+// Horní plocha desky: písek v měsíčním světle, vzadu chladnější, vepředu teplejší od lamp
+function drawSlab(groundLevel, rand) {
+    const backY = getSlabBackY(groundLevel);
+    const ground = ctx.createLinearGradient(0, backY, 0, groundLevel);
+    ground.addColorStop(0, '#34344a');
+    ground.addColorStop(0.45, '#444056');
+    ground.addColorStop(1, '#574640');
+    ctx.fillStyle = ground;
+    ctx.fillRect(0, backY, canvas.width, SLAB_DEPTH);
+
+    // Měsíční lesk na písku
+    drawGlow(MOON_X, backY + 40, 520, '140, 160, 220', 0.10);
+
+    // Zrnitost, vepředu větší (perspektiva)
+    for (let i = 0; i < 2600; i++) {
+        const depth = rand();
+        const y = backY + depth * SLAB_DEPTH;
+        const size = 0.6 + depth * 1.8;
+        ctx.fillStyle = rand() < 0.55 ? 'rgba(10, 8, 20, 0.22)' : 'rgba(200, 200, 230, 0.07)';
+        ctx.fillRect(rand() * canvas.width, y, size, size * 0.6);
+    }
+    // Duny: měkké světlé a tmavé vlny
+    for (let i = 0; i < 14; i++) {
+        const y = backY + 20 + rand() * (SLAB_DEPTH - 60);
+        const s = slabScaleAt(y, groundLevel);
+        ctx.strokeStyle = 'rgba(170, 180, 220, 0.06)';
+        ctx.lineWidth = 3 * s;
+        ctx.beginPath();
+        const x0 = rand() * canvas.width;
+        ctx.moveTo(x0, y);
+        ctx.quadraticCurveTo(x0 + 120 * s, y - 10 * s, x0 + 260 * s, y);
+        ctx.stroke();
+    }
+}
+
+// --- Noční město v zadní části desky (jen kulisa, nehraje se s ním) ---
+// Geometrie města: hlavní ulice s chodníky a promenáda na jeho přední hraně
+function getTownLayout(groundLevel) {
+    const backY = getSlabBackY(groundLevel);
+    const streetY = backY + 62;
+    const s = slabScaleAt(streetY, groundLevel);
+    return {
+        backY,
+        streetY,
+        streetScale: s,
+        streetHalf: 11 * s,                    // polovina šířky vozovky
+        sidewalkNorth: streetY - 9 * s,        // chodník za ulicí (chodí se doleva)
+        sidewalkSouth: streetY + 10 * s,       // chodník před ulicí (chodí se doprava)
+        clearance: 20,                         // pás bez domů kolem ulice
+        promenadeY: backY + TOWN_DEPTH + 5,    // dřevěný chodník před městem
+        townEndY: backY + TOWN_DEPTH - 6       // poslední řada domů
+    };
+}
+
+function drawTown(groundLevel, rand) {
+    const L = getTownLayout(groundLevel);
+    const backY = L.backY;
+
+    // Cesty z města k polím (pod domy)
+    ctx.strokeStyle = 'rgba(90, 75, 70, 0.4)';
+    ctx.lineWidth = 5;
+    for (let i = 0; i < 6; i++) {
+        const x = 120 + i * 270 + rand() * 60;
+        ctx.beginPath();
+        ctx.moveTo(x, L.streetY);
+        ctx.quadraticCurveTo(x + (rand() - 0.5) * 80, L.streetY + 40, slabXAt(x, L.promenadeY, groundLevel), L.promenadeY);
+        ctx.stroke();
+    }
+
+    // Hlavní ulice s obrubníky
+    ctx.fillStyle = 'rgba(70, 60, 62, 0.75)';
+    ctx.fillRect(0, L.streetY - L.streetHalf, canvas.width, L.streetHalf * 2);
+    ctx.fillStyle = 'rgba(150, 140, 160, 0.18)';
+    ctx.fillRect(0, L.streetY - L.streetHalf - 1.5, canvas.width, 1.5);
+    ctx.fillRect(0, L.streetY + L.streetHalf, canvas.width, 1.5);
+    ctx.fillStyle = 'rgba(255, 220, 150, 0.08)'; // středová čára
+    for (let x = 0; x < canvas.width; x += 26) ctx.fillRect(x, L.streetY - 0.5, 12, 1);
+
+    // Promenáda: prkenný chodník před městem
+    const ps = slabScaleAt(L.promenadeY, groundLevel);
+    ctx.fillStyle = 'rgba(95, 70, 55, 0.6)';
+    ctx.fillRect(0, L.promenadeY - 4 * ps, canvas.width, 8 * ps);
+    ctx.fillStyle = 'rgba(20, 12, 10, 0.35)';
+    for (let x = 0; x < canvas.width; x += 9) ctx.fillRect(x, L.promenadeY - 4 * ps, 1, 8 * ps);
+
+    // Každá stavba má vlastní seed, aby šla přední řada nakreslit znovu do jiné vrstvy
+    const items = [];
+    for (let i = 0; i < 26; i++) {
+        const north = i % 2 === 0;
+        items.push({ type: 'lamp', x: 40 + i * 60 + rand() * 20, y: north ? L.streetY - L.streetHalf - 3 : L.streetY + L.streetHalf + 4, seed: 0 });
+    }
+    for (let i = 0; i < 120; i++) {
+        const r = rand();
+        const type = r < 0.52 ? 'shack' : r < 0.64 ? 'tank' : r < 0.74 ? 'tent' : r < 0.86 ? 'derrick' : r < 0.9 ? 'water' : 'house';
+        const y = backY + 8 + Math.pow(rand(), 0.85) * (L.townEndY - backY - 8);
+        const x = rand() * canvas.width;
+        const seed = Math.floor(rand() * 1e9);
+        if (Math.abs(y - L.streetY) < L.clearance) continue; // ulice a chodníky zůstávají volné
+        items.push({ type, x, y, seed });
+    }
+    items.sort((a, b) => a.y - b.y);
+    townFrontItems = items.filter(item => item.y > L.streetY);
+    items.filter(item => item.y <= L.streetY).forEach(item => drawTownItem(item, groundLevel));
+}
+
+function drawTownItem(item, groundLevel) {
+    const s = slabScaleAt(item.y, groundLevel);
+    const rand = seededRandom(item.seed);
+    switch (item.type) {
+        case 'shack': drawTownShack(item.x, item.y, s, rand, false); break;
+        case 'house': drawTownShack(item.x, item.y, s, rand, true); break;
+        case 'tank': drawTownTank(item.x, item.y, s); break;
+        case 'tent': drawTownTent(item.x, item.y, s, rand); break;
+        case 'derrick': drawTownDerrick(item.x, item.y, s); break;
+        case 'water': drawTownWaterTower(item.x, item.y, s); break;
+        case 'lamp': drawTownLamp(item.x, item.y, s); break;
+    }
+}
+
+function drawGroundShadow(x, y, w, s) {
+    ctx.fillStyle = 'rgba(5, 5, 15, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(x - 6 * s, y + 1, w * 0.6, 4 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// Dřevěná bouda / dvoupatrový dům: čelo, bok do hloubky, střecha s měsíční hranou, svítící okna
+function drawTownShack(x, y, s, rand, tall) {
+    const w = (tall ? 46 : 30) * s + rand() * 22 * s;
+    const h = (tall ? 40 : 20) * s + rand() * 14 * s;
+    const depth = 9 * s;
+    drawGroundShadow(x + w / 2, y, w, s);
+    ctx.fillStyle = '#1c1b28'; // bok
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y - h);
+    ctx.lineTo(x - depth, y - h - depth * 0.6);
+    ctx.lineTo(x - depth, y - depth * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    const wall = ctx.createLinearGradient(x, 0, x + w, 0);
+    wall.addColorStop(0, '#2e2c3c');
+    wall.addColorStop(1, '#3d3a4e');
+    ctx.fillStyle = wall;
+    ctx.fillRect(x, y - h, w, h);
+
+    const gable = rand() < 0.55;
+    ctx.fillStyle = '#17161f';
+    ctx.beginPath();
+    if (gable) {
+        ctx.moveTo(x - depth - 2 * s, y - h - depth * 0.6);
+        ctx.lineTo(x - 2 * s, y - h);
+        ctx.lineTo(x + w / 2, y - h - 14 * s);
+        ctx.lineTo(x + w + 2 * s, y - h);
+        ctx.lineTo(x + w / 2 - depth, y - h - 14 * s - depth * 0.6);
+    } else {
+        ctx.moveTo(x - depth - 2 * s, y - h - depth * 0.6 - 3 * s);
+        ctx.lineTo(x + w + 3 * s, y - h - 1 * s);
+        ctx.lineTo(x + w + 3 * s, y - h + 2 * s);
+        ctx.lineTo(x - depth - 2 * s, y - h - depth * 0.6);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(170, 185, 235, 0.45)'; // měsíc na hřebeni
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (gable) {
+        ctx.moveTo(x + w / 2 - depth, y - h - 14 * s - depth * 0.6);
+        ctx.lineTo(x + w / 2, y - h - 14 * s);
+        ctx.lineTo(x + w + 2 * s, y - h);
+    } else {
+        ctx.moveTo(x - depth - 2 * s, y - h - depth * 0.6 - 3 * s);
+        ctx.lineTo(x + w + 3 * s, y - h - 1 * s);
+    }
+    ctx.stroke();
+
+    // Okna: část svítí teple
+    const rows = tall ? 2 : 1;
+    const cols = Math.max(1, Math.floor(w / (13 * s)));
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (rand() < 0.35) continue;
+            const wx = x + 4 * s + c * (w - 8 * s) / cols;
+            const wy = y - h + 5 * s + r * 16 * s;
+            const lit = rand() < 0.75;
+            ctx.fillStyle = lit ? '#ffbe6a' : '#14131c';
+            ctx.fillRect(wx, wy, 5 * s, 6 * s);
+            if (lit) drawGlow(wx + 2.5 * s, wy + 3 * s, 16 * s, '255, 160, 70', 0.28);
+        }
+    }
+    if (rand() < 0.45) { // komín
+        const cx = x + w * 0.7;
+        const top = y - h - (gable ? 12 : 6) * s;
+        ctx.fillStyle = '#121119';
+        ctx.fillRect(cx, top - 8 * s, 4 * s, 9 * s);
+        sceneChimneys.push({ x: cx + 2 * s, y: top - 8 * s, s, phase: rand() * 10 });
+    }
+}
+
+function drawTownTank(x, y, s) {
+    const w = 26 * s, h = 20 * s;
+    drawGroundShadow(x + w / 2, y, w, s);
+    const steel = ctx.createLinearGradient(x, 0, x + w, 0);
+    steel.addColorStop(0, '#22222e');
+    steel.addColorStop(0.7, '#3d3d52');
+    steel.addColorStop(1, '#8890b8');
+    ctx.fillStyle = steel;
+    ctx.fillRect(x, y - h, w, h);
+    ctx.fillStyle = '#4a4b64';
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, y - h, w / 2, 4 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff9a4a'; // výstražné světélko
+    ctx.fillRect(x + w / 2 - 1, y - h - 2 * s, 2, 2);
+    drawGlow(x + w / 2, y - h - 1, 8 * s, '255, 120, 50', 0.4);
+}
+
+function drawTownTent(x, y, s, rand) {
+    const w = 22 * s, h = 15 * s;
+    drawGroundShadow(x + w / 2, y, w, s);
+    ctx.fillStyle = '#6d6560';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w / 2, y - h);
+    ctx.lineTo(x + w, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#4a433f';
+    ctx.beginPath();
+    ctx.moveTo(x + w / 2, y - h);
+    ctx.lineTo(x + w, y);
+    ctx.lineTo(x + w * 0.6, y);
+    ctx.closePath();
+    ctx.fill();
+    if (rand() < 0.7) { // lucerna uvnitř prosvítá plátnem
+        ctx.fillStyle = 'rgba(255, 170, 90, 0.5)';
+        ctx.beginPath();
+        ctx.moveTo(x + w * 0.35, y);
+        ctx.lineTo(x + w / 2, y - h * 0.6);
+        ctx.lineTo(x + w * 0.62, y);
+        ctx.closePath();
+        ctx.fill();
+        drawGlow(x + w / 2, y - h * 0.3, 22 * s, '255, 150, 70', 0.3);
+    }
+}
+
+// Vzdálená vrtná věž cizí firmy: silueta s lampou
+function drawTownDerrick(x, y, s) {
+    const h = 58 * s, half = 12 * s;
+    drawGroundShadow(x, y, half * 2, s);
+    ctx.strokeStyle = '#15141d';
+    ctx.lineWidth = 1.6 * s;
+    ctx.beginPath();
+    ctx.moveTo(x - half, y);
+    ctx.lineTo(x - 2 * s, y - h);
+    ctx.lineTo(x + 2 * s, y - h);
+    ctx.lineTo(x + half, y);
+    for (let i = 1; i < 5; i++) {
+        const yy = y - h * i / 5;
+        const hw = half - (half - 2 * s) * i / 5;
+        ctx.moveTo(x - hw, yy);
+        ctx.lineTo(x + hw, yy);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(170, 185, 235, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + half, y);
+    ctx.lineTo(x + 2 * s, y - h);
+    ctx.stroke();
+    ctx.fillStyle = '#ffcf80';
+    ctx.fillRect(x - 1, y - h - 3 * s, 2, 2);
+    drawGlow(x, y - h - 2 * s, 18 * s, '255, 160, 70', 0.45);
+}
+
+function drawTownWaterTower(x, y, s) {
+    const h = 44 * s, w = 22 * s;
+    drawGroundShadow(x, y, w, s);
+    ctx.strokeStyle = '#15141d';
+    ctx.lineWidth = 2 * s;
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2, y);
+    ctx.lineTo(x - w / 3, y - h * 0.55);
+    ctx.moveTo(x + w / 2, y);
+    ctx.lineTo(x + w / 3, y - h * 0.55);
+    ctx.moveTo(x - w / 2.4, y - h * 0.25);
+    ctx.lineTo(x + w / 2.4, y - h * 0.25);
+    ctx.stroke();
+    ctx.fillStyle = '#2c2a3a';
+    ctx.fillRect(x - w / 2, y - h, w, h * 0.45);
+    ctx.fillStyle = '#1b1a26';
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2 - 2 * s, y - h);
+    ctx.lineTo(x, y - h - 9 * s);
+    ctx.lineTo(x + w / 2 + 2 * s, y - h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(170, 185, 235, 0.35)';
+    ctx.fillRect(x + w / 2 - 3 * s, y - h, 3 * s, h * 0.45);
+}
+
+function drawTownLamp(x, y, s) {
+    ctx.fillStyle = '#121119';
+    ctx.fillRect(x, y - 16 * s, 1.5, 16 * s);
+    ctx.fillStyle = '#ffd890';
+    ctx.fillRect(x - 1, y - 18 * s, 3.5, 3);
+    drawGlow(x, y - 16 * s, 22 * s, '255, 170, 80', 0.45);
+    // Kruh světla na zemi
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255, 150, 70, 0.07)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 26 * s, 7 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawRoad(groundLevel) {
+    const top = groundLevel - ROAD_DEPTH;
+    const road = ctx.createLinearGradient(0, top, 0, groundLevel);
+    road.addColorStop(0, '#2f2a33');
+    road.addColorStop(1, '#3a2f2e');
+    ctx.fillStyle = road;
+    ctx.fillRect(0, top, canvas.width, ROAD_DEPTH);
+    ctx.fillStyle = 'rgba(190, 200, 240, 0.06)'; // vyjeté koleje v měsíčním světle
+    [top + 9, top + 13, top + 22, top + 27].forEach(y => ctx.fillRect(0, y, canvas.width, 1.5));
+    ctx.fillStyle = 'rgba(10, 8, 15, 0.45)';
+    ctx.fillRect(0, top, canvas.width, 2);
+}
+
+// Řez podzemím: tmavá skála z balvanů, jemné vrstvy, studené krystalky a tma ke dnu
+function drawUnderground(groundLevel, rand) {
+    const top = groundLevel;
+    const h = canvas.height - top;
+    const base = ctx.createLinearGradient(0, top, 0, canvas.height);
+    base.addColorStop(0, '#2a1f1a');
+    base.addColorStop(0.6, '#17110e');
+    base.addColorStop(1, '#090706');
+    ctx.fillStyle = base;
+    ctx.fillRect(0, top, canvas.width, h);
+
+    const shades = ['#2c211b', '#251c17', '#1e1713', '#33261e', '#211915'];
+    const rocks = [];
+    for (let i = 0; i < 520; i++) {
+        rocks.push({ x: rand() * canvas.width, y: top + rand() * h, r: 8 + Math.pow(rand(), 2) * 46 });
+    }
+    rocks.sort((a, b) => b.r - a.r);
+    rocks.forEach(rock => {
+        const depthFade = 1 - (rock.y - top) / h * 0.6;
+        const n = 6 + Math.floor(rand() * 3);
+        ctx.beginPath();
+        for (let j = 0; j < n; j++) {
+            const a = (j / n) * Math.PI * 2;
+            const rr = rock.r * (0.7 + rand() * 0.35);
+            const px = rock.x + Math.cos(a) * rr;
+            const py = rock.y + Math.sin(a) * rr * 0.7;
+            if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.globalAlpha = depthFade;
+        ctx.fillStyle = shades[Math.floor(rand() * shades.length)];
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255, 220, 190, 0.05)'; // horní hrana balvanu
+        ctx.beginPath();
+        ctx.ellipse(rock.x, rock.y, rock.r * 0.7, rock.r * 0.45, 0, Math.PI * 1.15, Math.PI * 1.85);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+    });
+
+    // Praskliny ve vrstvách
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+        const y0 = top + 70 + i * (h - 120) / 5 + rand() * 30;
+        ctx.beginPath();
+        ctx.moveTo(0, y0);
+        for (let x = 0; x <= canvas.width; x += 40) ctx.lineTo(x, y0 + Math.sin(x * 0.006 + i) * 12 + (rand() - 0.5) * 8);
+        ctx.stroke();
+    }
+
+    // Studené minerály: drobné modré body, kontrast k teplé ropě
+    for (let i = 0; i < 28; i++) {
+        const x = rand() * canvas.width;
+        const y = top + 60 + rand() * (h - 160);
+        ctx.fillStyle = 'rgba(150, 210, 255, 0.7)';
+        ctx.fillRect(x, y, 2, 2);
+        drawGlow(x + 1, y + 1, 7, '110, 180, 255', 0.35);
+    }
+
+    const fade = ctx.createLinearGradient(0, canvas.height - 180, 0, canvas.height);
+    fade.addColorStop(0, 'rgba(5, 4, 4, 0)');
+    fade.addColorStop(1, 'rgba(5, 4, 4, 0.85)');
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, canvas.height - 180, canvas.width, 180);
+}
+
+// Skalní hrana pod deskou: zubatý spodní okraj, svislé žíly, světlo na lomu a stín pod ní
+function drawCliff(groundLevel, rand) {
+    const top = groundLevel;
+    const pts = [];
+    for (let x = 0; x <= canvas.width + 14; x += 14) {
+        pts.push([x, top + LIP_HEIGHT * (0.6 + rand() * 0.8)]);
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(0, top);
+    pts.forEach(([x, y]) => ctx.lineTo(x, y));
+    ctx.lineTo(canvas.width, top);
+    ctx.closePath();
+    const face = ctx.createLinearGradient(0, top, 0, top + LIP_HEIGHT * 1.4);
+    face.addColorStop(0, '#4a3b3a');
+    face.addColorStop(1, '#241a18');
+    ctx.fillStyle = face;
+    ctx.fill();
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 260; i++) {
+        const x = rand() * canvas.width;
+        ctx.beginPath();
+        ctx.moveTo(x, top + 2);
+        ctx.lineTo(x + (rand() - 0.5) * 6, top + LIP_HEIGHT * 1.4);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    // Stín pod převisem
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height);
+    pts.forEach(([x, y]) => ctx.lineTo(x, y));
+    ctx.lineTo(canvas.width, canvas.height);
+    ctx.closePath();
+    ctx.clip();
+    const ao = ctx.createLinearGradient(0, top + LIP_HEIGHT * 0.6, 0, top + LIP_HEIGHT + 60);
+    ao.addColorStop(0, 'rgba(0, 0, 0, 0.6)');
+    ao.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = ao;
+    ctx.fillRect(0, top, canvas.width, LIP_HEIGHT + 70);
+    ctx.restore();
+
+    ctx.fillStyle = 'rgba(200, 200, 235, 0.45)'; // měsíc na hraně desky
+    ctx.fillRect(0, top, canvas.width, 1.5);
+}
+
+// Kouř z komínů města a prach v měsíčním světle; jen kresba, poloha je funkcí času
+function drawAmbientDust() {
+    const t = performance.now() / 1000;
+    const groundLevel = getGroundLevel();
+    ctx.save();
+    sceneChimneys.forEach(ch => {
+        for (let k = 0; k < 3; k++) {
+            const life = ((t * 0.35 + ch.phase + k / 3) % 1);
+            const r = (2 + life * 7) * ch.s;
+            ctx.fillStyle = `rgba(120, 120, 145, ${0.22 * (1 - life)})`;
+            ctx.beginPath();
+            ctx.arc(ch.x - life * 10 * ch.s, ch.y - life * 26 * ch.s, r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    });
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 30; i++) {
+        const speed = 5 + (i * 7) % 11;
+        const x = ((i * 389.7 + t * speed) % (canvas.width + 40)) - 20;
+        const y = 60 + ((i * 53.3) % (groundLevel - 80)) + Math.sin(t * 0.7 + i) * 6;
+        const alpha = 0.08 + 0.07 * Math.sin(t * 1.3 + i * 2.1);
+        ctx.fillStyle = `rgba(200, 215, 255, ${Math.max(0, alpha)})`;
+        ctx.beginPath();
+        ctx.arc(x, y, 1 + (i % 3) * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// Měkká záře (aditivní), pro lampy, okna, světla aut a ložiska
+function drawGlow(x, y, radius, color, alpha) {
+    if (alpha <= 0 || radius <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    g.addColorStop(0, `rgba(${color}, ${alpha})`);
+    g.addColorStop(1, `rgba(${color}, 0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    ctx.restore();
 }
 
 // Přidám globální pole pro hitboxy cedulí
@@ -552,7 +1784,7 @@ let plotSignHitboxes = [];
 let plotsHoverPointer = false; // myš je nad cedulí nebo stavitelným pozemkem
 
 const PLOT_SIGN_PAD = 10;
-const PLOT_SIGN_POST = 42; // výška sloupku: cedule musí být nad střechami projíždějících aut
+const PLOT_SIGN_POST = 30; // výška sloupku: cedule musí být nad střechami projíždějících aut
 const PLOT_SIGN_FONT = 'bold 18px "Rye", Georgia, serif';
 
 function getPlotSignRect(plot, groundLevel) {
@@ -560,7 +1792,7 @@ function getPlotSignRect(plot, groundLevel) {
     const signHeight = 32;
     const postHeight = PLOT_SIGN_POST;
     const signX = Math.round(plot.x + (plotWidth / 2) - (signWidth / 2));
-    const signY = Math.round(groundLevel - postHeight - signHeight);
+    const signY = Math.round(groundLevel - STRUCTURE_BASE_OFFSET - postHeight - signHeight);
     return { plotId: plot.id, x: signX, y: signY, width: signWidth, height: signHeight };
 }
 
@@ -583,11 +1815,22 @@ function isPlotSignHovered(sign) {
 }
 
 function drawPlotPurchaseHighlight(plot, groundLevel, canAfford) {
+    const color = canAfford ? '255, 200, 90' : '255, 80, 70';
     ctx.save();
-    ctx.fillStyle = canAfford
-        ? 'rgba(255, 215, 0, 0.22)'
-        : 'rgba(255, 0, 0, 0.14)';
-    ctx.fillRect(plot.x, 0, plotWidth, groundLevel);
+    // Světelný sloupec nad pozemkem a rozsvícená plocha desky
+    const backY = getSlabBackY(groundLevel);
+    const beam = ctx.createLinearGradient(0, 0, 0, backY);
+    beam.addColorStop(0, `rgba(${color}, 0)`);
+    beam.addColorStop(1, `rgba(${color}, 0.16)`);
+    ctx.fillStyle = beam;
+    ctx.fillRect(slabBackX(plot.x, groundLevel), 0,
+        slabBackX(plot.x + plotWidth, groundLevel) - slabBackX(plot.x, groundLevel), backY);
+    traceSlabQuad(plot.x, plot.x + plotWidth, groundLevel);
+    ctx.fillStyle = `rgba(${color}, 0.16)`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(${color}, 0.7)`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
     ctx.restore();
 }
 
@@ -647,10 +1890,15 @@ function getCanvasPosition(event) {
 
     const rawX = (clientX - rect.left - offsetX) * (canvas.width / renderWidth);
     const rawY = (clientY - rect.top - offsetY) * (canvas.height / renderHeight);
+    const px = Math.max(0, Math.min(canvas.width, rawX));
+    const py = Math.max(0, Math.min(canvas.height, rawY));
 
+    // x/y jsou souřadnice světa (přes kameru), px/py pixely plátna
     return {
-        x: Math.max(0, Math.min(canvas.width, rawX)),
-        y: Math.max(0, Math.min(canvas.height, rawY)),
+        x: camera.x + px / camera.zoom,
+        y: camera.y + py / camera.zoom,
+        px,
+        py,
         inBounds: rawX >= 0 && rawX <= canvas.width && rawY >= 0 && rawY <= canvas.height
     };
 }
@@ -682,7 +1930,7 @@ function getOwnedPlotForTool(x) {
 }
 
 function createPipeNetwork(derrickId, startPlot) {
-    const groundLevel = Math.floor(canvas.height / 3);
+    const groundLevel = getGroundLevel();
     return {
         id: nextNetworkId++,
         derrickId,
@@ -708,6 +1956,7 @@ function tryPurchasePlot(plot, groundLevel) {
         plot.owner = 'player';
         playSound('build');
         startGameLoop();
+        notify('Pozemek koupen', `Pozemek ${plot.id + 1} za $${plot.price}`, 'cool', '🚩');
         lastBoughtPlotId = plot.id;
         lastBoughtHighlightTimer = 30;
         updatePlotSignHitboxes(groundLevel);
@@ -720,17 +1969,51 @@ function tryPurchasePlot(plot, groundLevel) {
 }
 
 function drawPlots(groundLevel) {
-    ctx.strokeStyle = '#D2B48C';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([10, 10]);
+    const backY = getSlabBackY(groundLevel);
+    const fieldBackY = getTownLayout(groundLevel).promenadeY + 8; // pole pozemků začínají za promenádou
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([8, 10]);
     for (let i = 1; i < PLOT_COUNT; i++) {
         const x = plots[i].x;
+        // Na desce se hranice sbíhají k úběžníku, v podzemí jdou kolmo dolů
+        ctx.strokeStyle = 'rgba(255, 225, 180, 0.22)';
         ctx.beginPath();
-        ctx.moveTo(x, groundLevel);
+        ctx.moveTo(slabXAt(x, groundLevel - ROAD_DEPTH, groundLevel), groundLevel - ROAD_DEPTH);
+        ctx.lineTo(slabXAt(x, fieldBackY, groundLevel), fieldBackY);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255, 220, 180, 0.07)';
+        ctx.beginPath();
+        ctx.moveTo(x, groundLevel + LIP_HEIGHT);
         ctx.lineTo(x, canvas.height);
         ctx.stroke();
     }
     ctx.setLineDash([]);
+
+    // Vlastní pozemky: zoraná tmavší půda, praporek a rozsvícená přední hrana
+    plots.forEach(plot => {
+        if (plot.owner !== 'player') return;
+        ctx.save();
+        traceSlabQuad(plot.x + 3, plot.x + plotWidth - 3, groundLevel, groundLevel - ROAD_DEPTH, fieldBackY);
+        ctx.fillStyle = 'rgba(30, 14, 8, 0.32)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 180, 80, 0.18)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255, 180, 80, 0.55)';
+        ctx.fillRect(plot.x + 4, groundLevel, plotWidth - 8, 2);
+        const fy = fieldBackY + 34;
+        const fx = slabXAt(plot.x + 10, fy, groundLevel) + 4;
+        ctx.fillStyle = '#2a1a12';
+        ctx.fillRect(fx, fy - 26, 2, 26);
+        ctx.fillStyle = '#ffb347';
+        ctx.beginPath();
+        ctx.moveTo(fx + 2, fy - 26);
+        ctx.lineTo(fx + 16, fy - 21);
+        ctx.lineTo(fx + 2, fy - 16);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    });
 
     updatePlotSignHitboxes(groundLevel);
     let hoveredAny = false;
@@ -753,37 +2036,51 @@ function drawPlots(groundLevel) {
                 drawPlotPurchaseHighlight(plot, groundLevel, canAfford);
             }
 
-            ctx.fillStyle = '#6B3A1F';
-            ctx.fillRect(Math.round(plot.x + (plotWidth / 2) - 3), groundLevel - postHeight, 6, postHeight);
+            const postBase = groundLevel - STRUCTURE_BASE_OFFSET;
+            const postX = Math.round(plot.x + (plotWidth / 2) - 2);
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // stín sloupku
+            ctx.beginPath();
+            ctx.ellipse(postX + 2, postBase, 9, 2.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#3a2216';
+            ctx.fillRect(postX, postBase - postHeight, 4, postHeight);
 
             ctx.save();
             if (isHovered) {
-                ctx.shadowColor = canAfford ? 'rgba(255, 215, 0, 0.6)' : 'rgba(255, 80, 80, 0.5)';
-                ctx.shadowBlur = 10;
+                ctx.shadowColor = canAfford ? 'rgba(255, 200, 90, 0.8)' : 'rgba(255, 80, 70, 0.7)';
+                ctx.shadowBlur = 16;
             }
-            ctx.fillStyle = '#FDF5E6';
-            ctx.fillRect(signX, signY, signWidth, signHeight);
-            ctx.strokeStyle = isHovered ? (canAfford ? '#FFD700' : '#E74C3C') : '#3D2B1F';
-            ctx.lineWidth = isHovered ? 3 : 2;
-            ctx.strokeRect(signX + 0.5, signY + 0.5, signWidth - 1, signHeight - 1);
+            pathRoundRect(signX, signY, signWidth, signHeight, 5);
+            const board = ctx.createLinearGradient(0, signY, 0, signY + signHeight);
+            board.addColorStop(0, '#5a3522');
+            board.addColorStop(1, '#3b2216');
+            ctx.fillStyle = board;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = isHovered ? (canAfford ? '#ffc864' : '#ff6b5a') : 'rgba(255, 210, 160, 0.35)';
+            ctx.lineWidth = isHovered ? 2 : 1;
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(255, 220, 170, 0.12)'; // horní hrana chytá světlo
+            ctx.fillRect(signX + 3, signY + 2, signWidth - 6, 2);
             ctx.restore();
 
             ctx.font = PLOT_SIGN_FONT;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillStyle = canAfford ? '#2E5C1F' : '#8B2500';
+            ctx.fillStyle = canAfford ? '#ffd98a' : '#ff8a70';
             ctx.fillText(`$${plot.price}`, plot.x + plotWidth / 2, signY + signHeight / 2 + 1);
 
             if (plotBlinkTimers[plot.id] && plotBlinkTimers[plot.id] % 4 < 2) {
-                ctx.fillStyle = 'rgba(255, 0, 0, 0.35)';
-                ctx.fillRect(signX, signY, signWidth, signHeight);
+                ctx.fillStyle = 'rgba(255, 60, 40, 0.4)';
+                pathRoundRect(signX, signY, signWidth, signHeight, 5);
+                ctx.fill();
             }
         } else if (plot.id === lastBoughtPlotId && lastBoughtHighlightTimer > 0) {
-            // Zvýraznění právě koupeného pozemku - pouze žlutý pruh, NE vrt!
+            // Zvýraznění právě koupeného pozemku: zablikne plocha desky, NE vrt!
             ctx.save();
-            ctx.strokeStyle = '#FFD700';
-            ctx.lineWidth = 5;
-            ctx.strokeRect(plot.x, groundLevel, plotWidth, 10);
+            traceSlabQuad(plot.x, plot.x + plotWidth, groundLevel);
+            ctx.fillStyle = `rgba(255, 200, 90, ${0.35 * lastBoughtHighlightTimer / 30})`;
+            ctx.fill();
             ctx.restore();
         }
         // Nově: pokud je aktivní build mód vrtu a myš je nad vlastněným pozemkem bez vrtu
@@ -799,137 +2096,322 @@ function drawPlots(groundLevel) {
     plotsHoverPointer = hoveredAny || hoveredBuildable;
 }
 
-function drawOilPockets(groundLevel) {
-    oilPockets.forEach(pocket => {
-        // Zobrazit obrys jen pokud je aktivní scanner
-        if (scannerEffect.active) {
-            const alpha = scannerEffect.duration / scannerEffect.totalDuration;
-            const fillRatio = pocket.maxOil > 0 ? pocket.oil / pocket.maxOil : 0;
-            ctx.beginPath();
-            ctx.moveTo(pocket.vertices[0].x, pocket.vertices[0].y);
-            for (let i = 1; i < pocket.vertices.length; i++) {
-                ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
-            }
-            ctx.closePath();
-            ctx.fillStyle = `rgba(0, 180, 0, ${alpha * 0.25 * fillRatio})`;
-            ctx.fill();
-            ctx.strokeStyle = `rgba(0, 255, 0, ${alpha})`;
-            ctx.lineWidth = 2;
-            ctx.stroke();
+// Organický obrys ložiska jen pro kresbu: hrany polygonu rozdělené a zvlněné ven.
+// Kolize dál počítá s pocket.vertices; obrys je o pár px vysunutý ven, aby kresba
+// polygon spíš překrývala, než aby trubka trefila ložisko mimo nakreslený tvar.
+function getPocketShape(pocket) {
+    if (pocket.shape) return pocket.shape;
+    const v = pocket.vertices;
+    const cx = pocket.x + pocket.width / 2;
+    const cy = pocket.y + pocket.height / 2;
+    const pts = [];
+    for (let i = 0; i < v.length; i++) {
+        const a = v[i], b = v[(i + 1) % v.length];
+        const steps = Math.max(2, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / 12));
+        for (let k = 0; k < steps; k++) {
+            const px = a.x + (b.x - a.x) * k / steps;
+            const py = a.y + (b.y - a.y) * k / steps;
+            const d = Math.hypot(px - cx, py - cy) || 1;
+            const push = 2 + Math.random() * 6;
+            pts.push({ x: px + (px - cx) / d * push, y: py + (py - cy) / d * push });
         }
+    }
+    pocket.shape = pts;
+    return pts;
+}
+
+function tracePocket(pocket) {
+    const pts = getPocketShape(pocket);
+    ctx.beginPath();
+    const last = pts[pts.length - 1];
+    ctx.moveTo((last.x + pts[0].x) / 2, (last.y + pts[0].y) / 2);
+    for (let i = 0; i < pts.length; i++) {
+        const p = pts[i], n = pts[(i + 1) % pts.length];
+        ctx.quadraticCurveTo(p.x, p.y, (p.x + n.x) / 2, (p.y + n.y) / 2);
+    }
+    ctx.closePath();
+}
+
+function drawOilPockets(groundLevel) {
+    const t = performance.now() / 1000;
+    oilPockets.forEach(pocket => {
+        const fillRatio = pocket.maxOil > 0 ? pocket.oil / pocket.maxOil : 0;
+        const cx = pocket.x + pocket.width / 2;
+        const cy = pocket.y + pocket.height / 2;
 
         // Zobrazit plné ložisko jen pokud bylo zasaženo vrtem nebo odhaleno krtkem
         if (DEV || pocket.tapped || pocket.revealed) {
-            ctx.beginPath();
-            const fillRatio = pocket.maxOil > 0 ? pocket.oil / pocket.maxOil : 0;
-            ctx.fillStyle = `rgba(0, 0, 0, ${0.5 + fillRatio * 0.4})`;
-            ctx.moveTo(pocket.vertices[0].x, pocket.vertices[0].y);
+            const pumping = pipeNetworks.some(n => n.connectedPocket === pocket && n.isPumping);
+            const pulse = 0.8 + 0.2 * Math.sin(t * 2.2 + cx);
+            const heat = pumping ? fillRatio * pulse : 0; // těžené ložisko žhne, s ubývající ropou slábne
+            const size = Math.max(pocket.width, pocket.height);
+            if (pumping) drawGlow(cx, cy, size * 1.1, '255, 110, 30', 0.38 * (0.25 + heat));
 
-            for (let i = 1; i < pocket.vertices.length; i++) {
-                ctx.lineTo(pocket.vertices[i].x, pocket.vertices[i].y);
+            ctx.save();
+            tracePocket(pocket);
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'; // vyhloubená dutina ve skále
+            ctx.lineWidth = 12;
+            ctx.stroke();
+            const oil = ctx.createRadialGradient(cx, cy + pocket.height * 0.1, 2, cx, cy, size * 0.6);
+            if (pumping) {
+                oil.addColorStop(0, `rgba(255, 200, 100, ${0.25 + 0.7 * heat})`);
+                oil.addColorStop(0.35, `rgba(220, 90, 25, ${0.35 + 0.5 * heat})`);
+                oil.addColorStop(1, 'rgba(25, 8, 3, 0.96)');
+            } else {
+                oil.addColorStop(0, `rgba(60, 42, 30, ${0.6 + fillRatio * 0.35})`);
+                oil.addColorStop(1, `rgba(6, 4, 3, ${0.7 + fillRatio * 0.28})`);
             }
-            ctx.lineTo(pocket.vertices[0].x, pocket.vertices[0].y);
+            ctx.fillStyle = oil;
             ctx.fill();
-            ctx.closePath();
+            ctx.strokeStyle = pumping ? `rgba(255, 170, 70, ${0.4 + 0.5 * heat})` : 'rgba(255, 190, 120, 0.25)';
+            ctx.lineWidth = pumping ? 2 : 1.2;
+            ctx.stroke();
+            ctx.clip();
+            if (pumping) { // bublinky stoupající ke stropu dutiny
+                ctx.globalCompositeOperation = 'lighter';
+                for (let b = 0; b < 6; b++) {
+                    const life = (t * 0.4 + b / 6 + cx * 0.01) % 1;
+                    const bx = cx + Math.sin(b * 2.3 + cx) * pocket.width * 0.3;
+                    const by = cy + pocket.height * 0.4 - life * pocket.height * 0.8;
+                    ctx.fillStyle = `rgba(255, 210, 120, ${0.5 * (1 - life) * heat})`;
+                    ctx.beginPath();
+                    ctx.arc(bx, by, 1.5 + b % 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalCompositeOperation = 'source-over';
+            }
+            ctx.fillStyle = 'rgba(255, 230, 200, 0.10)'; // lesk hladiny
+            ctx.beginPath();
+            ctx.ellipse(cx - pocket.width * 0.15, cy - pocket.height * 0.22, pocket.width * 0.22, pocket.height * 0.08, -0.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
         }
+    });
+
+    // Štítky až po všech ložiscích, aby je záře sousedního ložiska nepřekryla
+    oilPockets.forEach(pocket => {
+        if (!(DEV || pocket.tapped || pocket.revealed)) return;
+        drawPocketChip(pocket, pipeNetworks.some(n => n.connectedPocket === pocket && n.isPumping));
     });
 }
 
-function drawDerrick(x, y, plotId, isPumping, network) {
-    const derrickWidth = 80, derrickHeight = 100;
+// Štítek ložiska vpravo od něj: zbývající ropa a stav
+function drawPocketChip(pocket, pumping) {
+    const w = 150, h = 38;
+    const x = Math.min(pocket.x + pocket.width - 6, canvas.width - w - 8);
+    const y = pocket.y + pocket.height * 0.5 - 18;
     ctx.save();
-    ctx.translate(x, y);
-    if (selectedDerrickPlotId === plotId) {
-        ctx.shadowColor = '#FFD700';
-        ctx.shadowBlur = 15;
-    }
-    if (derrickImage && derrickImage.complete && derrickImage.naturalWidth > 0) {
-        drawSprite(derrickImage, 0, 0, 100, derrickHeight);
-    } else {
-        ctx.fillStyle = '#8B4513';
-        ctx.fillRect(-derrickWidth / 2, -derrickHeight, derrickWidth, derrickHeight);
-        ctx.fillStyle = '#FFD700';
-        ctx.fillRect(-10, -derrickHeight, 20, derrickHeight / 2);
-    }
-    if (isPumping) {
-        const pumpAngle = Math.sin(Date.now() / 300) * 0.2;
-        ctx.save();
-        ctx.translate(0, -derrickHeight * 0.75);
-        ctx.rotate(pumpAngle);
-        ctx.fillStyle = "#696969";
-        ctx.fillRect(-5, -5, 30, 10);
-        ctx.restore();
-    }
-
-    if (network && network.oilCapacity > 0) {
-        const fillRatio = Math.min(1, network.oilStored / network.oilCapacity);
-        const barW = 50, barH = 8;
-        const barX = -barW / 2, barY = 8;
-        ctx.fillStyle = '#333';
-        ctx.fillRect(barX, barY, barW, barH);
-        ctx.fillStyle = fillRatio > 0.8 ? '#e74c3c' : '#2ecc71';
-        ctx.fillRect(barX, barY, barW * fillRatio, barH);
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(barX, barY, barW, barH);
-        ctx.fillStyle = '#fff';
-        ctx.font = '10px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(`${Math.floor(network.oilStored)}/${network.oilCapacity}`, 0, barY + barH + 10);
-
-        if (isPumping && fillRatio >= 0.98) {
-            // Plný zásobník: vrt stojí a čeká na auto, ať je to vidět
-            const blink = Math.sin(Date.now() / 200) > 0;
-            ctx.strokeStyle = blink ? '#ff3b30' : '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(barX - 1, barY - 1, barW + 2, barH + 2);
-            ctx.fillStyle = blink ? '#ff6b60' : '#ffffff';
-            ctx.font = 'bold 11px sans-serif';
-            ctx.fillText('PLNO – čeká na auto', 0, barY + barH + 23);
-        }
-    }
+    pathRoundRect(x, y, w, h, 6);
+    ctx.fillStyle = 'rgba(14, 10, 16, 0.78)';
+    ctx.fill();
+    ctx.strokeStyle = pumping ? 'rgba(255, 170, 80, 0.55)' : 'rgba(255, 255, 255, 0.14)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    // Ikona kapky v kroužku
+    ctx.fillStyle = pumping ? 'rgba(255, 150, 60, 0.25)' : 'rgba(255, 255, 255, 0.08)';
+    ctx.beginPath();
+    ctx.arc(x + 17, y + h / 2, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = pumping ? '#ffb45a' : '#e8d8c4';
+    ctx.beginPath();
+    ctx.moveTo(x + 17, y + h / 2 - 7);
+    ctx.quadraticCurveTo(x + 24, y + h / 2 + 2, x + 17, y + h / 2 + 5);
+    ctx.quadraticCurveTo(x + 10, y + h / 2 + 2, x + 17, y + h / 2 - 7);
+    ctx.fill();
+    ctx.font = '600 9px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255, 230, 200, 0.6)';
+    ctx.fillText('ROPNÉ LOŽISKO', x + 34, y + 13);
+    ctx.font = '700 14px system-ui, sans-serif';
+    ctx.fillStyle = '#fff2df';
+    ctx.fillText(Math.floor(pocket.oil).toLocaleString('cs-CZ'), x + 34, y + 29);
+    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = pocket.oil <= 0 ? '#ff8a70' : (pumping ? '#ffb45a' : '#9ad1ff');
+    ctx.fillText(pocket.oil <= 0 ? 'Vyčerpáno' : (pumping ? 'Těží se' : 'Odhaleno'), x + w - 9, y + 29);
     ctx.restore();
 }
 
-// Ikony jsou čtverce 512×512 s průhledným okrajem. Oříznout na obsah a zachovat poměr stran,
-// jinak se do nečtvercového boxu natáhnou (zploštěná auta, protažená sila).
-const spriteBoundsCache = new WeakMap();
+// Dřevěná vrtná věž s lampou na vrcholu a kývající pumpou. y = pata věže na desce.
+// Potrubí vede po desce k přední hraně řezu, kde začíná síť (network.path[0]).
+function drawDerrick(x, y, plotId, isPumping, network) {
+    const h = DERRICK_HEIGHT;
+    const t = performance.now() / 1000;
+    const lit = Math.sign(MOON_X - x) || 1; // strana věže obrácená k měsíci
+    const selected = selectedDerrickPlotId === plotId;
+    ctx.save();
+    ctx.translate(x, y);
 
-function getSpriteBounds(img) {
-    if (spriteBoundsCache.has(img)) return spriteBoundsCache.get(img);
-    let bounds = { sx: 0, sy: 0, sw: img.naturalWidth, sh: img.naturalHeight };
-    try {
-        const c = document.createElement('canvas');
-        c.width = img.naturalWidth;
-        c.height = img.naturalHeight;
-        const cctx = c.getContext('2d');
-        cctx.drawImage(img, 0, 0);
-        const data = cctx.getImageData(0, 0, c.width, c.height).data;
-        let minX = c.width, minY = c.height, maxX = -1, maxY = -1;
-        for (let py = 0; py < c.height; py++) {
-            for (let px = 0; px < c.width; px++) {
-                if (data[(py * c.width + px) * 4 + 3] > 16) {
-                    if (px < minX) minX = px;
-                    if (px > maxX) maxX = px;
-                    if (py < minY) minY = py;
-                    if (py > maxY) maxY = py;
-                }
-            }
-        }
-        if (maxX >= 0) bounds = { sx: minX, sy: minY, sw: maxX - minX + 1, sh: maxY - minY + 1 };
-    } catch (e) {
-        // Canvas nelze přečíst (jiný origin): použije se celý obrázek
+    if (network && network.path.length > 0) {
+        ctx.strokeStyle = '#1c1714';
+        ctx.lineWidth = 7;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, STRUCTURE_BASE_OFFSET);
+        ctx.stroke();
+        ctx.strokeStyle = '#7d6a58';
+        ctx.lineWidth = 4;
+        ctx.stroke();
     }
-    spriteBoundsCache.set(img, bounds);
-    return bounds;
+
+    if (selected) { // vybraný vrt: pulzující kruh na zemi
+        const r = 46 + Math.sin(t * 5) * 3;
+        ctx.strokeStyle = 'rgba(255, 200, 90, 0.9)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 5]);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r, r * 0.22, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)'; // stín
+    ctx.beginPath();
+    ctx.ellipse(-lit * 8, 1, 44, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (isPumping) { // kruh světla pracovních lamp na zemi
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = 'rgba(255, 150, 70, 0.10)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 80, 16, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    // Betonová patka (horní plocha světlejší = dojem hloubky)
+    ctx.fillStyle = '#4a4046';
+    ctx.fillRect(-36, -6, 72, 7);
+    ctx.fillStyle = '#7d7078';
+    ctx.beginPath();
+    ctx.moveTo(-36, -6);
+    ctx.lineTo(36, -6);
+    ctx.lineTo(30, -12);
+    ctx.lineTo(-30, -12);
+    ctx.closePath();
+    ctx.fill();
+
+    // Zadní nohy (tmavší, posunuté do hloubky), pak přední nohy a výztuhy
+    const legs = (dx, dy, color, width) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(-26 + dx, -10 + dy);
+        ctx.lineTo(-6 + dx, -h + dy);
+        ctx.moveTo(26 + dx, -10 + dy);
+        ctx.lineTo(6 + dx, -h + dy);
+        ctx.stroke();
+    };
+    legs(5, -5, '#2a1a12', 3);
+    legs(0, 0, '#4a2e1e', 4);
+    ctx.strokeStyle = 'rgba(170, 190, 255, 0.55)'; // hrana nohy na straně měsíce
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(lit * 27, -10);
+    ctx.lineTo(lit * 7, -h);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#3d2618';
+    ctx.lineWidth = 2;
+    const levels = 5;
+    for (let i = 0; i < levels; i++) {
+        const y0 = -10 - (h - 10) * (i / levels);
+        const y1 = -10 - (h - 10) * ((i + 1) / levels);
+        const half0 = 26 - 20 * (i / levels);
+        const half1 = 26 - 20 * ((i + 1) / levels);
+        ctx.beginPath();
+        ctx.moveTo(-half0, y0);
+        ctx.lineTo(half1, y1);
+        ctx.moveTo(half0, y0);
+        ctx.lineTo(-half1, y1);
+        ctx.moveTo(-half1, y1);
+        ctx.lineTo(half1, y1);
+        ctx.stroke();
+    }
+
+    // Korunka s lampou
+    ctx.fillStyle = '#2a1a12';
+    ctx.fillRect(-10, -h - 8, 20, 9);
+    ctx.fillStyle = '#5a3a26';
+    ctx.fillRect(-10, -h - 8, 20, 2);
+    const lampOn = isPumping ? 0.75 + 0.25 * Math.sin(t * 3 + x) : 0.25;
+    ctx.fillStyle = `rgba(255, 210, 130, ${0.5 + lampOn * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(0, -h - 12, 3, 0, Math.PI * 2);
+    ctx.fill();
+    drawGlow(0, -h - 12, 38, '255, 170, 80', 0.45 * lampOn);
+    if (selected) drawGlow(0, -h * 0.5, 90, '255, 200, 90', 0.18);
+
+    // Kývající pumpa vlevo od věže
+    const pumpX = -56;
+    const angle = isPumping ? Math.sin(t * 2.4 + x) * 0.28 : 0;
+    ctx.strokeStyle = '#2a1a12';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(pumpX - 9, 0);
+    ctx.lineTo(pumpX, -26);
+    ctx.lineTo(pumpX + 9, 0);
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(pumpX, -26);
+    ctx.rotate(angle);
+    ctx.fillStyle = '#3a2a24';
+    ctx.fillRect(-24, -3, 44, 6);
+    ctx.fillStyle = '#5a463c';
+    ctx.beginPath(); // "koňská hlava"
+    ctx.moveTo(-24, -7);
+    ctx.lineTo(-30, -3);
+    ctx.lineTo(-30, 8);
+    ctx.lineTo(-24, 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(170, 190, 255, 0.45)';
+    ctx.fillRect(-24, -3, 44, 1.2);
+    ctx.restore();
+
+    ctx.restore();
 }
 
-// Vykreslí obsah ikony do boxu maxW×maxH, vystředěný na centerX, spodní hranou na bottomY
-function drawSprite(img, centerX, bottomY, maxW, maxH) {
-    const b = getSpriteBounds(img);
-    const scale = Math.min(maxW / b.sw, maxH / b.sh);
-    const w = b.sw * scale, h = b.sh * scale;
-    ctx.drawImage(img, b.sx, b.sy, b.sw, b.sh, centerX - w / 2, bottomY - h, w, h);
+// Plovoucí štítek zásobníku nad vrtem (ropa / kapacita), při plném zásobníku bliká
+function drawStorageChip(x, y, network) {
+    if (!network || network.oilCapacity <= 0) return;
+    const fillRatio = Math.min(1, network.oilStored / network.oilCapacity);
+    const full = network.isPumping && fillRatio >= 0.98;
+    const blink = full && Math.sin(performance.now() / 200) > 0;
+    const label = `${Math.floor(network.oilStored)} / ${network.oilCapacity}`;
+    ctx.save();
+    ctx.font = '700 12px system-ui, sans-serif';
+    const w = Math.max(74, ctx.measureText(label).width + 34);
+    const h = 22;
+    const bx = x - w / 2;
+    pathRoundRect(bx, y - h / 2, w, h, 11);
+    ctx.fillStyle = 'rgba(14, 10, 16, 0.8)';
+    ctx.fill();
+    ctx.strokeStyle = blink ? '#ff5a4a' : (full ? 'rgba(255, 90, 70, 0.6)' : 'rgba(255, 255, 255, 0.16)');
+    ctx.lineWidth = blink ? 2 : 1;
+    ctx.stroke();
+    // Ukazatel naplnění podél spodní hrany štítku
+    ctx.fillStyle = fillRatio > 0.8 ? '#ff7a5a' : '#ffb45a';
+    ctx.fillRect(bx + 8, y + h / 2 - 3, (w - 16) * fillRatio, 2);
+    // Kapka ropy
+    ctx.fillStyle = '#ffb45a';
+    ctx.beginPath();
+    ctx.moveTo(bx + 13, y - 6);
+    ctx.quadraticCurveTo(bx + 19, y + 1, bx + 13, y + 4);
+    ctx.quadraticCurveTo(bx + 7, y + 1, bx + 13, y - 6);
+    ctx.fill();
+    ctx.fillStyle = '#fff2df';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, bx + 23, y);
+    if (full) {
+        ctx.font = '700 10px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = blink ? '#ff7a6a' : '#ffd0c8';
+        ctx.fillText('PLNO – čeká na auto', x, y - h / 2 - 9);
+    }
+    ctx.restore();
 }
 
 const SILO_OFFSET_X = 40; // posun prvního sila od středu pozemku
@@ -943,15 +2425,17 @@ function drawSilo(x, y, fillRatio = 0) {
     ctx.save();
     ctx.translate(x, y);
 
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.22)'; // stín
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.32)'; // stín
     ctx.beginPath();
-    ctx.ellipse(0, 1, w / 2 + 4, 3, 0, 0, Math.PI * 2);
+    ctx.ellipse(-4, 1, w / 2 + 6, 4, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    const steel = ctx.createLinearGradient(-w / 2, 0, w / 2, 0);
-    steel.addColorStop(0, '#8E9AA3');
-    steel.addColorStop(0.35, '#D5DCE0');
-    steel.addColorStop(1, '#7C8790');
+    // Ocel v noci: tmavá, strana k měsíci chytá studené světlo
+    const lit = Math.sign(MOON_X - x) || 1;
+    const steel = ctx.createLinearGradient(-w / 2 * lit, 0, w / 2 * lit, 0);
+    steel.addColorStop(0, '#3a3540');
+    steel.addColorStop(0.6, '#6a5f66');
+    steel.addColorStop(1, '#9aa3c8');
     ctx.fillStyle = steel;
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
     ctx.lineWidth = 1.5;
@@ -999,129 +2483,437 @@ function drawSilo(x, y, fillRatio = 0) {
     ctx.restore();
 }
 
+function tracePath(path, offsetY = 0) {
+    ctx.beginPath();
+    ctx.moveTo(path[0].x, path[0].y + offsetY);
+    for (let i = 1; i < path.length; i++) ctx.lineTo(path[i].x, path[i].y + offsetY);
+}
+
+// Kovové potrubí ve vrstvách (stín, obrys, tělo, odlesk); při těžbě jím teče svítící ropa
+// směrem k vrtu a klouby žhnou.
 function drawPipeNetworks() {
+    const t = performance.now();
     pipeNetworks.forEach(network => {
         if (network.path.length < 2) return;
-
-        const isMole = network.isMoleTunnel;
-        ctx.strokeStyle = isMole ? '#5D3A1A' : '#333333';
-        ctx.lineWidth = isMole ? 4 : 6;
-        ctx.setLineDash(isMole ? [8, 6] : []);
+        const path = network.path;
+        ctx.save();
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(network.path[0].x, network.path[0].y);
-        for (let i = 1; i < network.path.length; i++) {
-            ctx.lineTo(network.path[i].x, network.path[i].y);
-        }
+
+        tracePath(path, 4);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.lineWidth = 16;
         ctx.stroke();
-        ctx.setLineDash([]);
+        tracePath(path);
+        ctx.strokeStyle = '#17120f';
+        ctx.lineWidth = 13;
+        ctx.stroke();
+        ctx.strokeStyle = '#8a6a4a'; // bronz
+        ctx.lineWidth = 9;
+        ctx.stroke();
+        ctx.strokeStyle = '#5e4632';
+        ctx.lineWidth = 3;
+        tracePath(path, 2.5);
+        ctx.stroke();
+        tracePath(path, -2.5);
+        ctx.strokeStyle = 'rgba(255, 220, 170, 0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // Spojovací objímky po ~28 px
+        ctx.strokeStyle = '#2a1f17';
+        ctx.lineWidth = 3;
+        for (let i = 1; i < path.length; i++) {
+            const a = path[i - 1], b = path[i];
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            if (len < 1) continue;
+            const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
+            for (let d = 20; d < len - 10; d += 28) {
+                const px = a.x + (b.x - a.x) * d / len, py = a.y + (b.y - a.y) * d / len;
+                ctx.beginPath();
+                ctx.moveTo(px - nx * 7, py - ny * 7);
+                ctx.lineTo(px + nx * 7, py + ny * 7);
+                ctx.stroke();
+            }
+        }
 
         if (network.isPumping) {
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = isMole ? 2 : 4;
+            ctx.globalCompositeOperation = 'lighter';
+            tracePath(path);
+            ctx.strokeStyle = 'rgba(255, 160, 60, 0.85)';
+            ctx.lineWidth = 3.5;
+            ctx.setLineDash([7, 13]);
+            ctx.lineDashOffset = (t / 25) % 20; // posun k začátku cesty = k vrtu
             ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.globalCompositeOperation = 'source-over';
         }
+
+        // Klouby v bodech, kde hráč klikal
+        for (let i = 1; i < path.length; i++) {
+            const p = path[i];
+            if (network.isPumping) drawGlow(p.x, p.y, 22, '255, 150, 60', 0.45);
+            ctx.fillStyle = '#211812';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = network.isPumping ? '#ffb45a' : '#a8875f';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+            ctx.fillStyle = network.isPumping ? '#ffd890' : '#6a5440';
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        // Příruba na hraně řezu
+        ctx.fillStyle = '#2a211b';
+        ctx.fillRect(path[0].x - 9, path[0].y - 2, 18, 7);
+        ctx.fillStyle = '#a08a70';
+        ctx.fillRect(path[0].x - 9, path[0].y - 2, 18, 1.5);
+        ctx.restore();
     });
 }
 
-function drawCompanyBuildings(groundLevel) {
-    const bWidth = 100, bHeight = 100;
+// --- Výkupci ropy: Rafinerie (vlevo) a Nádraží (vpravo) ---
+// Herně jsou to dál firmy 'left'/'right' (ceny, sloty kamionů), kreslí se ale jako dva různé
+// areály: rafinerie s kolonami a flérou a železniční překladiště s cisternami a lokomotivou.
+// Nad každým je karta s cenou, grafem a přidělením kamionů (−/+ nebo kolečko myši).
+const BUYER_CARD_TOP = 96;
+const BUYER_CARD_H = 148;
+const BUYERS = {
+    left: { name: 'RAFINERIE', sub: 'Černé zlato', accent: '255, 150, 70' },
+    right: { name: 'NÁDRAŽÍ', sub: 'Západní dráha', accent: '120, 180, 240' }
+};
 
-    // Levá firma
-    const leftBaseY = groundLevel - bHeight;
-    ctx.fillStyle = '#A9C7D9';
-    ctx.fillRect(0, leftBaseY, bWidth, bHeight);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.font = 'bold 16px sans-serif'; // "RIGHT INC" se ve 100 px široké budově při 20 px nevejde
-    ctx.textAlign = 'center';
-    ctx.fillText('LEFT INC', bWidth / 2, leftBaseY + 20);
-
-    // Pravá firma
-    const rightBaseX = canvas.width - bWidth;
-    ctx.fillStyle = '#D2A679';
-    ctx.fillRect(rightBaseX, groundLevel - bHeight, bWidth, bHeight);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.fillText('RIGHT INC', rightBaseX + bWidth / 2, leftBaseY + 20);
-
-    // Kolik aut právě jezdí k dané firmě
-    const driving = { left: 0, right: 0 };
-    trucks.forEach(t => {
-        if (t.state !== 'idle' && driving[t.targetCompany] !== undefined) driving[t.targetCompany]++;
+// Fléra rafinerie: komín s plápolajícím plamenem spalovaného plynu
+function drawFlare(x, baseY, height) {
+    const t = performance.now() / 1000;
+    ctx.fillStyle = '#16141c';
+    ctx.fillRect(x - 3, baseY - height, 6, height);
+    ctx.fillStyle = 'rgba(170, 190, 255, 0.35)';
+    ctx.fillRect(x + 2, baseY - height, 1, height);
+    const topY = baseY - height;
+    const flick = Math.sin(t * 13) * 0.5 + Math.sin(t * 7.3) * 0.5;
+    drawGlow(x, topY - 10, 70, '255, 120, 40', 0.35 + flick * 0.05);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    [[14, '255, 110, 30', 0.6], [9, '255, 180, 70', 0.75], [5, '255, 240, 180', 0.9]].forEach(([r, color, a]) => {
+        const fh = r * 2.4 + flick * 3;
+        ctx.fillStyle = `rgba(${color}, ${a})`;
+        ctx.beginPath();
+        ctx.moveTo(x - r * 0.6, topY);
+        ctx.quadraticCurveTo(x - r * 0.7 + flick * 2, topY - fh * 0.6, x + flick * 3, topY - fh);
+        ctx.quadraticCurveTo(x + r * 0.7 + flick * 2, topY - fh * 0.6, x + r * 0.6, topY);
+        ctx.closePath();
+        ctx.fill();
     });
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillStyle = '#1F2D3A';
-    ctx.fillText(`${driving.left}`, bWidth / 2, leftBaseY + 56);
-    ctx.fillText(`${driving.right}`, rightBaseX + bWidth / 2, leftBaseY + 56);
-    ctx.font = '12px sans-serif';
-    ctx.fillText('aut jezdí', bWidth / 2, leftBaseY + 74);
-    ctx.fillText('aut jezdí', rightBaseX + bWidth / 2, leftBaseY + 74);
+    ctx.restore();
+}
 
-    // Vývoj ceny: graf posledních změn
-    drawPriceChart(leftPriceHistory, 10, leftBaseY + 81, bWidth - 20, 16);
-    drawPriceChart(rightPriceHistory, rightBaseX + 10, leftBaseY + 81, bWidth - 20, 16);
+// Svislý ocelový válec s prstenci, plošinami a světly (destilační kolona)
+function drawColumn(x, baseY, w, h, t, blinkOffset) {
+    const steel = ctx.createLinearGradient(x, 0, x + w, 0);
+    steel.addColorStop(0, '#1c1c27');
+    steel.addColorStop(0.65, '#3b3c52');
+    steel.addColorStop(1, '#9aa3c8');
+    ctx.fillStyle = steel;
+    ctx.fillRect(x, baseY - h, w, h);
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, baseY - h, w / 2, 3, 0, Math.PI, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    for (let y = baseY - h + 10; y < baseY - 4; y += 12) ctx.fillRect(x, y, w, 1.5);
+    [0.35, 0.7].forEach(f => { // plošiny s lampami
+        const py = baseY - h * f;
+        ctx.fillStyle = '#121219';
+        ctx.fillRect(x - 4, py, w + 8, 2);
+        ctx.fillStyle = '#ffd890';
+        ctx.fillRect(x - 3, py - 2, 1.5, 1.5);
+        drawGlow(x - 2, py - 1, 9, '255, 180, 90', 0.5);
+    });
+    if (Math.sin(t * 2.5 + blinkOffset) > 0.3) drawGlow(x + w / 2, baseY - h - 4, 9, '255, 50, 40', 0.9);
+    ctx.fillStyle = '#ff4a3a';
+    ctx.fillRect(x + w / 2 - 1, baseY - h - 5, 2, 2);
+}
 
-    // Ceny
-    ctx.fillStyle = '#5C4033';
-    ctx.font = 'bold 20px "Courier New", monospace';
+function drawRefinery(x0, baseY) {
+    const t = ambientClock;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(x0 + 46, baseY + 1, 62, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#2a2833'; // betonová plocha
+    ctx.fillRect(x0, baseY - 5, 100, 5);
+    ctx.fillStyle = 'rgba(170, 190, 255, 0.25)';
+    ctx.fillRect(x0, baseY - 5, 100, 1);
+
+    drawFlare(x0 + 92, baseY - 4, 84);
+    drawColumn(x0 + 14, baseY - 4, 16, 100, t, 0);
+    drawColumn(x0 + 36, baseY - 4, 12, 74, t, 1.7);
+
+    // Potrubní most mezi kolonami a nádrží
+    ctx.strokeStyle = '#2c2a36';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x0 + 30, baseY - 44);
+    ctx.lineTo(x0 + 70, baseY - 44);
+    ctx.lineTo(x0 + 70, baseY - 34);
+    ctx.moveTo(x0 + 48, baseY - 30);
+    ctx.lineTo(x0 + 58, baseY - 30);
+    ctx.stroke();
+
+    // Kulová nádrž na nožičkách
+    ctx.strokeStyle = '#15141c';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x0 + 60, baseY - 4);
+    ctx.lineTo(x0 + 64, baseY - 20);
+    ctx.moveTo(x0 + 80, baseY - 4);
+    ctx.lineTo(x0 + 76, baseY - 20);
+    ctx.stroke();
+    const sphere = ctx.createRadialGradient(x0 + 76, baseY - 32, 2, x0 + 70, baseY - 24, 15);
+    sphere.addColorStop(0, '#9aa3c8');
+    sphere.addColorStop(0.5, '#3d3e55');
+    sphere.addColorStop(1, '#1a1a24');
+    ctx.fillStyle = sphere;
+    ctx.beginPath();
+    ctx.arc(x0 + 70, baseY - 24, 14, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Velín se svítícími okny
+    ctx.fillStyle = '#23222e';
+    ctx.fillRect(x0 + 50, baseY - 22, 34, 18);
+    ctx.fillStyle = '#15141c';
+    ctx.fillRect(x0 + 48, baseY - 24, 38, 3);
+    [0, 1, 2].forEach(i => {
+        ctx.fillStyle = '#ffbe6a';
+        ctx.fillRect(x0 + 54 + i * 10, baseY - 17, 6, 6);
+        drawGlow(x0 + 57 + i * 10, baseY - 14, 14, '255, 160, 70', 0.3);
+    });
+}
+
+function drawRailDepot(x0, baseY) {
+    const t = ambientClock;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(x0 + 56, baseY + 1, 60, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Nádražní budova s hodinami ve štítu
+    const sx = x0 + 34, sw = 58, sh = 40, sBase = baseY - 10;
+    ctx.fillStyle = '#1b1a26';
+    ctx.fillRect(sx - 6, sBase - sh - 6, 6, sh + 6);
+    const wall = ctx.createLinearGradient(sx, 0, sx + sw, 0);
+    wall.addColorStop(0, '#2b2a3a');
+    wall.addColorStop(1, '#45435c');
+    ctx.fillStyle = wall;
+    ctx.fillRect(sx, sBase - sh, sw, sh);
+    ctx.fillStyle = '#15141d';
+    ctx.beginPath();
+    ctx.moveTo(sx - 4, sBase - sh);
+    ctx.lineTo(sx + sw / 2, sBase - sh - 16);
+    ctx.lineTo(sx + sw + 4, sBase - sh);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(170, 190, 255, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(sx + sw / 2, sBase - sh - 16);
+    ctx.lineTo(sx + sw + 4, sBase - sh);
+    ctx.stroke();
+    ctx.fillStyle = '#ffe0a0';
+    ctx.beginPath();
+    ctx.arc(sx + sw / 2, sBase - sh - 6, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    drawGlow(sx + sw / 2, sBase - sh - 6, 12, '255, 200, 120', 0.4);
+    ctx.strokeStyle = '#2a1a10';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(sx + sw / 2, sBase - sh - 6);
+    ctx.lineTo(sx + sw / 2, sBase - sh - 9);
+    ctx.moveTo(sx + sw / 2, sBase - sh - 6);
+    ctx.lineTo(sx + sw / 2 + 2.5, sBase - sh - 6);
+    ctx.stroke();
+    [0, 1, 2].forEach(i => { // obloukovitá okna
+        const wx = sx + 8 + i * 17;
+        ctx.fillStyle = '#ffbe6a';
+        ctx.beginPath();
+        ctx.moveTo(wx, sBase - 8);
+        ctx.lineTo(wx, sBase - 24);
+        ctx.arc(wx + 4, sBase - 24, 4, Math.PI, 0);
+        ctx.lineTo(wx + 8, sBase - 8);
+        ctx.closePath();
+        ctx.fill();
+        drawGlow(wx + 4, sBase - 16, 16, '255, 160, 70', 0.3);
+    });
+    // Nástupiště s přístřeškem
+    ctx.fillStyle = '#2a2833';
+    ctx.fillRect(x0, sBase, 100, 4);
+    ctx.fillStyle = '#15141d';
+    ctx.fillRect(x0 + 4, sBase - 28, 30, 3);
+    ctx.fillRect(x0 + 6, sBase - 25, 2, 25);
+    ctx.fillRect(x0 + 30, sBase - 25, 2, 25);
+    drawGlow(x0 + 18, sBase - 22, 16, '255, 190, 110', 0.35);
+
+    // Návěstidlo: střídá stůj / volno
+    const go = Math.sin(t * 0.8) > 0;
+    ctx.fillStyle = '#15141d';
+    ctx.fillRect(x0 + 2, baseY - 70, 2, 66);
+    ctx.fillRect(x0, baseY - 74, 6, 10);
+    drawGlow(x0 + 3, go ? baseY - 67 : baseY - 71, 10, go ? '80, 255, 140' : '255, 60, 50', 0.9);
+
+    // Kolej, cisternový vagon a lokomotiva na kraji
+    const railY = baseY - 2;
+    ctx.fillStyle = '#1a1820';
+    for (let x = x0; x < x0 + 104; x += 7) ctx.fillRect(x, railY - 1, 4, 3);
+    ctx.fillStyle = '#6a6f88';
+    ctx.fillRect(x0, railY - 2, 104, 1);
+    const tank = ctx.createLinearGradient(0, railY - 22, 0, railY - 6);
+    tank.addColorStop(0, '#4a4b62');
+    tank.addColorStop(1, '#14141c');
+    ctx.fillStyle = tank;
+    pathRoundRect(x0 + 18, railY - 22, 48, 14, 7);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 180, 90, 0.7)';
+    ctx.font = '700 7px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`$${leftIncPrice.toFixed(2)}`, bWidth / 2, leftBaseY - 15);
-    ctx.fillText(`$${rightIncPrice.toFixed(2)}`, rightBaseX + bWidth / 2, leftBaseY - 15);
-
-    ctx.font = '16px sans-serif';
-    ctx.fillStyle = leftPriceTrend >= 0 ? '#2ecc71' : '#e74c3c';
-    ctx.fillText(leftPriceTrend >= 0 ? '▲' : '▼', bWidth / 2, leftBaseY - 35);
-    ctx.fillStyle = rightPriceTrend >= 0 ? '#2ecc71' : '#e74c3c';
-    ctx.fillText(rightPriceTrend >= 0 ? '▲' : '▼', rightBaseX + bWidth / 2, leftBaseY - 35);
-
-    // Výpočet pro centrování šipek a čísla
-    const arrowSize = 25;
-    const spacing = 70; // vzdálenost mezi horní a dolní šipkou
-    const centerY = groundLevel - bHeight - 60 - 50; // posun šipek přesně o 50px výše
-
-    // Horní šipka
-    companyControls.leftUp = { x: 37, y: centerY - spacing / 2, width: arrowSize, height: arrowSize };
-    // Dolní šipka
-    companyControls.leftDown = { x: 37, y: centerY + spacing / 2, width: arrowSize, height: arrowSize };
-    // Číslo (nula) přesně mezi šipkami
-    companyControls.leftTrucks = { x: 37, y: centerY - arrowSize / 2, width: arrowSize, height: 35 };
-
-    companyControls.rightUp = { x: canvas.width - 37 - arrowSize, y: centerY - spacing / 2, width: arrowSize, height: arrowSize };
-    companyControls.rightDown = { x: canvas.width - 37 - arrowSize, y: centerY + spacing / 2, width: arrowSize, height: arrowSize };
-    companyControls.rightTrucks = { x: canvas.width - 37 - arrowSize, y: centerY - arrowSize / 2, width: arrowSize, height: 35 };
-
-    drawArrowButton(companyControls.leftUp, true);
-    drawArrowButton(companyControls.leftDown, false);
-    drawArrowButton(companyControls.rightUp, true);
-    drawArrowButton(companyControls.rightDown, false);
-
-    ctx.font = 'bold 24px sans-serif';
-    ctx.fillStyle = '#1F2D3A';
-    ctx.textAlign = 'center';
-    // Y-pozice čísla bude přesně mezi šipkami
-    ctx.fillText(trucksAssignedLeft, companyControls.leftTrucks.x + arrowSize / 2, centerY + 8);
-    ctx.fillText(trucksAssignedRight, companyControls.rightTrucks.x + arrowSize / 2, centerY + 8);
-
-    // Popisek: číslo mezi šipkami je počet aut přidělených firmě (nejdřív plní tyto sloty)
-    ctx.font = '11px sans-serif';
-    const hoveredCompany = getCompanyZoneAt(mousePos);
-    ctx.fillText(hoveredCompany === 'left' ? 'kolečko ±' : 'přiděleno', companyControls.leftUp.x + arrowSize / 2, companyControls.leftUp.y - 6);
-    ctx.fillText(hoveredCompany === 'right' ? 'kolečko ±' : 'přiděleno', companyControls.rightUp.x + arrowSize / 2, companyControls.rightUp.y - 6);
-
-    // Zvýraznění budovy, nad kterou kolečko funguje
-    if (hoveredCompany) {
-        ctx.strokeStyle = '#FFD700';
-        ctx.lineWidth = 3;
-        const bx = hoveredCompany === 'left' ? 0 : rightBaseX;
-        ctx.strokeRect(bx + 1.5, groundLevel - bHeight + 1.5, bWidth - 3, bHeight - 3);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('CRUDE', x0 + 42, railY - 15);
+    ctx.fillStyle = '#0d0d13';
+    [26, 36, 48, 58].forEach(wx => {
+        ctx.beginPath();
+        ctx.arc(x0 + wx, railY - 5, 3, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    // Lokomotiva (zčásti za okrajem mapy)
+    ctx.fillStyle = '#17161f';
+    ctx.fillRect(x0 + 72, railY - 20, 30, 14);
+    ctx.fillRect(x0 + 90, railY - 28, 12, 8);
+    ctx.fillRect(x0 + 76, railY - 28, 5, 8);
+    ctx.fillStyle = 'rgba(170, 190, 255, 0.4)';
+    ctx.fillRect(x0 + 72, railY - 20, 30, 1);
+    ctx.fillStyle = '#ffd890';
+    ctx.fillRect(x0 + 71, railY - 16, 2, 3);
+    drawGlow(x0 + 71, railY - 15, 18, '255, 220, 150', 0.5);
+    for (let k = 0; k < 4; k++) { // pára z komína
+        const life = (t * 0.5 + k / 4) % 1;
+        ctx.fillStyle = `rgba(190, 195, 215, ${0.3 * (1 - life)})`;
+        ctx.beginPath();
+        ctx.arc(x0 + 78 - life * 18, railY - 30 - life * 34, 3 + life * 9, 0, Math.PI * 2);
+        ctx.fill();
     }
+}
+
+// Karta výkupce: název, cena s trendem, graf, přidělené kamiony (−/+) a kolik jich jede
+function drawBuyerCard(side, x, y, w, h, hovered) {
+    const buyer = BUYERS[side];
+    const price = side === 'left' ? leftIncPrice : rightIncPrice;
+    const trend = side === 'left' ? leftPriceTrend : rightPriceTrend;
+    const history = side === 'left' ? leftPriceHistory : rightPriceHistory;
+    const assigned = side === 'left' ? trucksAssignedLeft : trucksAssignedRight;
+    const driving = trucks.filter(t => t.state !== 'idle' && t.targetCompany === side).length;
+
+    ctx.save();
+    if (hovered) {
+        ctx.shadowColor = `rgba(${buyer.accent}, 0.6)`;
+        ctx.shadowBlur = 18;
+    }
+    pathRoundRect(x, y, w, h, 8);
+    const bg = ctx.createLinearGradient(0, y, 0, y + h);
+    bg.addColorStop(0, 'rgba(14, 14, 24, 0.94)');
+    bg.addColorStop(1, 'rgba(14, 14, 24, 0.82)');
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = hovered ? `rgba(${buyer.accent}, 0.9)` : 'rgba(190, 200, 240, 0.16)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = `rgba(${buyer.accent}, 0.9)`; // barevný proužek výkupce
+    ctx.fillRect(x + 1, y + 8, 2.5, 22);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#fff2df';
+    ctx.font = '800 11px system-ui, sans-serif';
+    ctx.fillText(buyer.name, x + 9, y + 17);
+    ctx.fillStyle = 'rgba(220, 220, 235, 0.55)';
+    ctx.font = '600 8.5px system-ui, sans-serif';
+    ctx.fillText(buyer.sub, x + 9, y + 28);
+
+    ctx.fillStyle = '#ffd36b';
+    ctx.font = '800 21px system-ui, sans-serif';
+    const priceText = `$${price.toFixed(2)}`;
+    ctx.fillText(priceText, x + 8, y + 55);
+    const priceWidth = ctx.measureText(priceText).width;
+    ctx.fillStyle = trend >= 0 ? '#6ee39a' : '#ff7a6a';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(trend >= 0 ? '▲' : '▼', x + 12 + priceWidth, y + 54);
+    ctx.fillStyle = 'rgba(220, 220, 235, 0.5)';
+    ctx.font = '600 7.5px system-ui, sans-serif';
+    ctx.fillText('ZA BAREL', x + 9, y + 64);
+
+    drawPriceChart(history, x + 8, y + 70, w - 16, 16);
+
+    ctx.fillStyle = 'rgba(190, 200, 240, 0.14)';
+    ctx.fillRect(x + 8, y + 92, w - 16, 1);
+
+    const rowY = y + 99;
+    const minus = { x: x + 7, y: rowY, width: 22, height: 22 };
+    const plus = { x: x + w - 29, y: rowY, width: 22, height: 22 };
+    drawCardButton(minus, '−', buyer.accent);
+    drawCardButton(plus, '+', buyer.accent);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff2df';
+    ctx.font = '800 18px system-ui, sans-serif';
+    ctx.fillText(String(assigned), x + w / 2, rowY + 17);
+    ctx.fillStyle = 'rgba(220, 220, 235, 0.55)';
+    ctx.font = '600 7.5px system-ui, sans-serif';
+    ctx.fillText('PŘIDĚLENO', x + w / 2, rowY + 31);
+    ctx.fillStyle = hovered ? `rgba(${buyer.accent}, 1)` : 'rgba(220, 220, 235, 0.7)';
+    ctx.font = '600 8.5px system-ui, sans-serif';
+    ctx.fillText(hovered ? 'kolečko myši ±' : `${driving} ${driving === 1 ? 'kamion jede' : 'kamionů jede'}`, x + w / 2, y + h - 8);
+    ctx.restore();
+    return { minus, plus };
+}
+
+function drawCardButton(rect, label, accent) {
+    const hovered = isPointNearRect(mousePos, rect, 2);
+    ctx.save();
+    pathRoundRect(rect.x, rect.y, rect.width, rect.height, 6);
+    ctx.fillStyle = hovered ? `rgba(${accent}, 0.35)` : 'rgba(255, 255, 255, 0.06)';
+    ctx.fill();
+    ctx.strokeStyle = hovered ? `rgba(${accent}, 0.9)` : 'rgba(190, 200, 240, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#fff2df';
+    ctx.font = '700 15px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
+    ctx.restore();
+}
+
+function drawCompanyBuildings(groundLevel) {
+    const baseY = groundLevel - BUILDING_BASE_OFFSET;
+    const rightX = canvas.width - COMPANY_ZONE_WIDTH;
+    drawRefinery(0, baseY);
+    drawRailDepot(rightX, baseY);
+
+    const hovered = getCompanyZoneAt(mousePos);
+    const left = drawBuyerCard('left', 4, BUYER_CARD_TOP, COMPANY_ZONE_WIDTH - 8, BUYER_CARD_H, hovered === 'left');
+    const right = drawBuyerCard('right', rightX + 4, BUYER_CARD_TOP, COMPANY_ZONE_WIDTH - 8, BUYER_CARD_H, hovered === 'right');
+    // Hitboxy pro handleCanvasClick: "nahoru" = přidat kamion, "dolů" = ubrat
+    companyControls.leftUp = left.plus;
+    companyControls.leftDown = left.minus;
+    companyControls.rightUp = right.plus;
+    companyControls.rightDown = right.minus;
 }
 
 // Malý čárový graf cen. Osa Y se přizpůsobí, minimální rozsah 0,30 $, ať drobné změny nevypadají dramaticky.
 function drawPriceChart(history, x, y, w, h) {
     ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.fillRect(x, y, w, h);
+    pathRoundRect(x, y, w, h, 3);
+    ctx.fillStyle = 'rgba(14, 10, 16, 0.6)';
+    ctx.fill();
     if (history.length >= 2) {
         let min = Math.min(...history);
         let max = Math.max(...history);
@@ -1131,7 +2923,7 @@ function drawPriceChart(history, x, y, w, h) {
         const px = i => x + (i / (history.length - 1)) * w;
         const py = v => y + h - 2 - ((v - min) / (max - min)) * (h - 4);
         const rising = history[history.length - 1] >= history[0];
-        ctx.strokeStyle = rising ? '#1E8449' : '#C0392B';
+        ctx.strokeStyle = rising ? '#5be38a' : '#ff6b5a';
         ctx.lineWidth = 1.5;
         ctx.lineJoin = 'round';
         ctx.beginPath();
@@ -1145,46 +2937,10 @@ function drawPriceChart(history, x, y, w, h) {
     ctx.restore();
 }
 
-function drawArrowButton(rect, isUp) {
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(rect.x + rect.width / 2, rect.y + rect.height / 2, rect.width / 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = 'white';
-    ctx.beginPath();
-    const halfW = rect.width / 2;
-    if (isUp) {
-        ctx.moveTo(rect.x + 7, rect.y + 15);
-        ctx.lineTo(rect.x + halfW, rect.y + 10);
-        ctx.lineTo(rect.x + rect.width - 7, rect.y + 15);
-    } else {
-        ctx.moveTo(rect.x + 7, rect.y + 10);
-        ctx.lineTo(rect.x + halfW, rect.y + 15);
-        ctx.lineTo(rect.x + rect.width - 7, rect.y + 10);
-    }
-    ctx.fill();
-    ctx.restore();
-}
-
 // --- Silnice a auta ---
-const ROAD_HEIGHT = 16;
 const TRUCK_LENGTH = 76;
 const TRUCK_GAP_PAD = 6; // minimální mezera mezi auty jedoucími za sebou
-const TRUCK_COLORS = { left: '#4F86B5', right: '#C77D2E' }; // laditěné k budovám firem
-
-function drawRoad(groundLevel) {
-    ctx.fillStyle = '#4A4A4A';
-    ctx.fillRect(0, groundLevel, canvas.width, ROAD_HEIGHT);
-    ctx.fillStyle = '#8B4513'; // hrana mezi zemí a silnicí
-    ctx.fillRect(0, groundLevel, canvas.width, 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.fillRect(0, groundLevel + ROAD_HEIGHT - 3, canvas.width, 3);
-}
+const TRUCK_COLORS = { left: '#C77D2E', right: '#4F86B5' }; // laděné k barvám výkupců (rafinerie, nádraží)
 
 function pathRoundRect(x, y, w, h, r) {
     ctx.beginPath();
@@ -1255,6 +3011,8 @@ function drawTankerTruck(x, baseY, facing, color, loadRatio) {
     ctx.fill();
     ctx.fillStyle = '#FFE680'; // světlo
     ctx.fillRect(36, -17, 2, 3);
+    ctx.fillStyle = '#ff4a3a'; // koncové světlo
+    ctx.fillRect(-38, -16, 2, 3);
 
     // kola
     [-27, -11, 27].forEach(wx => {
@@ -1268,6 +3026,26 @@ function drawTankerTruck(x, baseY, facing, color, loadRatio) {
         ctx.fill();
     });
     ctx.restore();
+}
+
+// Kužel světlometů a záře koncových světel (aditivně, kreslí se před autem)
+function drawTruckLights(x, baseY, facing) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const fx = x + facing * 38;
+    const beam = ctx.createLinearGradient(fx, 0, fx + facing * 90, 0);
+    beam.addColorStop(0, 'rgba(255, 220, 150, 0.32)');
+    beam.addColorStop(1, 'rgba(255, 220, 150, 0)');
+    ctx.fillStyle = beam;
+    ctx.beginPath();
+    ctx.moveTo(fx, baseY - 17);
+    ctx.lineTo(fx + facing * 90, baseY - 26);
+    ctx.lineTo(fx + facing * 90, baseY - 2);
+    ctx.lineTo(fx, baseY - 13);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    drawGlow(x - facing * 37, baseY - 15, 10, '255, 60, 40', 0.45);
 }
 
 function drawTrucks(groundLevel) {
@@ -1289,14 +3067,20 @@ function drawTrucks(groundLevel) {
     items.sort((a, b) => a.lane - b.lane); // vzdálenější pruh se kreslí první
     items.forEach(({ truck, facing, renderX }) => {
         const color = TRUCK_COLORS[truck.targetCompany] || '#777777';
-        drawTankerTruck(renderX, getTruckBaseY(truck, groundLevel), facing, color, truck.oil / TRUCK_CAPACITY);
+        const baseY = getTruckBaseY(truck, groundLevel);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // stín na desce
+        ctx.beginPath();
+        ctx.ellipse(renderX - 4, baseY + 1, 44, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        drawTankerTruck(renderX, baseY, facing, color, truck.oil / TRUCK_CAPACITY);
+        if (truck.state !== 'waiting_at_rig') drawTruckLights(renderX, baseY, facing);
     });
 }
 
-// Spodní hrana kol: pruh podle směru jízdy (doprava dole, doleva nahoře)
+// Spodní hrana kol: pruh na předním pásu desky podle směru jízdy (doprava blíž, doleva dál)
 function getTruckBaseY(truck, groundLevel) {
-    if (truck.state === 'waiting_at_rig') return groundLevel + 1; // zaparkované u vrtu, projíždějící auta ho překryjí
-    return groundLevel + 7 + ((truck.facing || 1) > 0 ? 1 : 0) * 7;
+    if (truck.state === 'waiting_at_rig') return groundLevel - 22; // zaparkované u vrtu, projíždějící auta ho překryjí
+    return groundLevel - 12 + ((truck.facing || 1) > 0 ? 1 : 0) * 11;
 }
 
 // --- Částice ---
@@ -1329,9 +3113,9 @@ function drawParticles() {
             ctx.textAlign = 'center';
             ctx.textBaseline = 'alphabetic';
             ctx.lineWidth = 4;
-            ctx.strokeStyle = 'rgba(20, 40, 20, 0.85)';
+            ctx.strokeStyle = 'rgba(30, 16, 8, 0.85)';
             ctx.strokeText(p.text, p.x, p.y);
-            ctx.fillStyle = '#7CFC8A';
+            ctx.fillStyle = '#ffd36b';
             ctx.fillText(p.text, p.x, p.y);
         }
         ctx.restore();
@@ -1344,7 +3128,7 @@ function emitTruckSmoke(truck, dt) {
     if (truck.smokeTimer < 220) return;
     truck.smokeTimer = 0;
     const facing = truck.facing || 1;
-    const groundLevel = Math.floor(canvas.height / 3);
+    const groundLevel = getGroundLevel();
     spawnParticle({
         type: 'puff',
         x: truck.x + facing * 12,
@@ -1358,66 +3142,162 @@ function emitTruckSmoke(truck, dt) {
     });
 }
 
+// Pára z korunky čerpajícího vrtu
+function emitDerrickSmoke(dt) {
+    const groundLevel = getGroundLevel();
+    pipeNetworks.forEach(network => {
+        if (!network.isPumping || network.derrickId < 0) return;
+        network.smokeTimer = (network.smokeTimer || 0) + dt;
+        if (network.smokeTimer < 380) return;
+        network.smokeTimer = 0;
+        spawnParticle({
+            type: 'puff',
+            x: getNetworkPickupX(network) + (Math.random() - 0.5) * 6,
+            y: groundLevel - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT - 14,
+            vx: -10 + Math.random() * 6,
+            vy: -18,
+            age: 0,
+            life: 2200,
+            size: 4,
+            shade: 120
+        });
+    });
+}
+
 // --- Zvuk (WebAudio, žádné soubory) ---
-const SOUND_PATTERNS = {
-    sale: [[880, 0], [1320, 0.09]],
-    build: [[196, 0], [147, 0.08]],
-    strike: [[330, 0], [415, 0.1], [494, 0.2], [659, 0.3]]
+// Zvuky se syntetizují (žádné soubory): kovový FM zvonek a filtrovaný šum.
+// Prodej = pokladna: cvaknutí šuplíku a dva tóny zvonku; strike = zvonková arpeggia;
+// build = dřevěné ťuknutí; boom = hluboký výbuch nálože.
+const MASTER_VOLUME = 0.5;
+const SALE_SOUND_GAP_MS = 140; // víc prodejů naráz nezní jako kulomet
+let lastSaleSoundAt = 0;
+let noiseBuffer = null;
+
+function getAudioContext() {
+    if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return null;
+        audioCtx = new AudioContextClass();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => { });
+    return audioCtx;
+}
+
+function getNoiseBuffer(ac) {
+    if (!noiseBuffer || noiseBuffer.sampleRate !== ac.sampleRate) {
+        noiseBuffer = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    }
+    return noiseBuffer;
+}
+
+// FM zvonek: nosná vlna modulovaná neceločíselným násobkem dává kovový tón,
+// modulace slábne rychleji než hlasitost, takže úder je jasný a dozvuk čistý
+function playBell(ac, out, at, freq, volume, decay = 0.6) {
+    const carrier = ac.createOscillator();
+    const modulator = ac.createOscillator();
+    const modGain = ac.createGain();
+    const amp = ac.createGain();
+    carrier.frequency.value = freq;
+    modulator.frequency.value = freq * 3.5;
+    modGain.gain.setValueAtTime(freq * 2.2, at);
+    modGain.gain.exponentialRampToValueAtTime(freq * 0.05, at + decay * 0.5);
+    amp.gain.setValueAtTime(0.0001, at);
+    amp.gain.exponentialRampToValueAtTime(volume, at + 0.004);
+    amp.gain.exponentialRampToValueAtTime(0.0001, at + decay);
+    modulator.connect(modGain).connect(carrier.frequency);
+    carrier.connect(amp).connect(out);
+    modulator.start(at);
+    carrier.start(at);
+    modulator.stop(at + decay + 0.05);
+    carrier.stop(at + decay + 0.05);
+}
+
+// Krátký šum přes filtr (cvaknutí, ťuknutí, rachot)
+function playNoise(ac, out, at, { duration, volume, type = 'bandpass', freq = 2000, q = 1, sweepTo = null }) {
+    const src = ac.createBufferSource();
+    src.buffer = getNoiseBuffer(ac);
+    const filter = ac.createBiquadFilter();
+    filter.type = type;
+    filter.frequency.setValueAtTime(freq, at);
+    if (sweepTo) filter.frequency.exponentialRampToValueAtTime(sweepTo, at + duration);
+    filter.Q.value = q;
+    const amp = ac.createGain();
+    amp.gain.setValueAtTime(volume, at);
+    amp.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+    src.connect(filter).connect(amp).connect(out);
+    src.start(at);
+    src.stop(at + duration + 0.02);
+}
+
+// Tón s klesající výškou (dunění, ťuknutí)
+function playThump(ac, out, at, fromFreq, toFreq, duration, volume) {
+    const osc = ac.createOscillator();
+    const amp = ac.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(fromFreq, at);
+    osc.frequency.exponentialRampToValueAtTime(toFreq, at + duration);
+    amp.gain.setValueAtTime(volume, at);
+    amp.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+    osc.connect(amp).connect(out);
+    osc.start(at);
+    osc.stop(at + duration + 0.02);
+}
+
+const SOUNDS = {
+    sale(ac, out, at) {
+        const detune = 1 + (Math.random() - 0.5) * 0.03; // ať po sobě jdoucí prodeje nezní stejně
+        playNoise(ac, out, at, { duration: 0.035, volume: 0.25, freq: 3800, q: 2.5 });          // cvak šuplíku
+        playNoise(ac, out, at + 0.03, { duration: 0.06, volume: 0.12, freq: 1800, q: 1.2 });
+        playBell(ac, out, at + 0.05, 1568 * detune, 0.11, 0.55);  // G6
+        playBell(ac, out, at + 0.11, 2093 * detune, 0.09, 0.7);   // C7
+    },
+    strike(ac, out, at) {
+        [523, 659, 784, 1047].forEach((f, i) => playBell(ac, out, at + i * 0.09, f, 0.1, 0.9));
+        playThump(ac, out, at, 160, 60, 0.35, 0.25);
+    },
+    build(ac, out, at) {
+        playThump(ac, out, at, 240, 110, 0.09, 0.3);
+        playNoise(ac, out, at, { duration: 0.05, volume: 0.18, type: 'lowpass', freq: 1400 });
+        playThump(ac, out, at + 0.1, 200, 95, 0.08, 0.22);
+    },
+    boom(ac, out, at) {
+        playThump(ac, out, at, 120, 32, 0.7, 0.5);
+        playNoise(ac, out, at, { duration: 0.9, volume: 0.35, type: 'lowpass', freq: 900, sweepTo: 120 });
+    }
 };
 
 function playSound(kind) {
-    if (soundMuted) return;
+    if (soundMuted || !SOUNDS[kind]) return;
+    if (kind === 'sale') {
+        const now = performance.now();
+        if (now - lastSaleSoundAt < SALE_SOUND_GAP_MS) return;
+        lastSaleSoundAt = now;
+    }
     try {
-        if (!audioCtx) {
-            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-            if (!AudioContextClass) return;
-            audioCtx = new AudioContextClass();
-        }
-        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => { });
-        const start = audioCtx.currentTime;
-        (SOUND_PATTERNS[kind] || []).forEach(([freq, delay]) => {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'triangle';
-            osc.frequency.value = freq;
-            gain.gain.setValueAtTime(0.0001, start + delay);
-            gain.gain.exponentialRampToValueAtTime(0.06, start + delay + 0.01);
-            gain.gain.exponentialRampToValueAtTime(0.0001, start + delay + 0.16);
-            osc.connect(gain).connect(audioCtx.destination);
-            osc.start(start + delay);
-            osc.stop(start + delay + 0.18);
-        });
+        const ac = getAudioContext();
+        if (!ac) return;
+        const out = ac.createGain();
+        out.gain.value = MASTER_VOLUME;
+        out.connect(ac.destination);
+        SOUNDS[kind](ac, out, ac.currentTime + 0.005);
     } catch (e) {
         // Zvuk je jen bonus: bez AudioContextu hra funguje dál
     }
 }
 
-function getSoundButtonRect() {
-    return { x: canvas.width - 150, y: canvas.height - 44, width: 130, height: 30 };
-}
-
 function toggleSound() {
     soundMuted = !soundMuted;
-}
-
-function drawSoundButton() {
-    const r = getSoundButtonRect();
-    const hovered = isPointInRect(mousePos, r);
-    ctx.save();
-    pathRoundRect(r.x, r.y, r.width, r.height, 8);
-    ctx.fillStyle = hovered ? 'rgba(0, 0, 0, 0.65)' : 'rgba(0, 0, 0, 0.45)';
-    ctx.fill();
-    ctx.fillStyle = soundMuted ? '#ff8a80' : '#ffffff';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(soundMuted ? 'ZVUK: VYP (M)' : 'ZVUK: ZAP (M)', r.x + r.width / 2, r.y + r.height / 2 + 1);
-    ctx.restore();
-    if (hovered) canvas.style.cursor = 'pointer';
+    const btn = document.getElementById('sound-btn');
+    if (btn) {
+        btn.textContent = soundMuted ? '🔇' : '🔊';
+        btn.classList.toggle('muted', soundMuted);
+    }
 }
 
 function drawEffectsAndPreviews(groundLevel) {
-    let newCursor = plotsHoverPointer ? 'pointer' : (getCompanyZoneAt(mousePos) ? 'ns-resize' : 'default');
+    let newCursor = plotsHoverPointer ? 'pointer' : (getCompanyZoneAt(mousePos) ? 'ns-resize' : (camera.tzoom > 1.01 ? 'grab' : 'default'));
 
     // Náhled stavby
     if (currentBuildMode === 'vrt') {
@@ -1425,7 +3305,7 @@ function drawEffectsAndPreviews(groundLevel) {
         if (hoveredPlot && hoveredPlot.owner === 'player' && !hoveredPlot.hasVrt) {
             ctx.save();
             ctx.globalAlpha = 0.6;
-            drawDerrick(hoveredPlot.x + plotWidth / 2, groundLevel, -1, false);
+            drawDerrick(hoveredPlot.x + plotWidth / 2, groundLevel - STRUCTURE_BASE_OFFSET, -1, false);
             ctx.restore();
             newCursor = 'pointer';
         } else {
@@ -1436,7 +3316,8 @@ function drawEffectsAndPreviews(groundLevel) {
         if (hoveredPlot && hoveredPlot.owner === 'player' && hoveredPlot.hasVrt) {
             ctx.save();
             ctx.globalAlpha = 0.6;
-            drawSilo(hoveredPlot.x + plotWidth / 2 + SILO_OFFSET_X + hoveredPlot.siloCount * SILO_STEP, groundLevel, 0);
+            drawSilo(hoveredPlot.x + plotWidth / 2 + SILO_OFFSET_X + hoveredPlot.siloCount * SILO_STEP,
+                groundLevel - STRUCTURE_BASE_OFFSET + 4 + hoveredPlot.siloCount * 2, 0);
             ctx.restore();
             newCursor = 'pointer';
         } else {
@@ -1455,80 +3336,83 @@ function drawEffectsAndPreviews(groundLevel) {
                 const distance = Math.hypot(mousePos.x - lastPoint.x, mousePos.y - lastPoint.y);
                 const cost = Math.ceil(distance * PIPE_COST_PER_PIXEL);
                 ctx.save();
-                ctx.strokeStyle = money >= cost ? 'rgba(80, 80, 80, 0.7)' : 'rgba(255, 80, 80, 0.7)';
-                ctx.lineWidth = 4;
+                ctx.strokeStyle = money >= cost ? 'rgba(255, 200, 120, 0.75)' : 'rgba(255, 90, 70, 0.8)';
+                ctx.lineWidth = 3;
                 ctx.setLineDash([8, 6]);
                 ctx.beginPath();
                 ctx.moveTo(lastPoint.x, lastPoint.y);
                 ctx.lineTo(mousePos.x, mousePos.y);
                 ctx.stroke();
                 ctx.setLineDash([]);
-                ctx.fillStyle = money >= cost ? '#ffffff' : '#ff6666';
-                ctx.font = 'bold 14px sans-serif';
+                ctx.font = '700 13px system-ui, sans-serif';
                 ctx.textAlign = 'left';
-                ctx.fillText(`$${cost}`, mousePos.x + 8, mousePos.y - 8);
+                ctx.textBaseline = 'middle';
+                const costLabel = `$${cost}`;
+                const lw = ctx.measureText(costLabel).width + 14;
+                pathRoundRect(mousePos.x + 10, mousePos.y - 26, lw, 20, 10);
+                ctx.fillStyle = 'rgba(14, 10, 16, 0.8)';
+                ctx.fill();
+                ctx.fillStyle = money >= cost ? '#ffd98a' : '#ff7a6a';
+                ctx.fillText(costLabel, mousePos.x + 17, mousePos.y - 16);
                 ctx.restore();
             }
         }
-    } else if (currentBuildMode === 'mole' && moleState.startPoint) {
-        ctx.strokeStyle = 'rgba(139, 69, 19, 0.7)';
-        ctx.lineWidth = 6;
-        ctx.setLineDash([15, 10]);
-        ctx.beginPath();
-        ctx.moveTo(moleState.startPoint.x, moleState.startPoint.y);
-        ctx.lineTo(mousePos.x, moleState.startPoint.y); // Ukazujeme jen horizontální náhled
-        ctx.stroke();
-        ctx.setLineDash([]);
-        newCursor = 'crosshair';
+    } else if (currentBuildMode === 'seismic') {
+        // Náhled dosahu nálože: půlkruh pod kurzorem na vlastním pozemku
+        const hoveredPlot = getPlotAtX(mousePos.x);
+        if (hoveredPlot && hoveredPlot.owner === 'player' && mousePos.y <= groundLevel) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(160, 220, 255, 0.55)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([8, 8]);
+            ctx.beginPath();
+            ctx.arc(mousePos.x, groundLevel, SEISMIC_RADIUS, 0, Math.PI);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = '#ff5a3a'; // nálož
+            ctx.fillRect(mousePos.x - 4, groundLevel - STRUCTURE_BASE_OFFSET + 2, 8, 12);
+            ctx.restore();
+            newCursor = 'crosshair';
+        } else {
+            newCursor = 'not-allowed';
+        }
+    } else if (currentBuildMode === 'radar') {
+        if (mousePos.y > groundLevel) {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(120, 255, 170, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 6]);
+            ctx.lineDashOffset = -toolClock / 50;
+            ctx.beginPath();
+            ctx.arc(mousePos.x, mousePos.y, RADAR_RADIUS, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+            newCursor = 'crosshair';
+        } else {
+            newCursor = 'not-allowed';
+        }
     }
 
+    if (dragState && dragState.moved) newCursor = 'grabbing';
     if (canvas.style.cursor !== newCursor) {
         canvas.style.cursor = newCursor;
     }
 
-    // Kreslení dočasných efektů (šipky, atd.)
-    temporaryEffects.forEach(effect => {
-        if (effect.type === 'arrow' || effect.type === 'dowser') {
-            const alpha = effect.duration / (effect.totalDuration || 8000);
-            ctx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
-            ctx.font = '40px sans-serif';
-            ctx.textAlign = 'center';
-            const arrowChar = effect.direction === 0 ? '▼' : (effect.direction > 0 ? '▶' : '◀');
-            ctx.fillText(arrowChar, effect.x, effect.y);
-            if (effect.label) {
-                ctx.font = '14px sans-serif';
-                ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-                ctx.fillText(effect.label, effect.x, effect.y + 22);
-            }
-            if (effect.type === 'dowser' && effect.targetX != null) {
-                ctx.strokeStyle = `rgba(255, 215, 0, ${alpha * 0.5})`;
-                ctx.lineWidth = 2;
-                ctx.setLineDash([6, 8]);
-                ctx.beginPath();
-                ctx.moveTo(effect.x, effect.y + 10);
-                ctx.lineTo(effect.targetX, effect.targetY);
-                ctx.stroke();
-                ctx.setLineDash([]);
-            }
-        } else if (effect.type === 'moleMarker') {
-            ctx.fillStyle = `rgba(139, 69, 19, ${effect.duration / 15000})`;
-            ctx.beginPath();
-            ctx.arc(effect.x, effect.y, 10, 0, Math.PI * 2);
-            ctx.fill();
-        }
-    });
 }
 
 function drawPauseScreen() {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillStyle = 'rgba(10, 6, 14, 0.55)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 70px sans-serif';
+    ctx.fillStyle = '#ffe3b0';
+    ctx.font = '64px "Rye", Georgia, serif';
     ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.fillText('PAUZA', canvas.width / 2, canvas.height / 2);
+    ctx.textBaseline = 'alphabetic';
 }
 
 function drawGameOver() {
+    resetCamera(true); // tlačítko restartu je v souřadnicích obrazovky
     draw();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1754,7 +3638,7 @@ function updateTrucks(dt) {
                         type: 'text',
                         text: `+$${Math.round(sale)}`,
                         x: targetX,
-                        y: Math.floor(canvas.height / 3) - 50,
+                        y: getGroundLevel() - 50,
                         vx: 0,
                         vy: -42,
                         age: 0,
@@ -1824,11 +3708,6 @@ function assignTruck(company, change) {
 function cancelBuildMode(clearDerrick = true) {
     currentBuildMode = null;
     if (clearDerrick) selectedDerrickPlotId = null;
-    if (moleState.active) {
-        moleState.active = false;
-        moleState.startPoint = null;
-        temporaryEffects = temporaryEffects.filter(e => e.type !== 'moleMarker');
-    }
     updateUI();
 }
 
@@ -1837,15 +3716,37 @@ function addEventListeners() {
     // Pohyb myši
     canvas.addEventListener('pointermove', (event) => {
         const pos = getCanvasPosition(event);
+        pointerScreen.x = pos.px;
+        pointerScreen.y = pos.py;
+        if (dragState) {
+            const dx = pos.px - dragState.px;
+            const dy = pos.py - dragState.py;
+            if (!dragState.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD && camera.tzoom > 1.01) dragState.moved = true;
+            if (dragState.moved) {
+                camera.tx = camera.x = dragState.camX - dx / camera.zoom;
+                camera.ty = camera.y = dragState.camY - dy / camera.zoom;
+                clampCamera(true);
+                canvas.style.cursor = 'grabbing';
+                return;
+            }
+        }
         mousePos.x = pos.x;
         mousePos.y = pos.y;
     });
 
-    canvas.addEventListener('mousemove', (event) => {
+    // Tažení myší posouvá přiblíženou scénu; krátký klik zůstává klikem
+    canvas.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 && event.button !== 1) return;
         const pos = getCanvasPosition(event);
-        mousePos.x = pos.x;
-        mousePos.y = pos.y;
+        dragState = { px: pos.px, py: pos.py, camX: camera.x, camY: camera.y, moved: false };
+        canvas.setPointerCapture?.(event.pointerId);
     });
+    const endDrag = () => {
+        if (dragState && dragState.moved) suppressNextClick = true;
+        dragState = null;
+    };
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
 
     // Kliknutí pravým tlačítkem (zrušení akce)
     canvas.addEventListener('contextmenu', (event) => {
@@ -1876,47 +3777,39 @@ function addEventListeners() {
             money -= TRUCK_COST;
             trucksOwned++;
             trucks.push({ x: -50, y: 0, state: 'idle', homeNetworkId: null, targetCompany: null, oil: 0, facing: 1 });
+            logEvent(`Koupen kamion (${trucksOwned}/${MAX_TRUCKS}).`);
             updateUI();
         }
     });
 
-    document.getElementById('dowser-btn').addEventListener('click', () => {
-        const ownedPlot = getOwnedPlotForTool(mousePos.x);
-        if (money >= DOWSER_COST && ownedPlot) {
-            money -= DOWSER_COST;
-            showDowserHint(ownedPlot);
+    document.getElementById('seismic-btn').addEventListener('click', () => {
+        if (money >= SEISMIC_COST && plots.some(p => p.owner === 'player')) {
+            currentBuildMode = (currentBuildMode === 'seismic') ? null : 'seismic';
+            selectedDerrickPlotId = null;
             updateUI();
         }
     });
 
-    document.getElementById('scanner-btn').addEventListener('click', () => {
-        if (money >= SCANNER_COST && !scannerEffect.active) {
-            money -= SCANNER_COST;
-            scannerEffect.active = true;
-            scannerEffect.duration = scannerEffect.totalDuration;
-            updateUI();
-        }
-    });
+    document.getElementById('drone-btn').addEventListener('click', launchDrone);
 
-    document.getElementById('mole-btn').addEventListener('click', () => {
-        if (money >= MOLE_COST) {
-            currentBuildMode = (currentBuildMode === 'mole') ? null : 'mole';
-            if (currentBuildMode === 'mole') {
-                moleState.active = true;
-                moleState.startPoint = null;
-            } else {
-                cancelBuildMode();
-            }
+    document.getElementById('radar-btn').addEventListener('click', () => {
+        if (money >= RADAR_COST) {
+            currentBuildMode = (currentBuildMode === 'radar') ? null : 'radar';
+            selectedDerrickPlotId = null;
             updateUI();
         }
     });
 
     // Ovládání času
     document.getElementById('pause-btn').addEventListener('click', () => isPaused = !isPaused);
-    document.getElementById('speed-btn').addEventListener('click', () => {
-        gameSpeed = (gameSpeed === 1) ? 2 : (gameSpeed === 2) ? 4 : 1;
-        updateUI();
+    document.querySelectorAll('.time-btn[data-speed]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            gameSpeed = Number(btn.dataset.speed);
+            isPaused = false;
+            updateUI();
+        });
     });
+    document.getElementById('sound-btn').addEventListener('click', toggleSound);
 
     window.addEventListener('resize', () => {
         if (canvas && ctx) draw();
@@ -1924,7 +3817,12 @@ function addEventListeners() {
 
     window.addEventListener('keydown', (event) => {
         if (event.key === 'm' || event.key === 'M') toggleSound();
+        handleCameraKey(event);
     });
+
+    document.getElementById('zoom-in').addEventListener('click', () => zoomCameraAt(canvas.width / 2, canvas.height / 2, 1.35));
+    document.getElementById('zoom-out').addEventListener('click', () => zoomCameraAt(canvas.width / 2, canvas.height / 2, 1 / 1.35));
+    document.getElementById('zoom-reset').addEventListener('click', () => resetCamera());
 
     // Kolečko myši nad firmou přidává (nahoru) a ubírá (dolů) přidělená auta
     canvas.addEventListener('wheel', handleCompanyWheel, { passive: false });
@@ -1939,7 +3837,12 @@ function handleCompanyWheel(event) {
     const pos = getCanvasPosition(event);
     const company = pos.inBounds ? getCompanyZoneAt(pos) : null;
     if (!company) {
+        // Mimo výkupce kolečko přibližuje kolem kurzoru
         wheelAccumulator = 0;
+        if (!pos.inBounds) return;
+        event.preventDefault();
+        const unit = event.deltaMode === 1 ? 33 : (event.deltaMode === 2 ? 100 : 1);
+        zoomCameraAt(pos.px, pos.py, Math.exp(-event.deltaY * unit * 0.0015));
         return;
     }
     event.preventDefault(); // stránka se nesmí hýbat
@@ -1973,7 +3876,7 @@ const COMPANY_ZONE_WIDTH = 100;
 const COMPANY_ZONE_TOP = 30;
 
 function getCompanyZoneAt(point) {
-    const groundLevel = Math.floor(canvas.height / 3);
+    const groundLevel = getGroundLevel();
     if (point.y < COMPANY_ZONE_TOP || point.y > groundLevel) return null;
     if (point.x <= COMPANY_ZONE_WIDTH) return 'left';
     if (point.x >= canvas.width - COMPANY_ZONE_WIDTH) return 'right';
@@ -1995,12 +3898,11 @@ function isPointNearRect(point, rect, pad = CONTROL_HIT_PAD) {
 }
 
 function handleCanvasClick(event) {
-    const clickPos = getCanvasPosition(event);
-
-    if (clickPos.inBounds && isPointInRect(clickPos, getSoundButtonRect())) {
-        toggleSound();
+    if (suppressNextClick) { // konec tažení scény není klik
+        suppressNextClick = false;
         return;
     }
+    const clickPos = getCanvasPosition(event);
 
     if (isGameOver) {
         if (clickPos.inBounds && isPointInRect(clickPos, getRestartButtonRect())) restartGame();
@@ -2010,7 +3912,7 @@ function handleCanvasClick(event) {
     if (!clickPos.inBounds) return;
     mousePos.x = clickPos.x;
     mousePos.y = clickPos.y;
-    const groundLevel = Math.floor(canvas.height / 3);
+    const groundLevel = getGroundLevel();
 
     updatePlotSignHitboxes(groundLevel);
 
@@ -2020,7 +3922,7 @@ function handleCanvasClick(event) {
     if (isPointNearRect(clickPos, companyControls.rightDown)) { assignTruck('right', -1); return; }
 
     // Nákup pozemku — cedule i celý sloupec nad zemí (mimo aktivní režim krtka)
-    if (currentBuildMode !== 'mole') {
+    if (currentBuildMode !== 'seismic' && currentBuildMode !== 'radar') {
         const purchasePlot = getPlotToPurchase(clickPos, groundLevel);
         if (purchasePlot) {
             const result = tryPurchasePlot(purchasePlot, groundLevel);
@@ -2048,6 +3950,7 @@ function handleBuildModeClick(clickPos, plot, groundLevel) {
                 money -= VRT_COST;
                 plot.hasVrt = true;
                 playSound('build');
+                notify('Vrt postaven', 'Klikni do podzemí a veď potrubí k ložisku', 'cool', '🏗️');
                 selectedDerrickPlotId = plot.id;
                 cancelBuildMode(false);
                 draw();
@@ -2058,6 +3961,7 @@ function handleBuildModeClick(clickPos, plot, groundLevel) {
                 money -= SILO_COST;
                 plot.siloCount++;
                 playSound('build');
+                logEvent(`Silo postaveno na pozemku ${plot.id + 1}.`);
                 const network = pipeNetworks.find(n => n.derrickId === plot.id);
                 if (network) {
                     network.oilCapacity += SILO_CAPACITY_BONUS;
@@ -2065,9 +3969,14 @@ function handleBuildModeClick(clickPos, plot, groundLevel) {
                 cancelBuildMode();
             }
             break;
-        case 'mole':
+        case 'seismic':
+            if (plot && plot.owner === 'player' && clickPos.y <= groundLevel) {
+                fireSeismicCharge(plot, clickPos.x);
+            }
+            break;
+        case 'radar':
             if (clickPos.y > groundLevel) {
-                handleMoleClick(clickPos.x, clickPos.y);
+                fireGeoradar(clickPos.x, clickPos.y);
             }
             break;
     }
@@ -2097,6 +4006,10 @@ function handlePipePlacementClick(clickPos, groundLevel) {
     if (hitPocket) {
         hitPocket.tapped = true;
         playSound('strike');
+        notify('Ropa navrtána!', `Ložisko s ${Math.floor(hitPocket.oil).toLocaleString('cs-CZ')} barely`, 'good', '🔥');
+        // Oslava: z věže vystřelí ohňostroj
+        const rigTop = groundLevel - STRUCTURE_BASE_OFFSET - DERRICK_HEIGHT;
+        for (let i = 0; i < 3; i++) launchFirework(network.path[0].x + (i - 1) * 14, rigTop, FIREWORK_COLORS[i]);
         network.connectedPocket = hitPocket;
         network.isPumping = true;
         selectedDerrickPlotId = null;
@@ -2113,99 +4026,223 @@ function handleDefaultClick(plot) {
     }
 }
 
-function showDowserHint(plot) {
-    if (!plot || plot.owner !== 'player') return;
+// --- Průzkumné nástroje: seismika, dron, georadar ---
+// Seismika: nálož na vlastním pozemku, rázová vlna podzemím na chvíli ukáže ložiska v dosahu.
+// Dron: přeletí celou mapu, paprsek pod ním na chvíli ukazuje ložiska.
+// Georadar: klik do podzemí trvale odhalí ložiska v malém kruhu.
+const SEISMIC_COST = 150;
+const DRONE_COST = 450;
+const RADAR_COST = 250;
+const SEISMIC_RADIUS = 340;
+const SEISMIC_WAVE_MS = 1600;
+const RADAR_RADIUS = 120;
+const RADAR_PULSE_MS = 900;
+const DRONE_SPEED = 230;      // px/s
+const DRONE_BEAM_HALF = 55;   // polovina šířky snímacího paprsku
+const DRONE_Y_OFFSET = 205;   // výška letu nad přední hranou desky
+const ECHO_MS = 8000;         // jak dlouho je ozvěna ložiska vidět
+const ECHO_FADE_MS = 1500;
+const RICH_MEDIUM_OIL = 8500; // maxOil je 5000–15000, prahy dělí rozsah zhruba na třetiny
+const RICH_LARGE_OIL = 11500;
 
-    const plotCenterX = plot.x + plotWidth / 2;
-    const groundLevel = Math.floor(canvas.height / 3);
-    let bestPocket = null;
-    let bestScore = Infinity;
+let toolClock = 0;       // ms nástrojů: běží herní rychlostí, stojí v pauze
+let seismicWaves = [];   // { x, y, age, hit: Set }
+let radarPulses = [];    // { x, y, age }
+let drone = null;        // { x } během letu
 
+function getPocketRichness(pocket) {
+    return pocket.maxOil > RICH_LARGE_OIL ? 'velké' : (pocket.maxOil > RICH_MEDIUM_OIL ? 'střední' : 'malé');
+}
+
+// Vzdálenost bodu od ložiska (od jeho obrysu, uvnitř 0)
+function distanceToPocket(x, y, pocket) {
+    if (isPointInPolygon({ x, y }, pocket.vertices)) return 0;
+    let best = Infinity;
+    const v = pocket.vertices;
+    for (let i = 0; i < v.length; i++) {
+        const a = v[i], b = v[(i + 1) % v.length];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        best = Math.min(best, Math.hypot(x - (a.x + dx * t), y - (a.y + dy * t)));
+    }
+    return best;
+}
+
+function echoPocket(pocket) {
+    pocket.echoUntil = toolClock + ECHO_MS;
+}
+
+function getPocketEcho(pocket) {
+    if (!pocket.echoUntil) return 0;
+    return Math.max(0, Math.min(1, (pocket.echoUntil - toolClock) / ECHO_FADE_MS));
+}
+
+function updateToolEffects(dt) {
+    toolClock += dt;
+
+    seismicWaves.forEach(wave => {
+        wave.age += dt;
+        const radius = SEISMIC_RADIUS * Math.min(1, wave.age / SEISMIC_WAVE_MS);
+        oilPockets.forEach(pocket => {
+            if (wave.hit.has(pocket) || distanceToPocket(wave.x, wave.y, pocket) > radius) return;
+            wave.hit.add(pocket);
+            echoPocket(pocket);
+        });
+    });
+    seismicWaves = seismicWaves.filter(w => w.age < SEISMIC_WAVE_MS + 500);
+
+    radarPulses.forEach(p => { p.age += dt; });
+    radarPulses = radarPulses.filter(p => p.age < RADAR_PULSE_MS);
+
+    if (drone) {
+        drone.x += DRONE_SPEED * dt / 1000;
+        oilPockets.forEach(pocket => {
+            const cx = pocket.x + pocket.width / 2;
+            if (Math.abs(cx - drone.x) < DRONE_BEAM_HALF + pocket.width / 2) echoPocket(pocket);
+        });
+        if (drone.x > canvas.width + 80) drone = null;
+    }
+}
+
+function fireSeismicCharge(plot, x) {
+    if (money < SEISMIC_COST) return;
+    money -= SEISMIC_COST;
+    const groundLevel = getGroundLevel();
+    const charge = { x: Math.max(plot.x + 10, Math.min(plot.x + plotWidth - 10, x)), y: groundLevel };
+    seismicWaves.push({ ...charge, age: 0, hit: new Set() });
+    shakeCamera(9);
+    playSound('boom');
+    for (let i = 0; i < 14; i++) {
+        spawnParticle({
+            type: 'puff', x: charge.x + (Math.random() - 0.5) * 30, y: groundLevel - STRUCTURE_BASE_OFFSET + 10,
+            vx: (Math.random() - 0.5) * 80, vy: -30 - Math.random() * 60,
+            age: 0, life: 1400, size: 4 + Math.random() * 4, shade: 110
+        });
+    }
+    logEvent(`Seismický průzkum na pozemku ${plot.id + 1}.`);
+    cancelBuildMode();
+}
+
+function launchDrone() {
+    if (drone || money < DRONE_COST) return;
+    money -= DRONE_COST;
+    drone = { x: -60 };
+    logEvent('Průzkumný dron vzlétl.');
+    updateUI();
+}
+
+function fireGeoradar(x, y) {
+    if (money < RADAR_COST) return;
+    money -= RADAR_COST;
+    radarPulses.push({ x, y, age: 0 });
+    let found = 0;
     oilPockets.forEach(pocket => {
-        if (pocket.tapped) return;
-        const pocketCenterX = pocket.x + pocket.width / 2;
-        const pocketCenterY = pocket.y + pocket.height / 2;
-        const underPlot = pocketCenterX >= plot.x && pocketCenterX < plot.x + plotWidth;
-        const dx = Math.abs(pocketCenterX - plotCenterX);
-        const dy = Math.max(0, pocketCenterY - groundLevel);
-        const score = dx + dy * 0.4 + (underPlot ? 0 : 400);
-        if (score < bestScore) {
-            bestScore = score;
-            bestPocket = pocket;
+        if (pocket.tapped || distanceToPocket(x, y, pocket) > RADAR_RADIUS) return;
+        if (!pocket.revealed) found++;
+        pocket.revealed = true; // jen odhalí, ložisko zůstává vrtatelné
+    });
+    playSound(found ? 'strike' : 'build');
+    if (found) notify('Georadar našel ropu', `${found}× ložisko odhaleno`, 'cool', '📡');
+    else logEvent('Georadar: v okolí nic.');
+    cancelBuildMode();
+}
+
+// Seismické vlny, pulzy georadaru a ozvěny ložisek (kreslí se v podzemí, před potrubím)
+function drawToolEffects(groundLevel) {
+    ctx.save();
+    seismicWaves.forEach(wave => {
+        const t = Math.min(1, wave.age / SEISMIC_WAVE_MS);
+        const fade = 1 - Math.max(0, (wave.age - SEISMIC_WAVE_MS) / 500);
+        for (let k = 0; k < 3; k++) {
+            const r = SEISMIC_RADIUS * Math.max(0, t - k * 0.12);
+            if (r <= 0) continue;
+            ctx.strokeStyle = `rgba(160, 220, 255, ${(0.55 - k * 0.15) * fade * (1 - t * 0.6)})`;
+            ctx.lineWidth = 3 - k;
+            ctx.beginPath();
+            ctx.arc(wave.x, wave.y, r, 0, Math.PI); // jen do podzemí
+            ctx.stroke();
         }
     });
+    radarPulses.forEach(p => {
+        const t = p.age / RADAR_PULSE_MS;
+        ctx.strokeStyle = `rgba(120, 255, 170, ${0.8 * (1 - t)})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, RADAR_RADIUS * t, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(120, 255, 170, ${0.12 * (1 - t)})`;
+        ctx.fill();
+    });
+    ctx.restore();
 
-    if (!bestPocket) {
-        temporaryEffects.push({
-            type: 'dowser',
-            x: plotCenterX,
-            y: groundLevel - 55,
-            direction: 0,
-            duration: 4000,
-            totalDuration: 4000,
-            label: 'nic'
-        });
-        return;
-    }
-
-    const pocketCenterX = bestPocket.x + bestPocket.width / 2;
-    const pocketCenterY = bestPocket.y + bestPocket.height / 2;
-    const dx = pocketCenterX - plotCenterX;
-    const dy = pocketCenterY - groundLevel;
-    let direction;
-    if (Math.abs(dx) < plotWidth * 0.35 && dy > 40) {
-        direction = 0;
-    } else if (dx > 15) {
-        direction = 1;
-    } else {
-        direction = -1;
-    }
-
-    // maxOil je 5000–15000, prahy dělí rozsah zhruba na třetiny
-    const richness = bestPocket.maxOil > DOWSER_LARGE_OIL ? 'velké' : (bestPocket.maxOil > DOWSER_MEDIUM_OIL ? 'střední' : 'malé');
-    temporaryEffects.push({
-        type: 'dowser',
-        x: plotCenterX,
-        y: groundLevel - 55,
-        targetX: pocketCenterX,
-        targetY: pocketCenterY,
-        direction,
-        duration: 8000,
-        totalDuration: 8000,
-        label: richness
+    // Ozvěny: azurový obrys a odhad velikosti, dokud jsou čerstvé
+    oilPockets.forEach(pocket => {
+        const echo = getPocketEcho(pocket);
+        if (echo <= 0 || pocket.tapped || pocket.revealed) return;
+        ctx.save();
+        tracePocket(pocket);
+        ctx.fillStyle = `rgba(80, 200, 255, ${0.14 * echo})`;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(140, 225, 255, ${0.85 * echo})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.lineDashOffset = -toolClock / 60;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '700 11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = `rgba(200, 240, 255, ${echo})`;
+        ctx.fillText(getPocketRichness(pocket).toUpperCase(), pocket.x + pocket.width / 2, pocket.y + pocket.height / 2);
+        ctx.restore();
     });
 }
 
-function handleMoleClick(x, y) {
-    if (!moleState.startPoint) {
-        moleState.startPoint = { x, y };
-        temporaryEffects.push({ type: 'moleMarker', x, y, duration: 15000 });
-    } else {
-        if (money < MOLE_COST) return;
-        money -= MOLE_COST;
+// Dron s paprskem, který prosvítí podzemí pod sebou
+function drawDrone(groundLevel) {
+    if (!drone) return;
+    const t = toolClock / 1000;
+    const x = drone.x;
+    const y = groundLevel - DRONE_Y_OFFSET + Math.sin(t * 3) * 4;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const beam = ctx.createLinearGradient(0, y, 0, canvas.height);
+    beam.addColorStop(0, 'rgba(110, 210, 255, 0.28)');
+    beam.addColorStop(0.4, 'rgba(110, 210, 255, 0.10)');
+    beam.addColorStop(1, 'rgba(110, 210, 255, 0.02)');
+    ctx.fillStyle = beam;
+    ctx.beginPath();
+    ctx.moveTo(x - 6, y + 6);
+    ctx.lineTo(x + 6, y + 6);
+    ctx.lineTo(x + DRONE_BEAM_HALF, canvas.height);
+    ctx.lineTo(x - DRONE_BEAM_HALF, canvas.height);
+    ctx.closePath();
+    ctx.fill();
+    // Skenovací linka v podzemí
+    const scanY = groundLevel + ((t * 260) % (canvas.height - groundLevel));
+    const half = 6 + (DRONE_BEAM_HALF - 6) * (scanY - y) / (canvas.height - y);
+    ctx.fillStyle = 'rgba(150, 230, 255, 0.5)';
+    ctx.fillRect(x - half, scanY, half * 2, 2);
+    ctx.restore();
 
-        const start = moleState.startPoint;
-        const end = { x, y: start.y };
-
-        pipeNetworks.push({
-            id: nextNetworkId++,
-            derrickId: -1,
-            path: [start, end],
-            isPumping: false,
-            oilStored: 0,
-            oilCapacity: 0,
-            connectedPocket: null,
-            isMoleTunnel: true
-        });
-
-        oilPockets.forEach(pocket => {
-            if (checkPipeCollision({ start, end }, pocket)) {
-                pocket.revealed = true; // jen odhalí, ložisko zůstává vrtatelné
-            }
-        });
-
-        cancelBuildMode();
-    }
+    ctx.fillStyle = '#1b1c26'; // tělo a ramena
+    ctx.fillRect(x - 22, y - 2, 44, 3);
+    pathRoundRect(x - 9, y - 6, 18, 10, 4);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(170, 190, 255, 0.5)';
+    ctx.fillRect(x - 9, y - 6, 18, 1.5);
+    [-22, 22].forEach(dx => { // rozmazané vrtule
+        ctx.fillStyle = 'rgba(200, 210, 240, 0.35)';
+        ctx.beginPath();
+        ctx.ellipse(x + dx, y - 4, 11, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    const blink = Math.sin(t * 9) > 0;
+    ctx.fillStyle = blink ? '#ff4a3a' : '#5a1a14';
+    ctx.fillRect(x - 24, y - 1, 3, 3);
+    ctx.fillStyle = blink ? '#4aff8a' : '#14401f';
+    ctx.fillRect(x + 21, y - 1, 3, 3);
+    drawGlow(x, y + 4, 14, '120, 210, 255', 0.6);
 }
 
 function checkPipeCollision(pipeSegment, specificPocket) {
