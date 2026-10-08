@@ -146,7 +146,11 @@ function initializeGame() {
     ctx = canvas.getContext('2d');
 
     // Plátno font Rye samo nenačte (není v DOM), proto ho vyžádáme
-    if (document.fonts) document.fonts.load('18px "Rye"').catch(() => { });
+    // Plátno písma samo nenačte (nejsou v DOM), proto je vyžádáme
+    if (document.fonts) {
+        ['18px "Rye"', '600 12px "Barlow Condensed"', '700 12px "Barlow Condensed"', '800 12px "Barlow Condensed"', '700 12px "Courier Prime"']
+            .forEach(font => document.fonts.load(font).catch(() => { }));
+    }
 
     // Svět (sólo, náhodný); závod a sdílená mapa ho nahradí přes restartGame / net.js
     plotWidth = OilSim.C.PLOT_WIDTH;
@@ -315,12 +319,12 @@ function handleWorldEvents(events) {
                 playSound('build');
                 lastBoughtPlotId = e.plotId;
                 lastBoughtHighlightTimer = 30;
-                notify('Pozemek koupen', `Pozemek ${e.plotId + 1} za $${e.price}`, 'cool', '🚩');
+                notify('Pozemek koupen', `Pozemek ${e.plotId + 1} za $${e.price}`, 'cool', 'flag');
                 break;
             case 'derrick_built':
                 if (!mine) break;
                 playSound('build');
-                notify('Vrt postaven', 'Klikni do podzemí a veď potrubí k ložisku', 'cool', '🏗️');
+                notify('Vrt postaven', 'Klikni do podzemí a veď potrubí k ložisku', 'cool', 'derrick');
                 selectedDerrickPlotId = e.plotId;
                 cancelBuildMode(false);
                 break;
@@ -339,7 +343,7 @@ function handleWorldEvents(events) {
                 for (let i = 0; i < 3; i++) launchFirework(e.x + (i - 1) * 14, rigTop, FIREWORK_COLORS[i]);
                 if (!mine) break;
                 playSound('strike');
-                notify('Ropa navrtána!', `Ložisko s ${e.oil.toLocaleString('cs-CZ')} barely`, 'good', '🔥');
+                notify('Ropa navrtána!', `Ložisko s ${e.oil.toLocaleString('cs-CZ')} barely`, 'good', 'gusher');
                 if (selectedDerrickPlotId === e.plotId) selectedDerrickPlotId = null;
                 break;
             }
@@ -351,16 +355,16 @@ function handleWorldEvents(events) {
             case 'warn':
                 if (!mine) break;
                 playSound('warn');
-                notify('Přetlak na vrtu!', `Pozemek ${e.plotId + 1}: odvez ropu, nebo klikni na vrt a odpusť ventil`, 'bad', '⚠️');
+                notify('Přetlak na vrtu!', `Pozemek ${e.plotId + 1}: odvez ropu, nebo klikni na vrt a odpusť ventil`, 'bad', 'warning');
                 break;
             case 'blowout':
                 if (!mine) break;
                 shakeCamera(12);
                 playSound('gush');
-                notify('Erupce ropy!', `Vrt na pozemku ${e.plotId + 1}: únik a pokuta $${e.fine}`, 'bad', '🌋');
+                notify('Erupce ropy!', `Vrt na pozemku ${e.plotId + 1}: únik a pokuta $${e.fine}`, 'bad', 'blowout');
                 break;
             case 'exhausted':
-                if (mine) notify('Ložisko vyčerpáno', `Vrt na pozemku ${e.plotId + 1} přestal čerpat`, 'bad', '🛢️');
+                if (mine) notify('Ložisko vyčerpáno', `Vrt na pozemku ${e.plotId + 1} přestal čerpat`, 'bad', 'barrel');
                 break;
             case 'sale':
                 spawnParticle({
@@ -389,7 +393,7 @@ function handleWorldEvents(events) {
             case 'radar':
                 if (!mine) break;
                 playSound(e.found ? 'strike' : 'build');
-                if (e.found) notify('Georadar našel ropu', `${e.found}× ložisko odhaleno`, 'cool', '📡');
+                if (e.found) notify('Georadar našel ropu', `${e.found}× ložisko odhaleno`, 'cool', 'radar');
                 else logEvent('Georadar: v okolí nic.');
                 cancelBuildMode();
                 break;
@@ -404,7 +408,7 @@ function handleWorldEvents(events) {
                 break;
             case 'player_over':
                 if (!mine && e.reason === 'bankrupt') {
-                    notify('Soupeř zkrachoval', `${world.players[e.playerId]?.name || 'Hráč'} je mimo hru`, 'cool', '💀');
+                    notify('Soupeř zkrachoval', `${world.players[e.playerId]?.name || 'Hráč'} je mimo hru`, 'cool', 'skull');
                 }
                 break;
         }
@@ -1139,25 +1143,30 @@ function daysText(n) {
 function showBreakingNews(e) {
     const box = document.getElementById('news-flash');
     if (!box) return;
-    box.innerHTML = '<div class="news-tag">Mimořádné zprávy</div><div class="news-title"></div><div class="news-desc"></div><div class="news-effects"></div>';
-    box.querySelector('.news-title').textContent = e.title;
-    box.querySelector('.news-desc').textContent = e.desc;
-    box.querySelector('.news-effects').textContent = `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
+    // Zvláštní vydání novin: hlavička, datum, titulek, článek a "burza" s dopadem
+    box.innerHTML = '<div class="np-masthead">Pouštní kurýr</div>' +
+        '<div class="np-dateline"><span>Zvláštní vydání</span><span class="np-date"></span><span>Cena 5 centů</span></div>' +
+        '<div class="np-headline"></div><div class="np-columns"><p class="np-lead"></p><div class="np-market"><b>Burza</b><span></span></div></div>';
+    box.querySelector('.np-date').textContent = `${day}. ${MONTH_FULL_NAMES[month]}`;
+    box.querySelector('.np-headline').textContent = e.title;
+    box.querySelector('.np-lead').textContent = e.desc;
+    box.querySelector('.np-market span').textContent = `${describeNewsEffects(e.effects).join(' · ')} · ${daysText(e.days)}`;
     box.classList.remove('hidden', 'leaving');
     void box.offsetWidth; // restart animace, když přijde další zpráva hned po předchozí
     box.classList.add('show');
     clearTimeout(newsFlashTimer);
     newsFlashTimer = setTimeout(() => box.classList.add('leaving'), NEWS_FLASH_MS);
     playSound('news');
-    logEvent(`📰 ${e.title}`);
+    logEvent(`Zprávy: ${e.title}`);
 }
 
 // Seznam běžících zpráv pod horní lištou
 function renderActiveNews() {
     const active = world?.news?.active || [];
     const esc = text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const html = active.map(n => `<div class="news-chip" title="${esc(n.desc)}">📰 <b>${esc(n.title)}</b>` +
-        `<span>${esc(describeNewsEffects(n.effects).join(' · '))} · ${daysText(n.daysLeft)}</span></div>`).join('');
+    // Výstřižky z novin: titulek a dopad, každý trochu nakřivo
+    const html = active.map((n, i) => `<div class="news-clip" style="--tilt:${i % 2 ? 0.8 : -0.9}deg" title="${esc(n.desc)}">` +
+        `<b>${esc(n.title)}</b><span>${esc(describeNewsEffects(n.effects).join(' · '))} · ${daysText(n.daysLeft)}</span></div>`).join('');
     if (html !== lastNewsHtml) {
         document.getElementById('hud-news').innerHTML = html;
         lastNewsHtml = html;
@@ -1168,16 +1177,41 @@ const TOAST_MS = 4500;
 const MAX_TOASTS = 3;
 
 // Oznámení vlevo nahoře; zároveň se zapíše do deníku událostí
-function notify(title, sub, kind = '', icon = '⛽') {
+// --- Ikony (vlastní SVG, žádné emoji): tah currentColor, viewBox 24 ---
+const ICONS = {
+    flag: '<path d="M6 21V4M6 4h11l-2.5 4L17 12H6"/>',
+    derrick: '<path d="M8 21 11 4h2l3 17M9.5 13h5M10.4 8.5h3.2M8.6 18l6.6-6M15.4 18l-6.6-6M5 21h14"/>',
+    gusher: '<path d="M12 21v-6M9 21h6M12 15c-3-3-3-6 0-11 3 5 3 8 0 11Z"/><path d="M5 9l2 1M19 9l-2 1M6 4l2 2M18 4l-2 2"/>',
+    warning: '<path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 10v4.5M12 17.2v.3"/>',
+    blowout: '<path d="M12 3v4M5 6l3 3M19 6l-3 3M3 13h4M17 13h4"/><path d="M8 21c0-4 1.5-7 4-8 2.5 1 4 4 4 8"/>',
+    barrel: '<ellipse cx="12" cy="5" rx="6" ry="2"/><path d="M6 5v14c0 1.1 2.7 2 6 2s6-.9 6-2V5M6 10c0 1.1 2.7 2 6 2s6-.9 6-2M6 15c0 1.1 2.7 2 6 2s6-.9 6-2"/>',
+    radar: '<circle cx="12" cy="12" r="2"/><path d="M7 7a7 7 0 0 0 0 10M17 7a7 7 0 0 1 0 10M4 4a11 11 0 0 0 0 16M20 4a11 11 0 0 1 0 16"/>',
+    skull: '<path d="M5 11a7 7 0 0 1 14 0v3l-2 1v4H7v-4l-2-1v-3Z"/><circle cx="9.5" cy="11.5" r="1.4"/><circle cx="14.5" cy="11.5" r="1.4"/><path d="M10 19v-2M14 19v-2"/>',
+    trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0V4ZM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 21h8M9 17h6"/>',
+    wire: '<path d="M12 21V5M7 5h10M8 9h8M4 5l3 4M20 5l-3 4"/><circle cx="7" cy="5" r=".8"/><circle cx="17" cy="5" r=".8"/>',
+    news: '<path d="M4 5h13v14H6a2 2 0 0 1-2-2V5ZM17 9h3v8a2 2 0 0 1-2 2"/><path d="M7 9h7M7 12.5h7M7 16h4"/>',
+    soundOn: '<path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/>',
+    soundOff: '<path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="m16 9 5 6M21 9l-5 6"/>',
+    people: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15.5 14.2c3 .2 5.5 2.5 5.5 5.8"/>',
+    fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>'
+};
+
+function iconSvg(name, cls = 'icon-svg') {
+    return `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.wire}</svg>`;
+}
+
+// Oznámení jako telegram: papírový proužek, strojopis, věty končí "STOP", razítko podle druhu
+function notify(title, sub, kind = '', icon = 'wire') {
     logEvent(`${title}${sub ? ' – ' + sub : ''}`);
     const box = document.getElementById('hud-toasts');
     if (!box) return;
     const toast = document.createElement('div');
-    toast.className = `toast ${kind}`;
-    toast.innerHTML = '<div class="toast-icon"></div><div><div class="toast-title"></div><div class="toast-sub"></div></div>';
-    toast.querySelector('.toast-icon').textContent = icon;
-    toast.querySelector('.toast-title').textContent = title;
-    toast.querySelector('.toast-sub').textContent = sub || '';
+    toast.className = `telegram ${kind}`;
+    toast.style.setProperty('--tilt', `${(Math.random() * 2.4 - 1.2).toFixed(2)}deg`);
+    toast.innerHTML = `<div class="tg-head"><span class="tg-stamp">${iconSvg(icon)}</span><span class="tg-label">Telegram</span><span class="tg-date"></span></div><div class="tg-body"></div>`;
+    toast.querySelector('.tg-date').textContent = `${day}. ${monthNames[month]}`;
+    const stop = text => text.replace(/[.!]+$/, '').toUpperCase() + ' STOP';
+    toast.querySelector('.tg-body').textContent = [title, sub].filter(Boolean).map(stop).join(' ');
     box.prepend(toast);
     while (box.children.length > MAX_TOASTS) box.lastChild.remove();
     setTimeout(() => toast.classList.add('leaving'), TOAST_MS);
@@ -2144,7 +2178,7 @@ function drawPlots(groundLevel) {
         ctx.closePath();
         ctx.fill();
         if (sharedMode && !mine) {
-            ctx.font = '600 11px system-ui, sans-serif';
+            ctx.font = '600 11px "Barlow Condensed", system-ui, sans-serif';
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
             ctx.lineWidth = 3;
@@ -2365,13 +2399,13 @@ function drawPocketChip(pocket, pumping) {
     ctx.quadraticCurveTo(x + 24, y + h / 2 + 2, x + 17, y + h / 2 + 5);
     ctx.quadraticCurveTo(x + 10, y + h / 2 + 2, x + 17, y + h / 2 - 7);
     ctx.fill();
-    ctx.font = '600 9px system-ui, sans-serif';
+    ctx.font = '600 9px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillStyle = 'rgba(255, 230, 200, 0.6)';
     ctx.fillText('ROPNÉ LOŽISKO', x + 34, y + 13);
-    ctx.font = '700 14px system-ui, sans-serif';
+    ctx.font = '700 14px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillStyle = '#fff2df';
     ctx.fillText(Math.floor(pocket.oil).toLocaleString('cs-CZ'), x + 34, y + 29);
-    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.font = '600 10px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillStyle = pocket.oil <= 0 ? '#ff8a70' : (pumping ? '#ffb45a' : '#9ad1ff');
     ctx.fillText(pocket.oil <= 0 ? 'Vyčerpáno' : (pumping ? 'Těží se' : 'Odhaleno'), x + w - 9, y + 29);
@@ -2531,7 +2565,7 @@ function drawStorageChip(x, y, network) {
     const blink = full && Math.sin(performance.now() / 200) > 0;
     const label = `${Math.floor(network.oilStored)} / ${network.oilCapacity}`;
     ctx.save();
-    ctx.font = '700 12px system-ui, sans-serif';
+    ctx.font = '700 12px "Barlow Condensed", system-ui, sans-serif';
     const w = Math.max(74, ctx.measureText(label).width + 34);
     const h = 22;
     const bx = x - w / 2;
@@ -2560,7 +2594,7 @@ function drawStorageChip(x, y, network) {
     if (network.blowout > 0) message = 'ERUPCE!';
     else if (pressure >= VENT_MIN && network.isPumping) message = 'PŘETLAK – klikni na vrt';
     if (message) {
-        ctx.font = '700 10px system-ui, sans-serif';
+        ctx.font = '700 10px "Barlow Condensed", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillStyle = blink || network.blowout > 0 ? '#ff7a6a' : '#ffd0c8';
         ctx.fillText(message, x, y - h / 2 - 9);
@@ -2929,7 +2963,7 @@ function drawRailDepot(x0, baseY) {
     pathRoundRect(x0 + 18, railY - 22, 48, 14, 7);
     ctx.fill();
     ctx.fillStyle = 'rgba(255, 180, 90, 0.7)';
-    ctx.font = '700 7px system-ui, sans-serif';
+    ctx.font = '700 7px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('CRUDE', x0 + 42, railY - 15);
@@ -2988,14 +3022,14 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#fff2df';
-    ctx.font = '800 11px system-ui, sans-serif';
+    ctx.font = '800 11px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillText(buyer.name, x + 9, y + 17);
     ctx.fillStyle = 'rgba(220, 220, 235, 0.55)';
-    ctx.font = '600 8.5px system-ui, sans-serif';
+    ctx.font = '600 8.5px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillText(buyer.sub, x + 9, y + 28);
 
     ctx.fillStyle = '#ffd36b';
-    ctx.font = '800 21px system-ui, sans-serif';
+    ctx.font = '800 21px "Barlow Condensed", system-ui, sans-serif';
     const priceText = `$${price.toFixed(2)}`;
     ctx.fillText(priceText, x + 8, y + 55);
     const priceWidth = ctx.measureText(priceText).width;
@@ -3007,7 +3041,7 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
     if (effect.closed || Math.abs(effect.mult - 1) > 0.001) {
         const label = effect.closed ? 'ZAVŘENO' : `ZPRÁVY ${effect.mult > 1 ? '+' : '−'}${Math.round(Math.abs(effect.mult - 1) * 100)} %`;
         const good = !effect.closed && effect.mult > 1;
-        ctx.font = '800 7.5px system-ui, sans-serif';
+        ctx.font = '800 7.5px "Barlow Condensed", system-ui, sans-serif';
         const lw = ctx.measureText(label).width + 8;
         pathRoundRect(x + 7, y + 57, lw, 11, 5);
         ctx.fillStyle = good ? 'rgba(110, 227, 154, 0.22)' : 'rgba(255, 110, 90, 0.25)';
@@ -3016,7 +3050,7 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
         ctx.fillText(label, x + 11, y + 65.5);
     } else {
         ctx.fillStyle = 'rgba(220, 220, 235, 0.5)';
-        ctx.font = '600 7.5px system-ui, sans-serif';
+        ctx.font = '600 7.5px "Barlow Condensed", system-ui, sans-serif';
         ctx.fillText('ZA BAREL', x + 9, y + 64);
     }
     if (effect.closed) { // přeškrtnutá cena
@@ -3040,13 +3074,13 @@ function drawBuyerCard(side, x, y, w, h, hovered) {
     drawCardButton(plus, '+', buyer.accent);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#fff2df';
-    ctx.font = '800 18px system-ui, sans-serif';
+    ctx.font = '800 18px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillText(String(assigned), x + w / 2, rowY + 17);
     ctx.fillStyle = 'rgba(220, 220, 235, 0.55)';
-    ctx.font = '600 7.5px system-ui, sans-serif';
+    ctx.font = '600 7.5px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillText('PŘIDĚLENO', x + w / 2, rowY + 31);
     ctx.fillStyle = hovered ? `rgba(${buyer.accent}, 1)` : 'rgba(220, 220, 235, 0.7)';
-    ctx.font = '600 8.5px system-ui, sans-serif';
+    ctx.font = '600 8.5px "Barlow Condensed", system-ui, sans-serif';
     ctx.fillText(hovered ? 'kolečko myši ±' : `${driving} ${driving === 1 ? 'kamion jede' : 'kamionů jede'}`, x + w / 2, y + h - 8);
     ctx.restore();
     return { minus, plus };
@@ -3062,7 +3096,7 @@ function drawCardButton(rect, label, accent) {
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.fillStyle = '#fff2df';
-    ctx.font = '700 15px system-ui, sans-serif';
+    ctx.font = '700 15px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
@@ -3298,7 +3332,7 @@ function drawParticles() {
             ctx.fill();
         } else if (p.type === 'text') {
             ctx.globalAlpha = 1 - t * t;
-            ctx.font = 'bold 22px sans-serif';
+            ctx.font = '800 24px "Barlow Condensed", sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'alphabetic';
             ctx.lineWidth = 4;
@@ -3508,7 +3542,7 @@ function toggleSound() {
     soundMuted = !soundMuted;
     const btn = document.getElementById('sound-btn');
     if (btn) {
-        btn.textContent = soundMuted ? '🔇' : '🔊';
+        btn.innerHTML = iconSvg(soundMuted ? 'soundOff' : 'soundOn');
         btn.classList.toggle('muted', soundMuted);
     }
 }
@@ -3561,7 +3595,7 @@ function drawEffectsAndPreviews(groundLevel) {
                 ctx.lineTo(mousePos.x, mousePos.y);
                 ctx.stroke();
                 ctx.setLineDash([]);
-                ctx.font = '700 13px system-ui, sans-serif';
+                ctx.font = '700 13px "Barlow Condensed", system-ui, sans-serif';
                 ctx.textAlign = 'left';
                 ctx.textBaseline = 'middle';
                 const costLabel = `$${cost}`;
@@ -3631,9 +3665,10 @@ function drawPauseScreen() {
 function drawGameOver() {
     resetCamera(true); // tlačítko restartu je v souřadnicích obrazovky
     draw();
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    // V závodě ukazuje výsledky noviny z net.js; scéna za nimi má zůstat vidět
+    ctx.fillStyle = raceMode ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.75)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    if (raceMode) return; // v závodě ukazuje výsledky panel z net.js
+    if (raceMode) return;
 
     ctx.fillStyle = 'white';
     ctx.font = 'bold 72px sans-serif';
@@ -4143,7 +4178,7 @@ function drawToolEffects(groundLevel) {
         ctx.lineDashOffset = -toolClock / 60;
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.font = '700 11px system-ui, sans-serif';
+        ctx.font = '700 11px "Barlow Condensed", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = `rgba(200, 240, 255, ${echo})`;

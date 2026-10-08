@@ -66,11 +66,11 @@
 
             <!-- Vpravo nahoře: kamera a zvuk -->
             <div id="hud-corner">
-                <button id="lobby-btn" class="hud-icon-btn hidden" title="Zpět do lobby">👥</button>
+                <button id="lobby-btn" class="hud-icon-btn hidden" title="Zpět do lobby"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M15.5 14.2c3 .2 5.5 2.5 5.5 5.8"/></svg></button>
                 <button id="zoom-out" class="hud-icon-btn" title="Oddálit (−)">−</button>
-                <button id="zoom-reset" class="hud-icon-btn" title="Celý pohled (0)">⤢</button>
+                <button id="zoom-reset" class="hud-icon-btn" title="Celý pohled (0)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
                 <button id="zoom-in" class="hud-icon-btn" title="Přiblížit (+), táhni myší pro posun">+</button>
-                <button id="sound-btn" class="hud-icon-btn" title="Zvuk (M)">🔊</button>
+                <button id="sound-btn" class="hud-icon-btn" title="Zvuk (M)"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h3l5-4v14l-5-4H4V9Z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/></svg></button>
             </div>
 
             <!-- Mimořádné zprávy: velký pruh při nové zprávě a seznam běžících zpráv -->
@@ -131,36 +131,50 @@
             <!-- Závod: žebříček místo cílů roku (net.js) -->
             <div id="hud-race" class="hud-panel"></div>
 
-            <!-- Lobby: hráči z instance aktivity, připravenost a start závodu (net.js) -->
+            <!-- Lobby: nástěnka pozemkového úřadu přímo ve scéně (net.js plní registr a formulář) -->
             <div id="lobby" class="overlay hidden">
-                <div class="lobby-card">
-                    <div class="lobby-title">OIL DIGGA</div>
-                    <div class="lobby-sub">Ropný závod: všichni stejná mapa i ceny, vyhrává nejvíc peněz na konci</div>
-                    <div id="lobby-players"></div>
-                    <div class="lobby-label">Hra</div>
-                    <div id="lobby-kind"></div>
-                    <div class="lobby-label">Režim</div>
-                    <div id="lobby-mode"></div>
-                    <div id="lobby-target" class="hidden"></div>
-                    <div class="lobby-label">Délka závodu</div>
-                    <div id="lobby-length"></div>
-                    <div id="lobby-rules"></div>
-                    <div class="lobby-actions">
-                        <button id="lobby-ready" class="lobby-btn">Připraven</button>
-                        <button id="lobby-start" class="lobby-btn primary hidden">Spustit závod</button>
-                        <button id="lobby-solo" class="lobby-btn ghost">Hrát sám</button>
-                        <button id="lobby-invite" class="lobby-btn ghost hidden">Pozvat</button>
+                <div class="board">
+                    <div class="board-plank">
+                        <span class="board-nail"></span>
+                        <div class="board-title">Pozemkový úřad</div>
+                        <div class="board-sub">Oil digga · závod o černé zlato</div>
+                        <span class="board-nail"></span>
                     </div>
-                    <div id="lobby-status">Připojuji…</div>
+                    <div class="board-sheets">
+                        <section class="sheet register">
+                            <header class="sheet-head">Registr nároků</header>
+                            <div id="lobby-players"></div>
+                            <div id="lobby-status" class="typed">Připojuji…</div>
+                        </section>
+                        <section class="sheet form">
+                            <header class="sheet-head">Podmínky závodu</header>
+                            <div class="form-field"><div class="form-label">Hra</div><div id="lobby-kind"></div></div>
+                            <div class="form-field"><div class="form-label">Režim</div><div id="lobby-mode"></div></div>
+                            <div class="form-field" id="lobby-target-field"><div class="form-label">Cílová částka</div><div id="lobby-target" class="hidden"></div></div>
+                            <div class="form-field"><div class="form-label">Délka</div><div id="lobby-length"></div></div>
+                            <div id="lobby-rules" class="fine-print"></div>
+                        </section>
+                    </div>
+                    <div class="board-actions">
+                        <button id="lobby-ready" class="stamp-btn">Připraven</button>
+                        <button id="lobby-start" class="stamp-btn start hidden">Start</button>
+                        <button id="lobby-solo" class="tag-btn">Hrát sám</button>
+                        <button id="lobby-invite" class="tag-btn hidden">Pozvat</button>
+                    </div>
                 </div>
             </div>
             <div id="race-countdown" class="hidden"></div>
-            <div id="race-results" class="overlay hidden">
-                <div class="lobby-card results-card">
-                    <div id="results-title" class="lobby-title small">Průběžné pořadí</div>
+            <!-- Výsledky závodu: titulní strana novin -->
+            <div id="race-results" class="overlay dim hidden">
+                <div class="newspaper results-paper">
+                    <div class="np-masthead">Pouštní kurýr</div>
+                    <div class="np-dateline"><span>Zvláštní vydání</span><span id="results-date"></span><span>Cena 5 centů</span></div>
+                    <div id="results-title" class="np-headline">Průběžné pořadí</div>
                     <div id="results-list"></div>
-                    <button id="results-reset" class="lobby-btn primary hidden">Zpět do lobby</button>
-                    <div id="results-wait" class="lobby-sub">Další kolo spustí hostitel.</div>
+                    <div class="np-footer">
+                        <button id="results-reset" class="stamp-btn hidden">Zpět do lobby</button>
+                        <div id="results-wait" class="typed">Další kolo spustí hostitel.</div>
+                    </div>
                 </div>
             </div>
         </div>

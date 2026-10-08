@@ -38,7 +38,7 @@ const Net = (() => {
             console.warn('Síť nedostupná, hra běží sólo:', e.message);
             setMode('offline');
             // V Discordu má lobby fungovat, tak to hráči řekneme (lokálně bez serveru je sólo normální)
-            if (isDiscord && typeof notify === 'function') notify('Lobby nedostupné', 'Přihlášení přes Discord selhalo, hraješ sám', 'bad', '📡');
+            if (isDiscord && typeof notify === 'function') notify('Lobby nedostupné', 'Přihlášení přes Discord selhalo, hraješ sám', 'bad', 'wire');
         }
     }
 
@@ -183,9 +183,9 @@ const Net = (() => {
             if (msg.reason === 'target') {
                 notify(msg.winnerId === youId ? 'Vyhrál jsi!' : 'Konec závodu',
                     `${msg.winnerId === youId ? 'Jako první máš' : `${winner ? winner.name : 'Soupeř'} má jako první`} ${formatMoney(raceMode.target)}`,
-                    msg.winnerId === youId ? 'good' : 'bad', '🏆');
+                    msg.winnerId === youId ? 'good' : 'bad', 'trophy');
             } else if (msg.reason === 'last_standing') {
-                notify('Poslední na trhu!', 'Ostatní zkrachovali nebo odpadli, závod končí', 'good', '🏆');
+                notify('Poslední na trhu!', 'Ostatní zkrachovali nebo odpadli, závod končí', 'good', 'trophy');
             }
         }
         sendProgress();
@@ -204,7 +204,7 @@ const Net = (() => {
             runCountdown(msg.startIn);
         } else {
             setMode(isGameOver ? 'results' : 'race');
-            if (resumed && typeof notify === 'function') notify('Zpátky ve hře', 'Spojení obnoveno', 'cool', '📡');
+            if (resumed && typeof notify === 'function') notify('Zpátky ve hře', 'Spojení obnoveno', 'cool', 'wire');
         }
     }
 
@@ -416,8 +416,9 @@ const Net = (() => {
         $('results-reset').classList.toggle('hidden', !isHost);
         $('results-wait').classList.toggle('hidden', isHost);
         const winner = room.players.find(p => p.id === room.winnerId);
+        $('results-date').textContent = typeof day !== 'undefined' ? `${day}. ${MONTH_FULL_NAMES[month]}` : '';
         $('results-title').textContent = room.phase === 'finished'
-            ? (winner ? (winner.id === youId ? 'Vyhrál jsi!' : `Vítěz: ${winner.name}`) : 'Konečné pořadí')
+            ? (winner ? (winner.id === youId ? 'Jsi králem ropy!' : `${winner.name} králem ropy!`) : 'Konečné pořadí')
             : 'Průběžné pořadí';
     }
 
@@ -453,6 +454,7 @@ const Net = (() => {
                 ${m.name}<small>${m.desc}</small>
             </button>`).join('');
         $('lobby-target').classList.toggle('hidden', settings.mode !== 'target');
+        $('lobby-target-field').classList.toggle('hidden', settings.mode !== 'target');
         $('lobby-target').innerHTML = RACE_TARGETS.map(t => `
             <button class="length-btn${t === settings.target ? ' active' : ''}" data-target="${t}" ${canEdit ? '' : 'disabled'}>${formatMoney(t)}</button>`).join('');
         const months = settings.months;
@@ -502,7 +504,7 @@ const Net = (() => {
             const color = playerColorFor(r.p.id);
             const colorAttr = color ? ` style="--player-color:${color}"` : '';
             return `<div class="race-row${r.p.id === youId ? ' you' : ''}${bankrupt ? ' out' : ''}${color ? ' colored' : ''}"${colorAttr}>
-                <span class="rank">${winner ? '🏆' : `${i + 1}.`}</span>${avatarHtml(r.p)}
+                <span class="rank">${winner ? iconSvg('trophy', 'rank-trophy') : `${i + 1}.`}</span>${avatarHtml(r.p)}
                 <span class="race-name">${escapeHtml(r.p.name)}</span>
                 <span class="race-money">${formatMoney(r.money)}</span>
                 ${detailed ? `<span class="race-state">${state}</span>` : ''}

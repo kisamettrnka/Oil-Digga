@@ -42,7 +42,9 @@ app.get('/', sendRootFile('index.html'));
 ['script.js', 'net.js', 'sim.js', 'style.css'].forEach(file => app.get('/' + file, sendRootFile(file)));
 app.use('/img', staticDir(path.join(ROOT, 'img')));
 app.use('/dist', staticDir(path.join(ROOT, 'dist')));
-app.use('/fonts', staticDir(path.join(ROOT, 'node_modules/@fontsource/rye/files')));
+['rye', 'courier-prime', 'barlow-condensed'].forEach(font => {
+    app.use(`/fonts/${font}`, staticDir(path.join(ROOT, `node_modules/@fontsource/${font}/files`)));
+});
 
 app.get('/api/config', (req, res) => {
     noStore(res);
