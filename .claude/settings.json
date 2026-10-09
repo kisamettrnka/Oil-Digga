@@ -4,7 +4,9 @@
       "Read(./node_modules/**)",
       "Read(./dist/**)",
       "Read(./discord-sdk-cache/**)",
-      "Read(./package-lock.json)"
+      "Read(./package-lock.json)",
+      "Read(./Analýza.docx)",
+      "Read(./img/**)"
     ]
   },
   "enabledPlugins": {
